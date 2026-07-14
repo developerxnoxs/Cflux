@@ -412,6 +412,14 @@ VMResult vm_execute(FluxVM *vm, FluxFunction *fn) {
  * how the stdlib's math/io/fs/time modules are plain dicts of functions.
  * ---------------------------------------------------------------------- */
 static bool do_import(FluxVM *vm, FluxString *module_name, Value *out) {
+    /* Fast path: built-in stdlib modules are already registered as global dicts.
+     * Return them directly without touching the file system. */
+    Value builtin;
+    if (dict_get(vm->globals, module_name, &builtin) && IS_DICT(builtin)) {
+        *out = builtin;
+        return true;
+    }
+
     char resolved[FLUX_IMPORT_PATH_MAX];
     if (!resolve_import_path(vm, module_name->chars, resolved, sizeof(resolved))) {
         vm_runtime_error(vm, "Module '%s' not found", module_name->chars);

@@ -91,6 +91,13 @@ void flux_load_stdlib(FluxVM *vm);
 /** Load only a specific stdlib module (e.g. "io", "math"). */
 void flux_load_module(FluxVM *vm, const char *module_name);
 
+/**
+ * Set command-line arguments accessible from Flux as sys.argv.
+ * Call BEFORE flux_load_stdlib().  argv[0] should be the script path;
+ * any trailing elements are the user-supplied arguments.
+ */
+void flux_set_argv(int argc, char **argv);
+
 /* -------------------------------------------------------------------------
  * Native function registration
  * ---------------------------------------------------------------------- */

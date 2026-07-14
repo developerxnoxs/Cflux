@@ -1,0 +1,61 @@
+# Test semua modul stdlib baru
+
+# ---- io ----
+from io import write, writeln, read_file, write_file, append_file
+write("io.write: ")
+writeln("hello!")
+write_file("/tmp/flux_test.txt", "baris satu\n")
+append_file("/tmp/flux_test.txt", "baris dua\n")
+isi = read_file("/tmp/flux_test.txt")
+print("io.read_file:", isi)
+
+# ---- json ----
+from json import encode, decode
+data = {"nama": "Flux", "versi": 1, "aktif": true, "nilai": [1, 2, 3]}
+s = encode(data)
+print("json.encode:", s)
+balik = decode(s)
+print("json.decode nama:", balik["nama"])
+print("json.decode nilai[0]:", balik["nilai"][0])
+
+# ---- os ----
+from os import getcwd, path_exists, path_join, path_basename, is_file, sep
+cwd = getcwd()
+print("os.getcwd:", cwd)
+print("os.path_exists(/tmp):", path_exists("/tmp"))
+joined = path_join("/tmp", "flux_test.txt")
+print("os.path_join:", joined)
+print("os.path_basename:", path_basename("/tmp/flux_test.txt"))
+print("os.is_file:", is_file("/tmp/flux_test.txt"))
+print("os.sep:", sep)
+
+# ---- sys ----
+from sys import platform, version, argv
+print("sys.platform:", platform)
+print("sys.version:", version)
+print("sys.argv:", argv)
+
+# ---- time ----
+from time import now, clock, format as fmt
+t = now()
+print("time.now (timestamp):", t)
+print("time.clock:", clock())
+print("time.format:", fmt(t))
+
+# ---- math (lanjutan) ----
+from math import asin, acos, log2, degrees, tau, inf, isnan, isinf, gcd
+print("math.degrees(pi/2):", degrees(3.14159265358979 / 2))
+print("math.log2(8):", log2(8))
+print("math.tau:", tau)
+print("math.isinf(inf):", isinf(inf))
+print("math.isnan(inf):", isnan(inf))
+print("math.gcd(12, 8):", gcd(12, 8))
+
+# ---- fs ----
+from fs import exists, size, remove
+print("fs.exists:", exists("/tmp/flux_test.txt"))
+print("fs.size:", size("/tmp/flux_test.txt"))
+remove("/tmp/flux_test.txt")
+print("fs.exists after remove:", exists("/tmp/flux_test.txt"))
+
+print("\n✓ Semua modul stdlib OK")

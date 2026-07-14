@@ -161,6 +161,8 @@ int main(int argc, char *argv[]) {
 
     /* Create VM for execution subcommands */
     FluxVM *vm = flux_vm_new();
+    /* Expose script path + trailing args as sys.argv */
+    flux_set_argv(argc - 1, argv + 1);
     flux_load_stdlib(vm);
 
     FluxResult result = FLUX_OK;

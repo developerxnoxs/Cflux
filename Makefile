@@ -2,7 +2,7 @@
 CC      ?= gcc
 CFLAGS  := -std=gnu17 -D_GNU_SOURCE -Wall -Wextra -Wpedantic \
            -Wno-unused-parameter -Wno-unused-variable -Iinclude -g -O0
-LDFLAGS := -lm
+LDFLAGS := -lm -ldl
 
 BUILD   := build_make
 
@@ -33,9 +33,22 @@ STDLIB_OBJ := \
 
 LIB_OBJ := $(VM_OBJ) $(STDLIB_OBJ)
 
-.PHONY: all clean test
+.PHONY: all clean test extensions
 
 all: $(BUILD)/flux $(BUILD)/libflux.a
+
+# ----- native extensions (optional; not part of `all`) -----
+# Each subfolder under extension/ has its own Makefile that builds
+# extension/<name>/lib<name>.so. They're kept out of `all` because they
+# depend on external system libraries (e.g. libpq for postgresql) that may
+# not be installed; run `make extensions` explicitly once those are ready.
+extensions:
+	@for d in extension/*/; do \
+		if [ -f "$d/Makefile" ]; then \
+			echo "==> building extension: $d"; \
+			$(MAKE) -C "$d" FLUX_INCLUDE=$(CURDIR)/include || exit 1; \
+		fi; \
+	done
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -88,8 +101,12 @@ $(BUILD)/stdlib_json.o: src/stdlib/stdlib_json.c  | $(BUILD)
 $(BUILD)/libflux.a: $(LIB_OBJ)
 	ar rcs $@ $^
 
+# -rdynamic exports the interpreter's own symbols (object_dict_new,
+# dict_set, vm_runtime_error, ...) into the dynamic symbol table so that
+# native extensions loaded via dlopen() (see extension/) can resolve them —
+# without it, every symbol lookup in a loaded .so fails at runtime.
 $(BUILD)/flux: src/main.c $(BUILD)/libflux.a
-	$(CC) $(CFLAGS) $< -L$(BUILD) -lflux $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) -rdynamic $< -L$(BUILD) -lflux $(LDFLAGS) -o $@
 
 # ----- tests -----
 $(BUILD)/test_lexer: tests/test_lexer.c $(BUILD)/libflux.a

@@ -1,0 +1,22 @@
+# Demonstrates the `postgresql` native extension (extension/postgresql/).
+# Build it first with: make extensions
+# Requires DATABASE_URL to point at a reachable Postgres instance.
+import os
+import postgresql
+
+conn = postgresql.connect(os.getenv("DATABASE_URL"))
+print("connected:", postgresql.status(conn))
+
+postgresql.query(conn, "CREATE TABLE IF NOT EXISTS flux_demo (id SERIAL PRIMARY KEY, name TEXT)")
+postgresql.query(conn, "DELETE FROM flux_demo")
+
+name = postgresql.escape_literal(conn, "O'Brien")
+postgresql.query(conn, f"INSERT INTO flux_demo (name) VALUES ({name})")
+postgresql.query(conn, "INSERT INTO flux_demo (name) VALUES ('Ada'), ('Grace')")
+
+rows = postgresql.query(conn, "SELECT id, name FROM flux_demo ORDER BY id")
+for row in rows:
+    print(row["id"], row["name"])
+
+postgresql.query(conn, "DROP TABLE flux_demo")
+postgresql.close(conn)

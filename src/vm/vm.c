@@ -8,10 +8,12 @@
 #include "flux/lexer.h"
 #include "flux/ast.h"
 #include "flux/parser.h"
+#include "flux/extension.h"
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
 #include <math.h>
+#include <dlfcn.h>
 
 /* Forward declarations for runtime helpers (defined in runtime/runtime.c) */
 bool runtime_invoke_builtin(FluxVM *vm, Value obj, FluxString *name, int argc, Value *argv);
@@ -75,7 +77,24 @@ void vm_destroy(FluxVM *vm) {
     FLUX_FREE(vm->strings.data);
     FLUX_FREE(vm->grey_stack);
     FLUX_FREE(vm->ready_queue);
+    for (int i = 0; i < vm->extension_handle_count; i++) {
+        dlclose(vm->extension_handles[i]);
+    }
+    FLUX_FREE(vm->extension_handles);
     FLUX_FREE(vm);
+}
+
+/* -------------------------------------------------------------------------
+ * Native extension (.so) tracking — see flux/extension.h
+ * ---------------------------------------------------------------------- */
+void vm_track_extension_handle(FluxVM *vm, void *dlopen_handle) {
+    if (vm->extension_handle_count >= vm->extension_handle_capacity) {
+        int new_cap = vm->extension_handle_capacity == 0 ? 4 : vm->extension_handle_capacity * 2;
+        vm->extension_handles = (void **)flux_realloc(
+            vm->extension_handles, sizeof(void *) * new_cap);
+        vm->extension_handle_capacity = new_cap;
+    }
+    vm->extension_handles[vm->extension_handle_count++] = dlopen_handle;
 }
 
 /* -------------------------------------------------------------------------
@@ -393,6 +412,63 @@ static Value value_add(FluxVM *vm, Value a, Value b) {
  * OP_IMPORT can push its resulting namespace dict. */
 static VMResult vm_run(FluxVM *vm, int base_frame_count);
 
+/* -------------------------------------------------------------------------
+ * Native extension (.so) loading — see include/flux/extension.h
+ *
+ * When a plain `import <name>` can't find `<name>.flx`, we look for a
+ * native extension at `extension/<name>/lib<name>.so` (next to the
+ * importing file first, then the process cwd — mirroring
+ * resolve_import_path's own search order) and, if present, dlopen() it and
+ * call its `flux_extension_init` entry point once.
+ * ---------------------------------------------------------------------- */
+static bool try_load_native_extension(FluxVM *vm, const char *module_name, Value *out) {
+    char path[FLUX_IMPORT_PATH_MAX];
+    bool found = false;
+
+    const char *cur_dir = vm_current_import_dir(vm);
+    if (cur_dir) {
+        snprintf(path, sizeof(path), "%s/extension/%s/lib%s.so", cur_dir, module_name, module_name);
+        if (file_exists(path)) found = true;
+    }
+    if (!found) {
+        snprintf(path, sizeof(path), "extension/%s/lib%s.so", module_name, module_name);
+        if (file_exists(path)) found = true;
+    }
+    if (!found) return false;
+
+    void *handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (!handle) {
+        vm_runtime_error(vm, "Failed to load extension '%s' (%s): %s", module_name, path, dlerror());
+        return false;
+    }
+
+    dlerror(); /* clear any stale error before dlsym, per dlsym(3) convention */
+    FluxExtensionInitFn init_fn = (FluxExtensionInitFn)dlsym(handle, FLUX_EXTENSION_INIT_SYMBOL);
+    const char *sym_err = dlerror();
+    if (!init_fn || sym_err) {
+        vm_runtime_error(vm, "Extension '%s' (%s) is missing the '%s' entry point",
+                         module_name, path, FLUX_EXTENSION_INIT_SYMBOL);
+        dlclose(handle);
+        return false;
+    }
+
+    if (!init_fn(vm, out)) {
+        /* init_fn is expected to have already reported a specific error via
+         * vm_runtime_error(); fall back to a generic one just in case. */
+        if (!vm->has_error) {
+            vm_runtime_error(vm, "Extension '%s' (%s) failed to initialize", module_name, path);
+        }
+        dlclose(handle);
+        return false;
+    }
+
+    /* Keep the handle open for the process lifetime: the module dict now
+     * holds FluxNative function pointers into this shared library, and it
+     * will be cached in vm->globals / vm->modules far beyond this call. */
+    vm_track_extension_handle(vm, handle);
+    return true;
+}
+
 VMResult vm_execute(FluxVM *vm, FluxFunction *fn) {
     FluxClosure *main_closure = object_closure_new(vm, fn);
     vm_push(vm, value_object((FluxObject *)main_closure));
@@ -422,7 +498,22 @@ static bool do_import(FluxVM *vm, FluxString *module_name, Value *out) {
 
     char resolved[FLUX_IMPORT_PATH_MAX];
     if (!resolve_import_path(vm, module_name->chars, resolved, sizeof(resolved))) {
-        vm_runtime_error(vm, "Module '%s' not found", module_name->chars);
+        Value ext_mod;
+        if (try_load_native_extension(vm, module_name->chars, &ext_mod)) {
+            /* GC-protect ext_mod across the dict_set below (a hash-table
+             * growth inside dict_set can allocate and trigger a collection;
+             * ext_mod is only reachable from this C local until it lands in
+             * vm->globals, so it must be pushed onto the VM stack first -
+             * same discipline as every other allocation in this function). */
+            vm_push(vm, ext_mod);
+            dict_set(vm, vm->globals, module_name, ext_mod);
+            vm_pop(vm);
+            *out = ext_mod;
+            return true;
+        }
+        if (!vm->has_error) {
+            vm_runtime_error(vm, "Module '%s' not found", module_name->chars);
+        }
         return false;
     }
 

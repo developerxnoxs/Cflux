@@ -104,7 +104,19 @@ struct FluxVM {
     /* Runtime error state */
     char error_msg[512];
     bool has_error;
+
+    /* Native extension (.so) handles — kept open for the process lifetime
+     * since a loaded extension's FluxNative function pointers may still be
+     * reachable from cached module dicts; released in vm_destroy(). */
+    void **extension_handles;
+    int    extension_handle_count;
+    int    extension_handle_capacity;
 };
+
+/* -------------------------------------------------------------------------
+ * Native extension tracking (see flux/extension.h for the plugin ABI)
+ * ---------------------------------------------------------------------- */
+void vm_track_extension_handle(FluxVM *vm, void *dlopen_handle);
 
 /* -------------------------------------------------------------------------
  * VM lifecycle

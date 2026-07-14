@@ -89,6 +89,18 @@ import net.http as http       # dotted names need an alias to be usable
 - **Design trade-off**: a module's top-level names also remain visible as bare globals to whatever imported it (in addition to `module.name`). Flux compiles every top-level reference as a flat lookup against one global table with no per-module scope, so a module's own functions can call each other/reference its variables — removing the names from the shared table after load would break those self-references.
 - See `examples/modules/` for a working multi-file example.
 
+### Native extensions (`.so` plugins)
+```flux
+import postgresql
+conn = postgresql.connect(os.getenv("DATABASE_URL"))
+rows = postgresql.query(conn, "SELECT id, name FROM users")
+postgresql.close(conn)
+```
+- When `import <name>` can't find `<name>.flx`, the VM falls back to looking for a native extension at `extension/<name>/lib<name>.so`, `dlopen()`s it, and calls its `flux_extension_init(FluxVM*, Value*)` entry point once (result cached like any other module). See `include/flux/extension.h` for the plugin ABI and `extension/postgresql/postgresql_ext.c` for a full worked example.
+- Extensions are NOT part of `make`/`make all` (they depend on external system libraries that may not be installed). Build them explicitly with `make extensions` (builds every `extension/*/Makefile`) or `make -C extension/<name>`.
+- The `postgresql` extension wraps libpq (Nix packages `postgresql` + `libpq`, already installed) and exposes `connect(conninfo)`, `query(conn, sql)` / `exec` (alias), `escape_literal(conn, str)`, `status(conn)`, `close(conn)`. Connection handles are opaque dicts tagged `__flux_ext__`; don't read/write those keys directly.
+- Tested end-to-end against the project's Replit-managed Postgres database (`DATABASE_URL`): connect, DDL, parameterless insert/select via `escape_literal`, multi-row insert, select, and close all verified working, plus clean runtime-error messages for bad connection info and bad SQL.
+
 ### CLI subcommands
 ```bash
 flux run <file.flx>      # execute

@@ -44,9 +44,9 @@ all: $(BUILD)/flux $(BUILD)/libflux.a
 # not be installed; run `make extensions` explicitly once those are ready.
 extensions:
 	@for d in extension/*/; do \
-		if [ -f "$d/Makefile" ]; then \
-			echo "==> building extension: $d"; \
-			$(MAKE) -C "$d" FLUX_INCLUDE=$(CURDIR)/include || exit 1; \
+		if [ -f "$$d""Makefile" ]; then \
+			echo "==> building extension: $$d"; \
+			$(MAKE) -C "$$d" FLUX_INCLUDE=$(CURDIR)/include || exit 1; \
 		fi; \
 	done
 

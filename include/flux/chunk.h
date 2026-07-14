@@ -102,6 +102,7 @@ typedef enum {
 
     /* Misc */
     OP_IMPORT,           /* operand: uint16 constant (module)  */
+    OP_IMPORT_STAR,      /* no operand: pops module dict, defines all its entries as globals */
     OP_HALT,
 } OpCode;
 

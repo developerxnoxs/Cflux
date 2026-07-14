@@ -1202,6 +1202,22 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count) {
                 break;
             }
 
+            case OP_IMPORT_STAR: {
+                /* from module import * — pops module dict, injects all its
+                 * entries into vm->globals so they're accessible by bare name */
+                Value mod_val = vm_pop(vm);
+                if (!IS_DICT(mod_val)) {
+                    RUNTIME_ERROR("'from ... import *' requires a module object");
+                }
+                FluxDict *mod_dict = AS_DICT(mod_val);
+                for (int i = 0; i < mod_dict->capacity; i++) {
+                    DictEntry *e = &mod_dict->entries[i];
+                    if (!e->key) continue;
+                    dict_set(vm, vm->globals, e->key, e->value);
+                }
+                break;
+            }
+
             case OP_HALT:
                 return VM_OK;
 

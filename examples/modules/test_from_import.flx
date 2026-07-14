@@ -1,0 +1,5 @@
+# Test: from module import name
+from mathutils import square, cube
+
+print("square(4) =", square(4))      # expect 16
+print("cube(3) =", cube(3))          # expect 27

@@ -275,6 +275,7 @@ int chunk_disassemble_instruction(const Chunk *chunk, int offset) {
         case OP_SHL:            return simple_instr("SHL",           offset);
         case OP_SHR:            return simple_instr("SHR",           offset);
         case OP_IMPORT:         return uint16_instr("IMPORT",        chunk, offset);
+        case OP_IMPORT_STAR:    return simple_instr("IMPORT_STAR",   offset);
         case OP_HALT:           return simple_instr("HALT",          offset);
         default:
             printf("Unknown opcode %d\n", op);

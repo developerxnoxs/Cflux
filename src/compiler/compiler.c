@@ -1253,6 +1253,43 @@ static void compile_node(Compiler *c, AstNode *node) {
             break;
         }
 
+        case AST_FROM_IMPORT: {
+            /* Load the module dict onto the stack */
+            const char *mod = node->as.from_import.module;
+            uint16_t mod_idx = identifier_constant(c, mod, (int)strlen(mod), line);
+            emit_byte(c, OP_IMPORT, line);
+            emit_uint16(c, mod_idx, line);
+
+            AstList *names   = &node->as.from_import.names;
+            AstList *aliases = &node->as.from_import.aliases;
+
+            /* Wildcard: from module import * */
+            if (names->count == 1 &&
+                names->data[0]->as.ident.name[0] == '*' &&
+                names->data[0]->as.ident.name[1] == '\0') {
+                emit_byte(c, OP_IMPORT_STAR, line);
+            } else {
+                /* Specific names: from module import name1 as alias1, name2, ... */
+                for (int i = 0; i < names->count; i++) {
+                    AstNode *name_node  = names->data[i];
+                    AstNode *alias_node = aliases->data[i]; /* may be NULL */
+                    const char *name  = name_node->as.ident.name;
+                    const char *bind  = alias_node ? alias_node->as.ident.name : name;
+                    int name_len = (int)strlen(name);
+                    int bind_len = (int)strlen(bind);
+
+                    emit_byte(c, OP_DUP, line);
+                    emit_byte(c, OP_GET_ATTR, line);
+                    emit_uint16(c, identifier_constant(c, name, name_len, line), line);
+                    emit_byte(c, OP_DEFINE_GLOBAL, line);
+                    emit_uint16(c, identifier_constant(c, bind, bind_len, line), line);
+                    compiler_declare_global(c, bind);
+                }
+                emit_byte(c, OP_POP, line); /* discard the module dict */
+            }
+            break;
+        }
+
         /* ----------------------------------------------------------------
          * let / const declaration
          * Compiles like a fresh variable assignment:

@@ -1021,6 +1021,63 @@ static AstNode *parse_return(Parser *p) {
     return n;
 }
 
+static AstNode *parse_from_import(Parser *p) {
+    int line = p->previous.line, col = p->previous.column;
+
+    /* parse module name (supports dotted: from net.http import ...) */
+    consume(p, TOK_IDENT, "Expected module name after 'from'");
+    int   mlen = p->previous.length;
+    char *mbuf = FLUX_ALLOC(char, mlen + 1);
+    memcpy(mbuf, p->previous.start, (size_t)mlen);
+    mbuf[mlen] = '\0';
+
+    while (check(p, TOK_DOT)) {
+        advance(p); /* consume dot */
+        if (!check(p, TOK_IDENT)) break;
+        int part_len  = p->current.length;
+        int total_len = (int)strlen(mbuf) + 1 + part_len;
+        char *new_buf = FLUX_ALLOC(char, total_len + 1);
+        snprintf(new_buf, (size_t)(total_len + 1), "%s.%.*s", mbuf, part_len, p->current.start);
+        FLUX_FREE(mbuf);
+        mbuf = new_buf;
+        advance(p);
+    }
+
+    consume(p, TOK_IMPORT, "Expected 'import' after module name in 'from' statement");
+
+    AstNode *n = ast_node_alloc(p->arena, AST_FROM_IMPORT, line, col);
+    n->as.from_import.module = mbuf;
+    ast_list_init(&n->as.from_import.names);
+    ast_list_init(&n->as.from_import.aliases);
+
+    /* Wildcard: from module import * */
+    if (match(p, TOK_STAR)) {
+        AstNode *star = ast_ident(p->arena, line, col, "*", 1);
+        ast_list_push(&n->as.from_import.names, star);
+        ast_list_push(&n->as.from_import.aliases, NULL);
+        return n;
+    }
+
+    /* Specific names: from module import name1 as alias1, name2, ... */
+    do {
+        consume(p, TOK_IDENT, "Expected name after 'import'");
+        AstNode *name_node = ast_ident(p->arena, p->previous.line, p->previous.column,
+                                        p->previous.start, p->previous.length);
+        ast_list_push(&n->as.from_import.names, name_node);
+
+        if (match(p, TOK_AS)) {
+            consume(p, TOK_IDENT, "Expected alias after 'as'");
+            AstNode *alias_node = ast_ident(p->arena, p->previous.line, p->previous.column,
+                                             p->previous.start, p->previous.length);
+            ast_list_push(&n->as.from_import.aliases, alias_node);
+        } else {
+            ast_list_push(&n->as.from_import.aliases, NULL);
+        }
+    } while (match(p, TOK_COMMA));
+
+    return n;
+}
+
 static AstNode *parse_import(Parser *p) {
     int line = p->previous.line, col = p->previous.column;
     consume(p, TOK_IDENT, "Expected module name");
@@ -1106,7 +1163,8 @@ static AstNode *parse_stmt(Parser *p) {
     if (match(p, TOK_WHILE))    { AstNode *n = parse_while(p);  match(p, TOK_NEWLINE); return n; }
     if (match(p, TOK_FOR))      { AstNode *n = parse_for(p);    match(p, TOK_NEWLINE); return n; }
     if (match(p, TOK_RETURN))   { AstNode *n = parse_return(p); match(p, TOK_NEWLINE); return n; }
-    if (match(p, TOK_IMPORT))   { AstNode *n = parse_import(p); match(p, TOK_NEWLINE); return n; }
+    if (match(p, TOK_IMPORT))   { AstNode *n = parse_import(p);      match(p, TOK_NEWLINE); return n; }
+    if (match(p, TOK_FROM))     { AstNode *n = parse_from_import(p); match(p, TOK_NEWLINE); return n; }
     if (match(p, TOK_BREAK)) {
         AstNode *n = ast_node_alloc(p->arena, AST_BREAK, line, col);
         match(p, TOK_NEWLINE);

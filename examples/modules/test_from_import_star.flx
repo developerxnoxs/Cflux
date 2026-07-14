@@ -1,0 +1,6 @@
+# Test: from module import *
+from mathutils import *
+
+print("square(6) =", square(6))     # expect 36
+print("cube(2) =", cube(2))         # expect 8
+print("PI_APPROX =", PI_APPROX)     # expect 3.14

@@ -1,0 +1,5 @@
+# Test: from module import name as alias
+from mathutils import square as sq, PI_APPROX as pi
+
+print("sq(5) =", sq(5))             # expect 25
+print("pi =", pi)                   # expect 3.14

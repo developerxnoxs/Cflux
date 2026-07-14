@@ -55,7 +55,7 @@ make -j$(nproc)
 make test
 ```
 
-Prasyarat: `gcc`/`cc` dan `make` (sudah tersedia di environment Replit ini).
+Prasyarat: `gcc`/`cc` dan `make` (toolchain standar di kebanyakan sistem Linux/Unix; instal via package manager OS jika belum ada, mis. `apt install build-essential` di Debian/Ubuntu).
 
 ---
 
@@ -452,7 +452,7 @@ make -C extension/postgresql       # atau build satu ekstensi saja
 
 ### Contoh: ekstensi `postgresql`
 
-Proyek ini menyertakan ekstensi `postgresql` (`extension/postgresql/`) yang membungkus `libpq` — client C resmi PostgreSQL (paket Nix `postgresql` + `libpq`, sudah terpasang di environment ini).
+Proyek ini menyertakan ekstensi `postgresql` (`extension/postgresql/`) yang membungkus `libpq` — client C resmi PostgreSQL. Pastikan header dan library development `libpq` terpasang di sistem sebelum build (mis. `apt install libpq-dev` di Debian/Ubuntu, `dnf install libpq-devel` di Fedora, `brew install libpq` di macOS, atau paket `postgresql`/`libpq` yang setara di distro lain).
 
 ```flux
 import os

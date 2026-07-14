@@ -1,0 +1,39 @@
+# test_fstring.flx — regression tests for f-string interpolation
+
+let name = "World"
+print(f"Hello {name}!")           # Hello World!
+
+let n = 6
+let m = 7
+print(f"{n} * {m} = {n * m}")    # 6 * 7 = 42
+
+# Integer expression in f-string
+let x = 100
+print(f"x squared = {x * x}")    # x squared = 10000
+
+# Float in f-string
+let pi = 3.14
+print(f"pi = {pi}")              # pi = 3.14
+
+# Empty f-string
+let empty_fstr = f""
+print(empty_fstr)                # (empty line)
+
+# Multiple interpolations
+let a = "foo"
+let b = "bar"
+print(f"{a} and {b}")            # foo and bar
+
+# Nested function call inside interpolation
+func upper_manual(s):
+    return s
+
+print(f"result: {upper_manual('test')}")   # result: test
+
+# f-string in function return
+func greet(who):
+    return f"Hello, {who}!"
+
+print(greet("Flux"))             # Hello, Flux!
+
+print("fstring: OK")

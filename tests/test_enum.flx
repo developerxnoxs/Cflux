@@ -1,0 +1,54 @@
+# test_enum.flx — regression tests for enum definitions
+
+enum Color:
+    Red
+    Green
+    Blue
+
+print(Color.Red)     # 0
+print(Color.Green)   # 1
+print(Color.Blue)    # 2
+
+# --- Enum values are stable integers ---
+let r = Color.Red
+let g = Color.Green
+let b = Color.Blue
+print(r == 0)    # true
+print(g == 1)    # true
+print(b == 2)    # true
+
+# --- Enums are usable in match ---
+func color_name(c):
+    match c:
+        0:
+            return "Red"
+        1:
+            return "Green"
+        2:
+            return "Blue"
+        _:
+            return "Unknown"
+
+print(color_name(Color.Red))    # Red
+print(color_name(Color.Blue))   # Blue
+
+# --- Larger enum ---
+enum Direction:
+    North
+    South
+    East
+    West
+
+print(Direction.North)   # 0
+print(Direction.West)    # 3
+print(Direction.East == Direction.East)  # true
+print(Direction.East == Direction.West)  # false
+
+# --- Enum in a function ---
+func is_horizontal(dir):
+    return dir == Direction.East or dir == Direction.West
+
+print(is_horizontal(Direction.East))    # true
+print(is_horizontal(Direction.North))   # false
+
+print("enum: OK")

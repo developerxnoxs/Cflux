@@ -1,0 +1,70 @@
+# test_match.flx — regression tests for match statement
+
+# --- Basic equality matching ---
+func status(code):
+    match code:
+        200:
+            return "OK"
+        404:
+            return "Not Found"
+        500:
+            return "Server Error"
+        _:
+            return "Unknown"
+
+print(status(200))   # OK
+print(status(404))   # Not Found
+print(status(500))   # Server Error
+print(status(999))   # Unknown
+
+# --- String patterns ---
+func day_type(day):
+    match day:
+        "Saturday":
+            return "weekend"
+        "Sunday":
+            return "weekend"
+        _:
+            return "weekday"
+
+print(day_type("Saturday"))  # weekend
+print(day_type("Monday"))    # weekday
+
+# --- Wildcard is the default arm ---
+func parity(n):
+    match n:
+        0:
+            return "zero"
+        1:
+            return "one"
+        _:
+            return "other"
+
+print(parity(0))   # zero
+print(parity(1))   # one
+print(parity(7))   # other
+
+# --- match as statement (no return) ---
+let flag = 2
+match flag:
+    1:
+        print("one")
+    2:
+        print("two")   # two
+    _:
+        print("other")
+
+# --- match with let in body ---
+func test_match_let(x):
+    match x:
+        10:
+            let msg = "ten"
+            print(msg)   # ten
+        _:
+            let msg = "other"
+            print(msg)
+
+test_match_let(10)
+test_match_let(99)   # other
+
+print("match: OK")

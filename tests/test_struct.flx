@@ -1,0 +1,49 @@
+# test_struct.flx — regression tests for struct definitions
+
+# --- Basic struct with auto-init ---
+struct Point:
+    let x: float
+    let y: float
+
+let p = Point(3.0, 4.0)
+print(p.x)   # 3.0
+print(p.y)   # 4.0
+
+# --- Multi-field struct ---
+struct Person:
+    let name: string
+    let age: int
+
+let alice = Person("Alice", 30)
+print(alice.name)   # Alice
+print(alice.age)    # 30
+
+# --- Struct with method ---
+struct Circle:
+    let radius: float
+
+    func area():
+        return 3.14159 * self.radius * self.radius
+
+    func describe():
+        print(f"Circle with radius {self.radius}")
+
+let c = Circle(5.0)
+c.describe()        # Circle with radius 5.0
+let area = c.area()
+print(area > 78.0)  # true (pi*25 ≈ 78.54)
+
+# --- Multiple instances are independent ---
+let p1 = Point(1.0, 2.0)
+let p2 = Point(10.0, 20.0)
+print(p1.x)   # 1.0
+print(p2.x)   # 10.0
+
+# --- Single-field struct ---
+struct Wrapper:
+    let value: int
+
+let w = Wrapper(99)
+print(w.value)   # 99
+
+print("struct: OK")

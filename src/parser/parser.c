@@ -3,6 +3,7 @@
  *
  * Precedence (low → high):
  *   assignment  (=, +=, …)
+ *   pipeline    (|>)
  *   or
  *   and
  *   not
@@ -82,6 +83,11 @@ static void synchronize(Parser *p) {
             case TOK_WHILE:
             case TOK_FOR:
             case TOK_RETURN:
+            case TOK_LET:
+            case TOK_CONST:
+            case TOK_MATCH:
+            case TOK_STRUCT:
+            case TOK_ENUM:
                 return;
             default: break;
         }
@@ -95,6 +101,42 @@ static void synchronize(Parser *p) {
 static AstNode *parse_expr(Parser *p);
 static AstNode *parse_stmt(Parser *p);
 static AstNode *parse_block(Parser *p);
+static void     skip_type_annotation(Parser *p);
+
+/* -------------------------------------------------------------------------
+ * Type annotation skipping
+ * Parses (and discards) a type annotation like: int, string, List<User>, User?
+ * ---------------------------------------------------------------------- */
+static void skip_type_annotation(Parser *p) {
+    /* Consume base type (ident or keyword used as type name) */
+    if (!check(p, TOK_IDENT) && !token_is_keyword(p->current.kind)) return;
+    advance(p);
+
+    /* Optional dotted path: net.http */
+    while (check(p, TOK_DOT)) {
+        /* Peek: only consume the dot if next is an identifier */
+        Lexer saved = *p->lex;
+        Token peek_tok = lexer_next(p->lex);
+        *p->lex = saved;
+        if (peek_tok.kind != TOK_IDENT) break;
+        advance(p); /* dot */
+        advance(p); /* ident */
+    }
+
+    /* Generic params: <T> or <K, V> */
+    if (check(p, TOK_LT)) {
+        advance(p); /* < */
+        int depth = 1;
+        while (depth > 0 && !check(p, TOK_EOF) && !check(p, TOK_NEWLINE)) {
+            if (check(p, TOK_LT))      { depth++; advance(p); }
+            else if (check(p, TOK_GT)) { depth--; if (depth > 0) advance(p); else advance(p); }
+            else advance(p);
+        }
+    }
+
+    /* Nullable: ? */
+    match(p, TOK_QUESTION);
+}
 
 /* -------------------------------------------------------------------------
  * String literal processing (handle escape sequences)
@@ -130,11 +172,235 @@ static AstNode *parse_string_literal(Parser *p) {
 }
 
 /* -------------------------------------------------------------------------
+ * F-string parsing
+ *
+ * f"Hello {name}, you are {age} years old!"
+ * Produces an AST_FSTRING with a parts list of alternating string literals
+ * and expression nodes.
+ * ---------------------------------------------------------------------- */
+
+/* Parse a sub-expression from a null-terminated string (for f-string parts) */
+static AstNode *parse_fstring_subexpr(Parser *p, const char *src, int line, int col) {
+    Lexer sub_lex;
+    lexer_init(&sub_lex, src);
+
+    Parser sub;
+    sub.lex         = &sub_lex;
+    sub.arena       = p->arena;
+    sub.had_error   = false;
+    sub.panic_mode  = false;
+    sub.error_count = 0;
+    sub.source_name = p->source_name;
+    /* Prime the lookahead */
+    sub.previous.kind = TOK_EOF;
+    sub.current       = lexer_next(&sub_lex);
+
+    AstNode *expr = parse_expr(&sub);
+
+    if (sub.had_error) {
+        p->had_error = true;
+        for (int i = 0; i < sub.error_count && p->error_count < FLUX_PARSER_MAX_ERRORS; i++) {
+            p->errors[p->error_count] = sub.errors[i];
+            p->errors[p->error_count].line   = line;
+            p->errors[p->error_count].column = col;
+            p->error_count++;
+        }
+    }
+
+    return expr;
+}
+
+static AstNode *parse_fstring(Parser *p) {
+    /* Token: f"..." — start points to 'f', length includes f, quotes, content */
+    int  line = p->previous.line;
+    int  col  = p->previous.column;
+
+    /* Determine quote char and extract content */
+    const char *tok_start = p->previous.start;
+    char quote = tok_start[1]; /* char after 'f' */
+    const char *content = tok_start + 2; /* skip f" */
+    int content_len = p->previous.length - 3; /* exclude f, open-quote, close-quote */
+    if (content_len < 0) content_len = 0;
+
+    AstNode *fstr = ast_node_alloc(p->arena, AST_FSTRING, line, col);
+    ast_list_init(&fstr->as.fstring.parts);
+
+    const char *cur = content;
+    const char *end = content + content_len;
+    const char *seg = cur; /* start of current literal segment */
+
+    while (cur < end) {
+        if (cur[0] == '{' && cur + 1 < end && cur[1] == '{') {
+            /* Escaped {{ → emit literal segment + literal '{' */
+            int seg_len = (int)(cur - seg);
+            char *lbuf = FLUX_ALLOC(char, seg_len + 2);
+            memcpy(lbuf, seg, (size_t)seg_len);
+            lbuf[seg_len]   = '{';
+            lbuf[seg_len+1] = '\0';
+            AstNode *lit = ast_string(p->arena, line, col, lbuf, seg_len + 1);
+            FLUX_FREE(lbuf);
+            ast_list_push(&fstr->as.fstring.parts, lit);
+            cur += 2;
+            seg = cur;
+            continue;
+        }
+        if (cur[0] == '}' && cur + 1 < end && cur[1] == '}') {
+            /* Escaped }} → literal '}' */
+            int seg_len = (int)(cur - seg);
+            char *lbuf = FLUX_ALLOC(char, seg_len + 2);
+            memcpy(lbuf, seg, (size_t)seg_len);
+            lbuf[seg_len]   = '}';
+            lbuf[seg_len+1] = '\0';
+            AstNode *lit = ast_string(p->arena, line, col, lbuf, seg_len + 1);
+            FLUX_FREE(lbuf);
+            ast_list_push(&fstr->as.fstring.parts, lit);
+            cur += 2;
+            seg = cur;
+            continue;
+        }
+        if (cur[0] == '{') {
+            /* Start of interpolated expression */
+            /* First, emit any accumulated literal segment */
+            if (cur > seg) {
+                int seg_len = (int)(cur - seg);
+                /* Process escape sequences in the literal part */
+                char *lbuf = FLUX_ALLOC(char, seg_len + 1);
+                int out = 0;
+                for (int i = 0; i < seg_len; i++) {
+                    if (seg[i] == '\\' && i + 1 < seg_len) {
+                        i++;
+                        switch (seg[i]) {
+                            case 'n':  lbuf[out++] = '\n'; break;
+                            case 't':  lbuf[out++] = '\t'; break;
+                            case 'r':  lbuf[out++] = '\r'; break;
+                            case '\\': lbuf[out++] = '\\'; break;
+                            case '"':  lbuf[out++] = quote; break;
+                            default:   lbuf[out++] = '\\'; lbuf[out++] = seg[i]; break;
+                        }
+                    } else {
+                        lbuf[out++] = seg[i];
+                    }
+                }
+                AstNode *lit = ast_string(p->arena, line, col, lbuf, out);
+                FLUX_FREE(lbuf);
+                ast_list_push(&fstr->as.fstring.parts, lit);
+            }
+
+            /* Scan to find matching } (handling nested braces) */
+            cur++; /* skip '{' */
+            const char *expr_start = cur;
+            int depth = 1;
+            while (cur < end && depth > 0) {
+                if (*cur == '{') depth++;
+                else if (*cur == '}') depth--;
+                if (depth > 0) cur++;
+                else break;
+            }
+            int expr_len = (int)(cur - expr_start);
+
+            /* Build null-terminated expression string */
+            char *expr_buf = FLUX_ALLOC(char, expr_len + 1);
+            memcpy(expr_buf, expr_start, (size_t)expr_len);
+            expr_buf[expr_len] = '\0';
+
+            /* Parse the expression */
+            AstNode *expr = parse_fstring_subexpr(p, expr_buf, line, col);
+            FLUX_FREE(expr_buf);
+            ast_list_push(&fstr->as.fstring.parts, expr);
+
+            if (cur < end) cur++; /* skip '}' */
+            seg = cur;
+            continue;
+        }
+        cur++;
+    }
+
+    /* Emit any remaining literal */
+    if (cur > seg) {
+        int seg_len = (int)(cur - seg);
+        char *lbuf = FLUX_ALLOC(char, seg_len + 1);
+        int out = 0;
+        for (int i = 0; i < seg_len; i++) {
+            if (seg[i] == '\\' && i + 1 < seg_len) {
+                i++;
+                switch (seg[i]) {
+                    case 'n':  lbuf[out++] = '\n'; break;
+                    case 't':  lbuf[out++] = '\t'; break;
+                    case 'r':  lbuf[out++] = '\r'; break;
+                    case '\\': lbuf[out++] = '\\'; break;
+                    case '"':  lbuf[out++] = quote; break;
+                    default:   lbuf[out++] = '\\'; lbuf[out++] = seg[i]; break;
+                }
+            } else {
+                lbuf[out++] = seg[i];
+            }
+        }
+        AstNode *lit = ast_string(p->arena, line, col, lbuf, out);
+        FLUX_FREE(lbuf);
+        ast_list_push(&fstr->as.fstring.parts, lit);
+    }
+
+    return fstr;
+}
+
+/* -------------------------------------------------------------------------
+ * Lambda: |params| => expr  or  |params| => : block
+ * ---------------------------------------------------------------------- */
+
+static AstNode *parse_lambda(Parser *p) {
+    int line = p->previous.line, col = p->previous.column;
+    AstParamList params;
+    ast_param_list_init(&params);
+
+    /* Parse parameters until closing | */
+    while (!check(p, TOK_PIPE) && !check(p, TOK_EOF)) {
+        AstParam param;
+        memset(&param, 0, sizeof(param));
+        consume(p, TOK_IDENT, "Expected parameter name in lambda");
+        param.name = p->previous;
+        if (match(p, TOK_COLON)) {
+            skip_type_annotation(p);
+            param.type_hint.kind = TOK_EOF; /* ignored */
+        } else {
+            param.type_hint.kind = TOK_EOF;
+        }
+        ast_param_list_push(&params, param);
+        if (!match(p, TOK_COMMA)) break;
+    }
+    consume(p, TOK_PIPE, "Expected '|' after lambda parameters");
+    consume(p, TOK_FAT_ARROW, "Expected '=>' after lambda parameters");
+
+    AstNode *n = ast_node_alloc(p->arena, AST_LAMBDA, line, col);
+    n->as.lambda.params = params;
+
+    /* Body: either a block (=> : NEWLINE INDENT…DEDENT) or an expression */
+    if (check(p, TOK_COLON)) {
+        /* Block-body lambda:  |x| =>:
+         *                         stmt…
+         * Consume the colon first; parse_block then expects NEWLINE INDENT. */
+        advance(p); /* consume ':' */
+        n->as.lambda.is_expr_body = false;
+        n->as.lambda.body         = parse_block(p);
+    } else {
+        /* Expression-body lambda:  |x| => x * x  */
+        n->as.lambda.is_expr_body = true;
+        n->as.lambda.body         = parse_expr(p);
+    }
+    return n;
+}
+
+/* -------------------------------------------------------------------------
  * Primary expressions
  * ---------------------------------------------------------------------- */
 
 static AstNode *parse_primary(Parser *p) {
     int line = p->current.line, col = p->current.column;
+
+    /* Lambda: |params| => expr */
+    if (check(p, TOK_PIPE)) {
+        advance(p); /* consume first | */
+        return parse_lambda(p);
+    }
 
     /* Literals */
     if (match(p, TOK_INT)) {
@@ -152,10 +418,11 @@ static AstNode *parse_primary(Parser *p) {
         buf[len] = '\0';
         return ast_float(p->arena, line, col, strtod(buf, NULL));
     }
-    if (match(p, TOK_STRING)) return parse_string_literal(p);
-    if (match(p, TOK_TRUE))   return ast_bool(p->arena, line, col, true);
-    if (match(p, TOK_FALSE))  return ast_bool(p->arena, line, col, false);
-    if (match(p, TOK_NULL))   return ast_null(p->arena, line, col);
+    if (match(p, TOK_STRING))  return parse_string_literal(p);
+    if (match(p, TOK_FSTRING)) return parse_fstring(p);
+    if (match(p, TOK_TRUE))    return ast_bool(p->arena, line, col, true);
+    if (match(p, TOK_FALSE))   return ast_bool(p->arena, line, col, false);
+    if (match(p, TOK_NULL))    return ast_null(p->arena, line, col);
 
     /* Identifier */
     if (match(p, TOK_IDENT) || match(p, TOK_SELF) || match(p, TOK_SUPER)) {
@@ -239,7 +506,12 @@ static AstNode *parse_postfix(Parser *p) {
             node = idx;
         } else if (match(p, TOK_DOT)) {
             /* Attribute */
-            consume(p, TOK_IDENT, "Expected attribute name after '.'");
+            /* Allow keywords as attribute names (e.g. obj.import) */
+            if (!check(p, TOK_IDENT) && !token_is_keyword(p->current.kind)) {
+                parser_error(p, "Expected attribute name after '.'");
+                break;
+            }
+            advance(p);
             AstNode *attr = ast_node_alloc(p->arena, AST_ATTR, line, col);
             attr->as.attr.object = node;
             int   len = p->previous.length;
@@ -247,10 +519,12 @@ static AstNode *parse_postfix(Parser *p) {
             memcpy(buf, p->previous.start, (size_t)len);
             buf[len] = '\0';
             attr->as.attr.attr = buf;
-            /* Note: buf tracked by arena would need aux tracking – for
-               simplicity we allocate and accept the minor leak (arena
-               frees all at end anyway via aux). */
             node = attr;
+        } else if (match(p, TOK_QUESTION)) {
+            /* ? operator: error propagation (currently treated as postfix no-op) */
+            /* Wrap in a special unary-ish node — for now just pass through */
+            /* TODO: compile as early return on error */
+            (void)node; /* already set */
         } else {
             break;
         }
@@ -284,6 +558,11 @@ static AstNode *parse_unary(Parser *p) {
     }
     if (match(p, TOK_AWAIT)) {
         AstNode *n  = ast_node_alloc(p->arena, AST_AWAIT, line, col);
+        n->as.ret.value = parse_unary(p);
+        return n;
+    }
+    if (match(p, TOK_SPAWN)) {
+        AstNode *n  = ast_node_alloc(p->arena, AST_SPAWN, line, col);
         n->as.ret.value = parse_unary(p);
         return n;
     }
@@ -367,11 +646,38 @@ static AstNode *parse_or(Parser *p) {
 }
 
 /* -------------------------------------------------------------------------
+ * Pipeline: expr |> func  or  expr |> func(args)
+ * Left-associative, lower than 'or', higher than assignment.
+ * ---------------------------------------------------------------------- */
+
+static AstNode *parse_pipeline(Parser *p) {
+    AstNode *left = parse_or(p);
+    while (check(p, TOK_PIPE_ARROW) ||
+           /* Allow newline before |> for multi-line pipelines */
+           (check(p, TOK_NEWLINE) && false /* disabled; see comment below */)) {
+        /* Skip newlines before |> to enable multi-line pipelines:
+         *   value
+         *   |> transform
+         * This would require look-ahead beyond NEWLINE. For now, single-line
+         * pipelines work: value |> f |> g */
+        int line = p->current.line, col = p->current.column;
+        advance(p); /* consume |> */
+        AstNode *right = parse_or(p);
+
+        AstNode *n = ast_node_alloc(p->arena, AST_PIPELINE, line, col);
+        n->as.pipeline.left  = left;
+        n->as.pipeline.right = right;
+        left = n;
+    }
+    return left;
+}
+
+/* -------------------------------------------------------------------------
  * Assignment  (lowest precedence expression)
  * ---------------------------------------------------------------------- */
 
 static AstNode *parse_expr(Parser *p) {
-    AstNode *left = parse_or(p);
+    AstNode *left = parse_pipeline(p);
 
     int line = p->current.line, col = p->current.column;
 
@@ -415,8 +721,9 @@ static AstParamList parse_params(Parser *p) {
         consume(p, TOK_IDENT, "Expected parameter name");
         param.name = p->previous;
         if (match(p, TOK_COLON)) {
-            consume(p, TOK_IDENT, "Expected type name after ':'");
-            param.type_hint = p->previous;
+            /* Skip type annotation but record a placeholder */
+            param.type_hint = p->current; /* save current as hint token */
+            skip_type_annotation(p);
         } else {
             param.type_hint.kind = TOK_EOF;
         }
@@ -463,7 +770,13 @@ static AstNode *parse_func_def(Parser *p, bool is_async) {
     name_buf[name_len] = '\0';
 
     AstParamList params = parse_params(p);
-    consume(p, TOK_COLON, "Expected ':' after parameters");
+
+    /* Optional return type annotation: -> type */
+    if (match(p, TOK_ARROW)) {
+        skip_type_annotation(p); /* parse and discard */
+    }
+
+    consume(p, TOK_COLON, "Expected ':' after function signature");
     AstNode *body = parse_block(p);
 
     AstKind kind = is_async ? AST_ASYNC_FUNC_DEF : AST_FUNC_DEF;
@@ -500,6 +813,144 @@ static AstNode *parse_class_def(Parser *p) {
     n->as.class_def.name       = name_buf;
     n->as.class_def.superclass = super;
     n->as.class_def.body       = body;
+    return n;
+}
+
+/* Parse: let name: type = expr  /  let name = expr  /  const name = expr */
+static AstNode *parse_let_decl(Parser *p, bool is_const) {
+    int line = p->previous.line, col = p->previous.column;
+    consume(p, TOK_IDENT, "Expected variable name after 'let'/'const'");
+    int   name_len = p->previous.length;
+    char *name_buf = FLUX_ALLOC(char, name_len + 1);
+    memcpy(name_buf, p->previous.start, (size_t)name_len);
+    name_buf[name_len] = '\0';
+
+    /* Optional type annotation */
+    if (match(p, TOK_COLON)) {
+        skip_type_annotation(p);
+    }
+
+    /* Value */
+    AstNode *value;
+    if (match(p, TOK_ASSIGN)) {
+        value = parse_expr(p);
+    } else {
+        /* Field declaration without initializer (e.g. inside class/struct) */
+        value = ast_null(p->arena, line, col);
+    }
+
+    AstNode *n = ast_node_alloc(p->arena, AST_LET_DECL, line, col);
+    n->as.let_decl.name     = name_buf;
+    n->as.let_decl.value    = value;
+    n->as.let_decl.is_const = is_const;
+    return n;
+}
+
+/* Parse: struct Name: fields */
+static AstNode *parse_struct_def(Parser *p) {
+    int line = p->previous.line, col = p->previous.column;
+    consume(p, TOK_IDENT, "Expected struct name");
+    int   name_len = p->previous.length;
+    char *name_buf = FLUX_ALLOC(char, name_len + 1);
+    memcpy(name_buf, p->previous.start, (size_t)name_len);
+    name_buf[name_len] = '\0';
+
+    consume(p, TOK_COLON, "Expected ':' after struct name");
+    AstNode *body = parse_block(p);
+
+    /* Reuse class_def layout for struct */
+    AstNode *n = ast_node_alloc(p->arena, AST_STRUCT_DEF, line, col);
+    n->as.class_def.name       = name_buf;
+    n->as.class_def.superclass = NULL;
+    n->as.class_def.body       = body;
+    return n;
+}
+
+/* Parse: enum Name: member1, member2, ... */
+static AstNode *parse_enum_def(Parser *p) {
+    int line = p->previous.line, col = p->previous.column;
+    consume(p, TOK_IDENT, "Expected enum name");
+    int   name_len = p->previous.length;
+    char *name_buf = FLUX_ALLOC(char, name_len + 1);
+    memcpy(name_buf, p->previous.start, (size_t)name_len);
+    name_buf[name_len] = '\0';
+
+    consume(p, TOK_COLON, "Expected ':' after enum name");
+    consume(p, TOK_NEWLINE, "Expected newline before enum body");
+    consume(p, TOK_INDENT,  "Expected indented enum body");
+
+    AstNode *n = ast_node_alloc(p->arena, AST_ENUM_DEF, line, col);
+    n->as.enum_def.name = name_buf;
+    ast_list_init(&n->as.enum_def.members);
+
+    while (!check(p, TOK_DEDENT) && !check(p, TOK_EOF)) {
+        skip_newlines(p);
+        if (check(p, TOK_DEDENT) || check(p, TOK_EOF)) break;
+        if (check(p, TOK_IDENT)) {
+            int mlen = p->current.length;
+            char *mbuf = FLUX_ALLOC(char, mlen + 1);
+            memcpy(mbuf, p->current.start, (size_t)mlen);
+            mbuf[mlen] = '\0';
+            AstNode *member = ast_ident(p->arena, p->current.line, p->current.column,
+                                        p->current.start, p->current.length);
+            ast_list_push(&n->as.enum_def.members, member);
+            advance(p);
+            match(p, TOK_NEWLINE);
+        } else {
+            parser_error(p, "Expected enum member name");
+            advance(p);
+        }
+    }
+
+    consume(p, TOK_DEDENT, "Expected end of enum body");
+    return n;
+}
+
+/* Parse: match subject: cases */
+static AstNode *parse_match(Parser *p) {
+    int line = p->previous.line, col = p->previous.column;
+    AstNode *subject = parse_expr(p);
+    consume(p, TOK_COLON, "Expected ':' after match subject");
+    consume(p, TOK_NEWLINE, "Expected newline before match body");
+    consume(p, TOK_INDENT,  "Expected indented match body");
+
+    AstNode *n = ast_node_alloc(p->arena, AST_MATCH, line, col);
+    n->as.match_stmt.subject       = subject;
+    n->as.match_stmt.wildcard_body = NULL;
+    ast_list_init(&n->as.match_stmt.patterns);
+    ast_list_init(&n->as.match_stmt.bodies);
+
+    while (!check(p, TOK_DEDENT) && !check(p, TOK_EOF)) {
+        skip_newlines(p);
+        if (check(p, TOK_DEDENT) || check(p, TOK_EOF)) break;
+
+        /* Check for wildcard _ */
+        bool is_wildcard = false;
+        AstNode *pattern = NULL;
+
+        if (check(p, TOK_IDENT) &&
+            p->current.length == 1 &&
+            p->current.start[0] == '_') {
+            is_wildcard = true;
+            advance(p); /* consume _ */
+        } else {
+            pattern = parse_expr(p);
+        }
+
+        consume(p, TOK_COLON, "Expected ':' after match pattern");
+        AstNode *body = parse_block(p);
+
+        if (is_wildcard) {
+            n->as.match_stmt.wildcard_body = body;
+        } else {
+            ast_list_push(&n->as.match_stmt.patterns, pattern);
+            ast_list_push(&n->as.match_stmt.bodies, body);
+        }
+
+        while (check(p, TOK_NEWLINE)) advance(p);
+    }
+
+    consume(p, TOK_DEDENT, "Expected end of match body");
     return n;
 }
 
@@ -578,6 +1029,19 @@ static AstNode *parse_import(Parser *p) {
     memcpy(mbuf, p->previous.start, (size_t)mlen);
     mbuf[mlen] = '\0';
 
+    /* Support dotted imports: import net.http */
+    while (check(p, TOK_DOT)) {
+        advance(p); /* consume dot */
+        if (!check(p, TOK_IDENT)) break;
+        int part_len = p->current.length;
+        int total_len = (int)strlen(mbuf) + 1 + part_len;
+        char *new_buf = FLUX_ALLOC(char, total_len + 1);
+        snprintf(new_buf, (size_t)(total_len + 1), "%s.%.*s", mbuf, part_len, p->current.start);
+        FLUX_FREE(mbuf);
+        mbuf = new_buf;
+        advance(p);
+    }
+
     char *alias = NULL;
     if (match(p, TOK_AS)) {
         consume(p, TOK_IDENT, "Expected alias after 'as'");
@@ -610,6 +1074,31 @@ static AstNode *parse_stmt(Parser *p) {
     }
     if (match(p, TOK_CLASS)) {
         AstNode *n = parse_class_def(p);
+        match(p, TOK_NEWLINE);
+        return n;
+    }
+    if (match(p, TOK_STRUCT)) {
+        AstNode *n = parse_struct_def(p);
+        match(p, TOK_NEWLINE);
+        return n;
+    }
+    if (match(p, TOK_ENUM)) {
+        AstNode *n = parse_enum_def(p);
+        match(p, TOK_NEWLINE);
+        return n;
+    }
+    if (match(p, TOK_LET)) {
+        AstNode *n = parse_let_decl(p, false);
+        match(p, TOK_NEWLINE);
+        return n;
+    }
+    if (match(p, TOK_CONST)) {
+        AstNode *n = parse_let_decl(p, true);
+        match(p, TOK_NEWLINE);
+        return n;
+    }
+    if (match(p, TOK_MATCH)) {
+        AstNode *n = parse_match(p);
         match(p, TOK_NEWLINE);
         return n;
     }

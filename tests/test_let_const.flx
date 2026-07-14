@@ -1,0 +1,60 @@
+# test_let_const.flx — regression tests for let/const declarations
+# Expected output lines are prefixed with the value printed.
+
+# --- Global let/const ---
+let name = "Flux"
+const VERSION = "2.0"
+print(name)       # Flux
+print(VERSION)    # 2.0
+
+# --- Local let ---
+func test_local():
+    let x = 42
+    print(x)      # 42
+
+test_local()
+
+# --- let with type annotation (annotation ignored at runtime) ---
+func test_typed():
+    let n: int = 7
+    print(n)      # 7
+
+test_typed()
+
+# --- let is block-scoped (if body) ---
+func test_if_scope():
+    let outer = "outer"
+    if true:
+        let inner = "inner"
+        print(inner)  # inner
+    print(outer)      # outer
+
+test_if_scope()
+
+# --- let in for body is per-iteration (stack stays clean) ---
+func test_for_scope():
+    for i in range(4):
+        let v = i * 3
+        print(v)    # 0, 3, 6, 9
+
+test_for_scope()
+
+# --- let in while body ---
+func test_while_scope():
+    let k = 0
+    while k < 3:
+        let doubled = k * 2
+        print(doubled)  # 0, 2, 4
+        k = k + 1
+
+test_while_scope()
+
+# --- bare assignment inside for still survives after loop ---
+func test_bare_survives():
+    for i in range(3):
+        last = i
+    print(last)    # 2
+
+test_bare_survives()
+
+print("let/const: OK")

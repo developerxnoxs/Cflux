@@ -1,0 +1,142 @@
+# new_syntax.flx — showcase of Flux 2.0 syntax features
+#
+# Covers: let/const, f-strings, match, lambda, pipeline, struct, enum
+
+# ─── Variables ────────────────────────────────────────────────────────────────
+let greeting = "Hello"
+const MAX_RETRIES = 3
+
+print(f"{greeting}, Flux!")
+print(f"Max retries allowed: {MAX_RETRIES}")
+
+# ─── F-strings ────────────────────────────────────────────────────────────────
+let x = 7
+let y = 6
+print(f"7 × 6 = {x * y}")
+
+func describe(n):
+    return f"The number {n} squared is {n * n}"
+
+print(describe(9))
+
+# ─── Match ────────────────────────────────────────────────────────────────────
+func http_status(code):
+    match code:
+        200:
+            return "OK"
+        201:
+            return "Created"
+        400:
+            return "Bad Request"
+        404:
+            return "Not Found"
+        500:
+            return "Internal Server Error"
+        _:
+            return "Unknown Status"
+
+print(f"200 → {http_status(200)}")
+print(f"404 → {http_status(404)}")
+print(f"999 → {http_status(999)}")
+
+# ─── Lambdas ──────────────────────────────────────────────────────────────────
+let double  = |x| => x * 2
+let add     = |a, b| => a + b
+let negate  = |x| => -x
+
+print(f"double(21)  = {double(21)}")
+print(f"add(8, 34)  = {add(8, 34)}")
+print(f"negate(5)   = {negate(5)}")
+
+# Higher-order function using lambdas
+func apply(f, val):
+    return f(val)
+
+print(f"apply(double, 10) = {apply(double, 10)}")
+
+# ─── Pipeline |> ──────────────────────────────────────────────────────────────
+func square(n):
+    return n * n
+
+func inc(n):
+    return n + 1
+
+func to_str(n):
+    return str(n)
+
+let result = 4 |> square |> inc |> to_str
+print(f"4 |> square |> inc |> to_str = \"{result}\"")
+
+# ─── Enum ─────────────────────────────────────────────────────────────────────
+enum Direction:
+    North
+    South
+    East
+    West
+
+func direction_name(d):
+    match d:
+        0:
+            return "North"
+        1:
+            return "South"
+        2:
+            return "East"
+        3:
+            return "West"
+        _:
+            return "Unknown"
+
+let dir = Direction.East
+print(f"Direction.East = {dir} ({direction_name(dir)})")
+
+enum Color:
+    Red
+    Green
+    Blue
+
+print(f"Color.Red={Color.Red}  Color.Green={Color.Green}  Color.Blue={Color.Blue}")
+
+# ─── Struct ───────────────────────────────────────────────────────────────────
+struct Point:
+    let x: float
+    let y: float
+
+struct Rectangle:
+    let width: float
+    let height: float
+
+let p1 = Point(0.0, 0.0)
+let p2 = Point(3.0, 4.0)
+print(f"p1 = ({p1.x}, {p1.y})")
+print(f"p2 = ({p2.x}, {p2.y})")
+
+let rect = Rectangle(10.0, 5.0)
+print(f"rect area = {rect.width * rect.height}")
+
+# ─── Class with new syntax ────────────────────────────────────────────────────
+class Animal:
+    func init(name, sound):
+        self.name = name
+        self.sound = sound
+
+    func speak():
+        print(f"{self.name} says {self.sound}!")
+
+let dog = Animal("Dog", "Woof")
+let cat = Animal("Cat", "Meow")
+dog.speak()
+cat.speak()
+
+# ─── Combining features ───────────────────────────────────────────────────────
+let nums = [1, 2, 3, 4, 5]
+let doubled = []
+for n in nums:
+    doubled.append(double(n))
+
+print(f"doubled = {doubled}")
+
+let message = f"Flux 2.0 is {'awesome'}!"
+print(message)
+
+print("Done — all new syntax features work!")

@@ -1,0 +1,45 @@
+# test_pipeline.flx — regression tests for pipeline operator |>
+
+func double(x):
+    return x * 2
+
+func inc(x):
+    return x + 1
+
+func to_str(x):
+    return str(x)
+
+# --- Basic pipeline ---
+let r1 = 5 |> double
+print(r1)          # 10
+
+let r2 = 5 |> double |> inc
+print(r2)          # 11
+
+# --- Pipeline with multiple hops ---
+let r3 = 2 |> double |> double |> double
+print(r3)          # 16
+
+# --- Pipeline with function that takes extra args ---
+func add(a, b):
+    return a + b
+
+let r4 = 10 |> add(5)
+print(r4)          # 15
+
+# --- Pipeline with lambda ---
+let r5 = 7 |> (|x| => x * x)
+print(r5)          # 49
+
+# --- Pipeline to string conversion ---
+let r6 = 42 |> to_str
+print(r6)          # 42
+print(type(r6))    # string
+
+# --- Pipeline in function body ---
+func transform(n):
+    return n |> double |> inc |> to_str
+
+print(transform(4))   # 9
+
+print("pipeline: OK")

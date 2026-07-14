@@ -582,6 +582,137 @@ static void compile_expr(Compiler *c, AstNode *node) {
             emit_byte(c, OP_AWAIT, line);
             break;
 
+        case AST_SPAWN:
+            /* spawn f        → wrap the closure in a coroutine handle (OP_CREATE_TASK)
+             * spawn f(args)  → call f(args) eagerly; the return value IS the handle.
+             *                   For async functions this executes them synchronously,
+             *                   matching the VM's cooperative scheduler semantics. */
+            if (node->as.ret.value && node->as.ret.value->kind == AST_CALL) {
+                compile_expr(c, node->as.ret.value);   /* call → push result */
+            } else {
+                compile_expr(c, node->as.ret.value);   /* push closure */
+                emit_byte(c, OP_CREATE_TASK, line);    /* wrap as coroutine */
+            }
+            break;
+
+        /* ----------------------------------------------------------------
+         * F-string: f"Hello {name}!"
+         * Parts alternate between AST_STRING literals and expressions.
+         * Each expression is converted to string via str() before concat.
+         * -------------------------------------------------------------- */
+        case AST_FSTRING: {
+            int count = node->as.fstring.parts.count;
+            if (count == 0) {
+                /* Empty f-string */
+                FluxString *empty = object_string_copy(c->vm, "", 0);
+                emit_byte(c, OP_PUSH_STRING, line);
+                emit_uint16(c, make_constant(c, value_object((FluxObject *)empty), line), line);
+                break;
+            }
+            /* Compile first part */
+            AstNode *first = node->as.fstring.parts.data[0];
+            if (first->kind == AST_STRING) {
+                compile_expr(c, first);
+            } else {
+                emit_load_var(c, "str", line);
+                compile_expr(c, first);
+                emit_byte(c, OP_CALL, line);
+                emit_byte(c, 1, line);
+            }
+            /* Concatenate remaining parts */
+            for (int i = 1; i < count; i++) {
+                AstNode *part = node->as.fstring.parts.data[i];
+                if (part->kind == AST_STRING) {
+                    compile_expr(c, part);
+                } else {
+                    emit_load_var(c, "str", line);
+                    compile_expr(c, part);
+                    emit_byte(c, OP_CALL, line);
+                    emit_byte(c, 1, line);
+                }
+                emit_byte(c, OP_ADD, line);
+            }
+            break;
+        }
+
+        /* ----------------------------------------------------------------
+         * Lambda: |params| => expr
+         * Compiled as an anonymous closure.
+         * -------------------------------------------------------------- */
+        case AST_LAMBDA: {
+            AstParamList *params = &node->as.lambda.params;
+
+            CompilerFrame lam_frame;
+            frame_init(c, &lam_frame, FUNC_FUNCTION, "<lambda>", 8);
+            scope_begin(c);
+            c->frame->function->arity = params->count;
+            for (int i = 0; i < params->count; i++)
+                add_local_tok(c, params->data[i].name.start,
+                                 params->data[i].name.length, line);
+
+            if (node->as.lambda.is_expr_body) {
+                /* Expression body: compile and return */
+                compile_expr(c, node->as.lambda.body);
+                emit_byte(c, OP_RETURN, line);
+            } else {
+                compile_node(c, node->as.lambda.body);
+            }
+
+            scope_end(c, line);
+            FluxFunction *lam_fn = frame_end(c, line);
+
+            uint16_t lam_idx = make_constant(c, value_object((FluxObject *)lam_fn), line);
+            emit_byte(c, OP_CLOSURE, line);
+            emit_uint16(c, lam_idx, line);
+            for (int i = 0; i < lam_fn->upvalue_count; i++) {
+                emit_byte(c, lam_frame.upvalues[i].is_local ? 1 : 0, line);
+                emit_byte(c, lam_frame.upvalues[i].index, line);
+            }
+            break;
+        }
+
+        /* ----------------------------------------------------------------
+         * Pipeline: left |> right
+         *   left |> f       → f(left)
+         *   left |> f(a,b)  → f(left, a, b)
+         *   left |> obj.m() → obj.m(left)
+         * -------------------------------------------------------------- */
+        case AST_PIPELINE: {
+            AstNode *right = node->as.pipeline.right;
+
+            if (right->kind == AST_CALL) {
+                AstNode *callee = right->as.call.callee;
+                int extra_argc  = right->as.call.args.count;
+
+                if (callee->kind == AST_ATTR) {
+                    /* obj.method(left, extra...) */
+                    compile_expr(c, callee->as.attr.object);
+                    compile_expr(c, node->as.pipeline.left);
+                    for (int i = 0; i < extra_argc; i++)
+                        compile_expr(c, right->as.call.args.data[i]);
+                    emit_byte(c, OP_INVOKE, line);
+                    const char *attr = callee->as.attr.attr;
+                    emit_uint16(c, identifier_constant(c, attr, (int)strlen(attr), line), line);
+                    emit_byte(c, (uint8_t)(extra_argc + 1), line);
+                } else {
+                    /* callee(left, extra...) */
+                    compile_expr(c, callee);
+                    compile_expr(c, node->as.pipeline.left);
+                    for (int i = 0; i < extra_argc; i++)
+                        compile_expr(c, right->as.call.args.data[i]);
+                    emit_byte(c, OP_CALL, line);
+                    emit_byte(c, (uint8_t)(extra_argc + 1), line);
+                }
+            } else {
+                /* right(left) */
+                compile_expr(c, right);
+                compile_expr(c, node->as.pipeline.left);
+                emit_byte(c, OP_CALL, line);
+                emit_byte(c, 1, line);
+            }
+            break;
+        }
+
         case AST_FUNC_DEF:
         case AST_ASYNC_FUNC_DEF: {
             /* Inline function expression (lambda-like) */
@@ -703,10 +834,25 @@ static void predeclare_node_locals(Compiler *c, AstNode *node, int line) {
              * recurse so we can see the inner AST_ASSIGN node. */
             predeclare_node_locals(c, node->as.expr_stmt.expr, line);
             break;
+        case AST_LET_DECL:
+            /* `let` is block-scoped — do NOT hoist to function scope.
+             * compile_node(AST_LET_DECL) will add the local at the exact
+             * point of declaration; scope_end will pop it correctly. */
+            break;
+        case AST_MATCH:
+            /* Recurse into match bodies to pick up bare assignments.
+             * (AST_LET_DECL is intentionally skipped above — block-scoped.) */
+            for (int i = 0; i < node->as.match_stmt.bodies.count; i++)
+                predeclare_node_locals(c, node->as.match_stmt.bodies.data[i], line);
+            if (node->as.match_stmt.wildcard_body)
+                predeclare_node_locals(c, node->as.match_stmt.wildcard_body, line);
+            break;
         /* Never cross function/class boundaries – those introduce a new scope. */
         case AST_FUNC_DEF:
         case AST_ASYNC_FUNC_DEF:
         case AST_CLASS_DEF:
+        case AST_STRUCT_DEF:
+        case AST_ENUM_DEF:
             break;
         default:
             break;
@@ -953,8 +1099,10 @@ static void compile_node(Compiler *c, AstNode *node) {
             emit_byte(c, (uint8_t)idx_slot, line);
             emit_byte(c, OP_POP, line);
 
-            /* ---- Body ---- */
+            /* ---- Body (inner scope so `let` locals are popped each iteration) ---- */
+            scope_begin(c);
             compile_node(c, node->as.for_stmt.body);
+            scope_end(c, line);   /* pops any `let` locals declared in body */
 
             /* ---- Loop back ---- */
             emit_loop(c, c->loop_start, line);
@@ -1105,13 +1253,239 @@ static void compile_node(Compiler *c, AstNode *node) {
             break;
         }
 
+        /* ----------------------------------------------------------------
+         * let / const declaration
+         * Compiles like a fresh variable assignment:
+         *   - global scope: DEFINE_GLOBAL (pops value)
+         *   - local scope : value stays on stack as local slot
+         * -------------------------------------------------------------- */
+        case AST_LET_DECL: {
+            const char *name = node->as.let_decl.name;
+            compile_expr(c, node->as.let_decl.value);
+
+            if (c->frame->scope_depth == 0) {
+                emit_byte(c, OP_DEFINE_GLOBAL, line);
+                emit_uint16(c, identifier_constant(c, name, (int)strlen(name), line), line);
+                compiler_declare_global(c, name);
+            } else {
+                add_local(c, name, line);
+                /* Value is already the local's stack slot — nothing more to emit. */
+            }
+            break;
+        }
+
+        /* ----------------------------------------------------------------
+         * match subject: cases
+         * Compiled as an if/elif/else chain comparing subject to each
+         * pattern with ==.
+         *
+         * Each arm body runs in its own inner scope so `let` locals
+         * declared inside it stay at a predictable stack offset:
+         * only ONE arm executes at runtime, so every arm's locals must
+         * be fully pushed AND popped before the jump-to-end is emitted.
+         * Without per-arm scopes the compile-time slot assignments would
+         * drift from the runtime stack positions.
+         * -------------------------------------------------------------- */
+        case AST_MATCH: {
+            scope_begin(c);
+
+            /* Store subject in a hidden local */
+            compile_expr(c, node->as.match_stmt.subject);
+            int subject_slot = add_local(c, "__match__", line);
+
+            int n_patterns  = node->as.match_stmt.patterns.count;
+            int *end_jumps  = (n_patterns > 0) ? FLUX_ALLOC(int, n_patterns) : NULL;
+            int  end_count  = 0;
+
+            for (int i = 0; i < n_patterns; i++) {
+                AstNode *pat  = node->as.match_stmt.patterns.data[i];
+                AstNode *body = node->as.match_stmt.bodies.data[i];
+
+                /* Condition: subject == pattern */
+                emit_byte(c, OP_LOAD_LOCAL, line);
+                emit_byte(c, (uint8_t)subject_slot, line);
+                compile_expr(c, pat);
+                emit_byte(c, OP_EQ, line);
+
+                int skip = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                emit_byte(c, OP_POP, line); /* pop true */
+
+                /* Inner scope: contains `let` locals for this arm only */
+                scope_begin(c);
+                compile_node(c, body);
+                scope_end(c, line); /* pop arm-local `let` vars before jumping */
+
+                end_jumps[end_count++] = emit_jump(c, OP_JUMP, line);
+                patch_jump(c, skip);
+                emit_byte(c, OP_POP, line); /* pop false */
+            }
+
+            /* Default / wildcard _ */
+            if (node->as.match_stmt.wildcard_body) {
+                scope_begin(c);
+                compile_node(c, node->as.match_stmt.wildcard_body);
+                scope_end(c, line);
+            }
+
+            /* Patch all end-of-case jumps */
+            for (int i = 0; i < end_count; i++)
+                patch_jump(c, end_jumps[i]);
+            if (end_jumps) FLUX_FREE(end_jumps);
+
+            scope_end(c, line); /* pop __match__ subject */
+            break;
+        }
+
+        /* ----------------------------------------------------------------
+         * struct Name: fields
+         * Compiled as a class.  let field: type declarations inside the
+         * body are collected to auto-generate an init(field1, field2, …).
+         * -------------------------------------------------------------- */
+        case AST_STRUCT_DEF: {
+            const char *name    = node->as.class_def.name;
+            AstNode    *body    = node->as.class_def.body;
+
+            /* Collect field names from let declarations */
+            int   n_fields  = 0;
+            for (int i = 0; i < body->as.block.stmts.count; i++)
+                if (body->as.block.stmts.data[i]->kind == AST_LET_DECL) n_fields++;
+
+            const char **fields = (n_fields > 0) ? FLUX_ALLOC(const char *, n_fields) : NULL;
+            int fi = 0;
+            for (int i = 0; i < body->as.block.stmts.count; i++) {
+                AstNode *s = body->as.block.stmts.data[i];
+                if (s->kind == AST_LET_DECL) fields[fi++] = s->as.let_decl.name;
+            }
+
+            /* Emit OP_CLASS */
+            uint16_t name_idx = identifier_constant(c, name, (int)strlen(name), line);
+            emit_byte(c, OP_CLASS, line);
+            emit_uint16(c, name_idx, line);
+
+            if (c->frame->scope_depth == 0) {
+                emit_byte(c, OP_DEFINE_GLOBAL, line);
+                emit_uint16(c, name_idx, line);
+                compiler_declare_global(c, name);
+            } else {
+                add_local(c, name, line);
+            }
+
+            /* Load the class for method attachment */
+            emit_load_var(c, name, line);
+
+            /* Auto-generate init(field1, field2, …) when fields present */
+            if (n_fields > 0) {
+                CompilerFrame init_f;
+                frame_init(c, &init_f, FUNC_INIT, "init", 4);
+                scope_begin(c);
+                c->frame->function->arity = n_fields;
+                for (int i = 0; i < n_fields; i++)
+                    add_local(c, fields[i], line);
+
+                for (int i = 0; i < n_fields; i++) {
+                    emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, 0, line); /* self */
+                    emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, (uint8_t)(i + 1), line);
+                    emit_byte(c, OP_SET_ATTR, line);
+                    emit_uint16(c, identifier_constant(c, fields[i], (int)strlen(fields[i]), line), line);
+                    /* OP_SET_ATTR already pops both object and value from the
+                     * working stack, so no extra OP_POP is needed here. */
+                }
+                /* Return self */
+                emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, 0, line);
+                emit_byte(c, OP_RETURN, line);
+
+                scope_end(c, line);
+                FluxFunction *init_fn = frame_end(c, line);
+                uint16_t init_idx = make_constant(c, value_object((FluxObject *)init_fn), line);
+                emit_byte(c, OP_CLOSURE, line);
+                emit_uint16(c, init_idx, line);
+                for (int i = 0; i < init_fn->upvalue_count; i++) {
+                    emit_byte(c, init_f.upvalues[i].is_local ? 1 : 0, line);
+                    emit_byte(c, init_f.upvalues[i].index, line);
+                }
+                emit_byte(c, OP_METHOD, line);
+                emit_uint16(c, identifier_constant(c, "init", 4, line), line);
+
+                FLUX_FREE(fields);
+            }
+
+            /* Compile any explicit method definitions */
+            for (int i = 0; i < body->as.block.stmts.count; i++) {
+                AstNode *s = body->as.block.stmts.data[i];
+                if (s->kind != AST_FUNC_DEF && s->kind != AST_ASYNC_FUNC_DEF) continue;
+
+                const char   *mn  = s->as.func_def.name;
+                AstParamList *mp  = &s->as.func_def.params;
+                bool is_init      = strcmp(mn, "init") == 0;
+                FuncKind mk = is_init ? FUNC_INIT :
+                              (s->as.func_def.is_async ? FUNC_ASYNC : FUNC_METHOD);
+
+                CompilerFrame mf;
+                frame_init(c, &mf, mk, mn, (int)strlen(mn));
+                scope_begin(c);
+                c->frame->function->arity = mp->count;
+                for (int j = 0; j < mp->count; j++)
+                    add_local_tok(c, mp->data[j].name.start, mp->data[j].name.length, s->line);
+                compile_node(c, s->as.func_def.body);
+                if (is_init) {
+                    emit_byte(c, OP_LOAD_LOCAL, s->line); emit_byte(c, 0, s->line);
+                    emit_byte(c, OP_RETURN, s->line);
+                }
+                scope_end(c, s->line);
+                FluxFunction *mfn = frame_end(c, s->line);
+                uint16_t mfn_idx  = make_constant(c, value_object((FluxObject *)mfn), line);
+                emit_byte(c, OP_CLOSURE, line);
+                emit_uint16(c, mfn_idx, line);
+                for (int j = 0; j < mfn->upvalue_count; j++) {
+                    emit_byte(c, mf.upvalues[j].is_local ? 1 : 0, line);
+                    emit_byte(c, mf.upvalues[j].index, line);
+                }
+                emit_byte(c, OP_METHOD, line);
+                emit_uint16(c, identifier_constant(c, mn, (int)strlen(mn), line), line);
+            }
+
+            emit_byte(c, OP_POP, line); /* pop class */
+            break;
+        }
+
+        /* ----------------------------------------------------------------
+         * enum Name: Red, Green, Blue
+         * Compiled as a dict: {"Red": 0, "Green": 1, "Blue": 2}
+         * Color.Red works because OP_GET_ATTR on dicts does key lookup.
+         * -------------------------------------------------------------- */
+        case AST_ENUM_DEF: {
+            const char *name  = node->as.enum_def.name;
+            int         count = node->as.enum_def.members.count;
+
+            for (int i = 0; i < count; i++) {
+                AstNode    *m     = node->as.enum_def.members.data[i];
+                const char *mname = m->as.ident.name;
+                FluxString *key   = object_string_copy(c->vm, mname, (int)strlen(mname));
+                emit_byte(c, OP_PUSH_STRING, line);
+                emit_uint16(c, make_constant(c, value_object((FluxObject *)key), line), line);
+                emit_byte(c, OP_PUSH_INT, line);
+                chunk_write_int64(current_chunk(c), (int64_t)i, line);
+            }
+            emit_byte(c, OP_CREATE_DICT, line);
+            emit_uint16(c, (uint16_t)count, line);
+
+            if (c->frame->scope_depth == 0) {
+                emit_byte(c, OP_DEFINE_GLOBAL, line);
+                emit_uint16(c, identifier_constant(c, name, (int)strlen(name), line), line);
+                compiler_declare_global(c, name);
+            } else {
+                add_local(c, name, line);
+            }
+            break;
+        }
+
         /* Expression in statement position */
-        case AST_INT: case AST_FLOAT: case AST_STRING:
+        case AST_INT: case AST_FLOAT: case AST_STRING: case AST_FSTRING:
         case AST_BOOL: case AST_NULL: case AST_IDENT:
         case AST_BINARY: case AST_UNARY: case AST_CALL:
         case AST_INDEX: case AST_ATTR: case AST_LIST:
         case AST_DICT: case AST_ASSIGN: case AST_AUGMENTED_ASSIGN:
-        case AST_AWAIT:
+        case AST_AWAIT: case AST_SPAWN: case AST_LAMBDA: case AST_PIPELINE:
             compile_expr(c, node);
             emit_byte(c, OP_POP, line);
             break;

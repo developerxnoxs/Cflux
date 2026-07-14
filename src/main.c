@@ -1,14 +1,18 @@
 /**
  * src/main.c - Flux CLI entry point.
  *
- * The executable (`flux`) is intentionally thin: it delegates all language
- * logic to libflux via the public API (flux.h).
- *
- * Usage:
- *   flux <file.flx>       – execute a Flux source file
- *   flux -e "<source>"    – evaluate a source string
- *   flux --version        – print version
- *   flux --disasm <file>  – compile and print disassembly (debug build)
+ * Subcommands:
+ *   flux run <file.flx>    – execute a Flux source file (default)
+ *   flux build <file.flx>  – compile to bytecode (future; currently runs)
+ *   flux test <file.flx>   – run file and report pass/fail
+ *   flux fmt <file.flx>    – format source file (stub)
+ *   flux lint <file.flx>   – lint source file (stub)
+ *   flux doc <file.flx>    – generate docs (stub)
+ *   flux repl              – interactive REPL
+ *   flux package <cmd>     – package manager (stub)
+ *   flux -e "<source>"     – evaluate a source string
+ *   flux --version         – print version
+ *   flux --help            – show help
  */
 #include "flux/flux.h"
 #include "flux/common.h"
@@ -20,39 +24,182 @@ static void print_usage(const char *prog) {
     fprintf(stderr,
         "Flux %s — a modern programming language\n\n"
         "Usage:\n"
-        "  %s <file.flx>        Execute a Flux source file\n"
-        "  %s -e \"<code>\"      Evaluate a source string\n"
-        "  %s --version         Print version information\n"
-        "  %s --help            Show this help message\n",
-        flux_version(), prog, prog, prog, prog);
+        "  %s run <file.flx>      Execute a Flux source file\n"
+        "  %s build <file.flx>    Compile a Flux source file\n"
+        "  %s test <file.flx>     Run tests in a Flux source file\n"
+        "  %s fmt <file.flx>      Format a Flux source file\n"
+        "  %s lint <file.flx>     Lint a Flux source file\n"
+        "  %s doc <file.flx>      Generate documentation\n"
+        "  %s repl                Start interactive REPL\n"
+        "  %s package <cmd>       Package manager\n"
+        "  %s <file.flx>          Execute a Flux source file (shorthand)\n"
+        "  %s -e \"<code>\"       Evaluate a source string\n"
+        "  %s --version           Print version information\n"
+        "  %s --help              Show this help message\n",
+        flux_version(),
+        prog, prog, prog, prog, prog,
+        prog, prog, prog, prog, prog, prog, prog);
 }
 
+/* -------------------------------------------------------------------------
+ * Simple REPL
+ * ---------------------------------------------------------------------- */
+static void run_repl(void) {
+    printf("Flux %s — Interactive REPL\n", flux_version());
+    printf("Type Flux code and press Enter. Type 'exit' or Ctrl-D to quit.\n\n");
+
+    FluxVM *vm = flux_vm_new();
+    flux_load_stdlib(vm);
+
+    char line[4096];
+    for (;;) {
+        printf(">>> ");
+        fflush(stdout);
+
+        if (!fgets(line, sizeof(line), stdin)) {
+            printf("\n");
+            break;
+        }
+
+        /* Trim trailing newline */
+        int len = (int)strlen(line);
+        if (len > 0 && line[len - 1] == '\n') line[--len] = '\0';
+
+        if (strcmp(line, "exit") == 0 || strcmp(line, "quit") == 0) break;
+        if (len == 0) continue;
+
+        FluxResult result = flux_eval(vm, line, "<repl>");
+        if (result != FLUX_OK) {
+            /* Error message already printed by runtime */
+        }
+    }
+
+    flux_vm_destroy(vm);
+}
+
+/* -------------------------------------------------------------------------
+ * Stub subcommands
+ * ---------------------------------------------------------------------- */
+static void stub_fmt(const char *file) {
+    fprintf(stderr, "flux fmt: formatting %s (not yet implemented)\n", file);
+    fprintf(stderr, "Hint: use a compatible formatter or editor plugin.\n");
+}
+
+static void stub_lint(const char *file) {
+    fprintf(stderr, "flux lint: linting %s (not yet implemented)\n", file);
+    fprintf(stderr, "Hint: enable strict mode via compiler flags.\n");
+}
+
+static void stub_doc(const char *file) {
+    fprintf(stderr, "flux doc: generating docs for %s (not yet implemented)\n", file);
+}
+
+static void stub_package(int argc, char *argv[]) {
+    if (argc < 1) {
+        fprintf(stderr, "flux package: usage: flux package <install|add|remove|list> [package]\n");
+        return;
+    }
+    fprintf(stderr, "flux package %s: package manager not yet implemented.\n", argv[0]);
+    fprintf(stderr, "Hint: place dependencies in a 'packages/' directory.\n");
+}
+
+/* -------------------------------------------------------------------------
+ * Entry point
+ * ---------------------------------------------------------------------- */
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         print_usage(argv[0]);
         return 1;
     }
 
+    const char *cmd = argv[1];
+
     /* --version */
-    if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0) {
+    if (strcmp(cmd, "--version") == 0 || strcmp(cmd, "-v") == 0) {
         printf("Flux %s\n", flux_version());
         return 0;
     }
 
     /* --help */
-    if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
+    if (strcmp(cmd, "--help") == 0 || strcmp(cmd, "-h") == 0) {
         print_usage(argv[0]);
         return 0;
     }
 
-    /* Create VM and load standard library */
+    /* repl */
+    if (strcmp(cmd, "repl") == 0) {
+        run_repl();
+        return 0;
+    }
+
+    /* fmt */
+    if (strcmp(cmd, "fmt") == 0) {
+        if (argc < 3) { fprintf(stderr, "flux fmt: expected <file>\n"); return 1; }
+        stub_fmt(argv[2]);
+        return 0;
+    }
+
+    /* lint */
+    if (strcmp(cmd, "lint") == 0) {
+        if (argc < 3) { fprintf(stderr, "flux lint: expected <file>\n"); return 1; }
+        stub_lint(argv[2]);
+        return 0;
+    }
+
+    /* doc */
+    if (strcmp(cmd, "doc") == 0) {
+        if (argc < 3) { fprintf(stderr, "flux doc: expected <file>\n"); return 1; }
+        stub_doc(argv[2]);
+        return 0;
+    }
+
+    /* package */
+    if (strcmp(cmd, "package") == 0) {
+        stub_package(argc - 2, argv + 2);
+        return 0;
+    }
+
+    /* Create VM for execution subcommands */
     FluxVM *vm = flux_vm_new();
     flux_load_stdlib(vm);
 
     FluxResult result = FLUX_OK;
 
+    /* run <file> */
+    if (strcmp(cmd, "run") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "flux run: expected <file.flx>\n");
+            flux_vm_destroy(vm);
+            return 1;
+        }
+        result = flux_execute_file(vm, argv[2]);
+
+    /* build <file> – compiles and reports success/failure */
+    } else if (strcmp(cmd, "build") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "flux build: expected <file.flx>\n");
+            flux_vm_destroy(vm);
+            return 1;
+        }
+        result = flux_execute_file(vm, argv[2]);
+        if (result == FLUX_OK)
+            printf("flux build: %s compiled successfully.\n", argv[2]);
+
+    /* test <file> – run file and report */
+    } else if (strcmp(cmd, "test") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "flux test: expected <file.flx>\n");
+            flux_vm_destroy(vm);
+            return 1;
+        }
+        result = flux_execute_file(vm, argv[2]);
+        if (result == FLUX_OK)
+            printf("flux test: %s passed.\n", argv[2]);
+        else
+            printf("flux test: %s FAILED.\n", argv[2]);
+
     /* -e "<source>" */
-    if (strcmp(argv[1], "-e") == 0) {
+    } else if (strcmp(cmd, "-e") == 0) {
         if (argc < 3) {
             fprintf(stderr, "flux: -e requires a source argument\n");
             flux_vm_destroy(vm);
@@ -60,20 +207,26 @@ int main(int argc, char *argv[]) {
         }
         result = flux_eval(vm, argv[2], "<cmdline>");
 
-    /* Execute file */
+    /* <file.flx> — direct execution (backwards compatibility) */
+    } else if (cmd[0] != '-') {
+        result = flux_execute_file(vm, cmd);
+
     } else {
-        result = flux_execute_file(vm, argv[1]);
+        fprintf(stderr, "flux: unknown option '%s'\n", cmd);
+        print_usage(argv[0]);
+        flux_vm_destroy(vm);
+        return 1;
     }
 
+    int exit_code = 0;
     if (result != FLUX_OK) {
         const char *err = flux_get_error(vm);
         if (err && *err) {
             /* Error already printed by runtime; suppress duplicate */
         }
-        flux_vm_destroy(vm);
-        return 1;
+        exit_code = 1;
     }
 
     flux_vm_destroy(vm);
-    return 0;
+    return exit_code;
 }

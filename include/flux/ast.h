@@ -21,11 +21,13 @@ typedef enum {
     AST_STRING,
     AST_BOOL,
     AST_NULL,
+    AST_FSTRING,         /* f"Hello {name}" */
 
     /* Variable */
     AST_IDENT,
     AST_ASSIGN,          /* name = expr  */
     AST_AUGMENTED_ASSIGN,/* name op= expr */
+    AST_LET_DECL,        /* let/const name: type = expr */
 
     /* Expressions */
     AST_BINARY,
@@ -35,6 +37,9 @@ typedef enum {
     AST_ATTR,            /* a.b    */
     AST_LIST,
     AST_DICT,
+    AST_LAMBDA,          /* |params| => expr */
+    AST_PIPELINE,        /* expr |> expr     */
+    AST_SPAWN,           /* spawn expr       */
 
     /* Control */
     AST_IF,
@@ -45,10 +50,13 @@ typedef enum {
     AST_PASS,
     AST_RETURN,
     AST_YIELD,
+    AST_MATCH,           /* match expr: cases */
 
-    /* Functions / classes */
+    /* Functions / classes / structs / enums */
     AST_FUNC_DEF,
     AST_CLASS_DEF,
+    AST_STRUCT_DEF,      /* struct Name: fields  (compiled as class) */
+    AST_ENUM_DEF,        /* enum Name: members   (compiled as dict)  */
 
     /* Async */
     AST_ASYNC_FUNC_DEF,
@@ -133,6 +141,9 @@ struct AstNode {
         /* AST_AUGMENTED_ASSIGN */
         struct { AstNode *target; AstNode *value; TokenKind op; } aug_assign;
 
+        /* AST_LET_DECL */
+        struct { char *name; AstNode *value; bool is_const; } let_decl;
+
         /* AST_BINARY */
         struct { AstNode *left; AstNode *right; TokenKind op; } binary;
 
@@ -154,6 +165,15 @@ struct AstNode {
         /* AST_DICT */
         struct { AstList keys; AstList values; } dict;
 
+        /* AST_FSTRING */
+        struct { AstList parts; } fstring;
+
+        /* AST_LAMBDA */
+        struct { AstParamList params; AstNode *body; bool is_expr_body; } lambda;
+
+        /* AST_PIPELINE: left |> right */
+        struct { AstNode *left; AstNode *right; } pipeline;
+
         /* AST_IF */
         struct {
             AstNode *condition;
@@ -169,8 +189,16 @@ struct AstNode {
         /* AST_FOR */
         struct { char *var; AstNode *iterable; AstNode *body; } for_stmt;
 
-        /* AST_RETURN / AST_YIELD / AST_AWAIT */
+        /* AST_RETURN / AST_YIELD / AST_AWAIT / AST_SPAWN */
         struct { AstNode *value; /* NULL if bare return */ } ret;
+
+        /* AST_MATCH */
+        struct {
+            AstNode *subject;
+            AstList  patterns;      /* list of pattern expressions */
+            AstList  bodies;        /* list of body blocks (parallel to patterns) */
+            AstNode *wildcard_body; /* _ case; NULL if absent */
+        } match_stmt;
 
         /* AST_FUNC_DEF / AST_ASYNC_FUNC_DEF */
         struct {
@@ -180,12 +208,18 @@ struct AstNode {
             bool         is_async;
         } func_def;
 
-        /* AST_CLASS_DEF */
+        /* AST_CLASS_DEF / AST_STRUCT_DEF (same layout) */
         struct {
             char    *name;
             char    *superclass; /* NULL if no base */
             AstNode *body;
         } class_def;
+
+        /* AST_ENUM_DEF */
+        struct {
+            char   *name;
+            AstList members; /* list of AST_IDENT nodes (member names) */
+        } enum_def;
 
         /* AST_IMPORT */
         struct { char *module; char *alias; /* NULL if none */ } import;

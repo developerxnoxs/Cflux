@@ -7,6 +7,10 @@
  *  - Line continuation inside matched brackets
  *  - Single-line (#) comments
  *  - String escapes
+ *  - f-strings: f"..." / f'...'
+ *  - Pipeline operator |>
+ *  - Fat arrow =>
+ *  - Question mark ?
  */
 #include "flux/lexer.h"
 #include <stdio.h>
@@ -142,6 +146,12 @@ static const Keyword keywords[] = {
     {"true",     TOK_TRUE},
     {"false",    TOK_FALSE},
     {"null",     TOK_NULL},
+    {"let",      TOK_LET},
+    {"const",    TOK_CONST},
+    {"match",    TOK_MATCH},
+    {"struct",   TOK_STRUCT},
+    {"enum",     TOK_ENUM},
+    {"spawn",    TOK_SPAWN},
     {NULL, 0},
 };
 
@@ -168,6 +178,34 @@ static Token scan_string(Lexer *lex) {
     if (is_at_end(lex)) return error_token(lex, "Unterminated string literal");
     advance(lex); /* closing quote */
     return make_token(lex, TOK_STRING);
+}
+
+/* Scan f-string: called after consuming the opening f" or f' */
+static Token scan_fstring(Lexer *lex) {
+    char quote = lex->current[-1]; /* ' or " */
+    int depth = 0; /* brace nesting depth */
+    while (!is_at_end(lex)) {
+        char c = peek(lex);
+        if (c == '\\') {
+            advance(lex); /* skip escape */
+            if (!is_at_end(lex)) advance(lex);
+            continue;
+        }
+        if (c == '{') { depth++; advance(lex); continue; }
+        if (c == '}') {
+            if (depth > 0) { depth--; advance(lex); continue; }
+            /* Unmatched } outside expression – treat as literal */
+            advance(lex);
+            continue;
+        }
+        if (c == quote && depth == 0) {
+            advance(lex); /* closing quote */
+            return make_token(lex, TOK_FSTRING);
+        }
+        if (c == '\n') lex->line++;
+        advance(lex);
+    }
+    return error_token(lex, "Unterminated f-string literal");
 }
 
 static Token scan_number(Lexer *lex) {
@@ -206,6 +244,14 @@ static Token scan_raw_token(Lexer *lex) {
             advance(lex);
         int len = (int)(lex->current - lex->start);
         TokenKind kind = ident_or_keyword(lex->start, len);
+
+        /* f-string: identifier is exactly "f" followed by a quote */
+        if (len == 1 && lex->start[0] == 'f' && kind == TOK_IDENT &&
+            (peek(lex) == '"' || peek(lex) == '\'')) {
+            advance(lex); /* consume opening quote */
+            return scan_fstring(lex);
+        }
+
         return make_token(lex, kind);
     }
 
@@ -234,6 +280,7 @@ static Token scan_raw_token(Lexer *lex) {
         case ',': return make_token(lex, TOK_COMMA);
         case ';': return make_token(lex, TOK_SEMICOLON);
         case ':': return make_token(lex, TOK_COLON);
+        case '?': return make_token(lex, TOK_QUESTION);
         case '.':
             if (peek(lex) == '.') { advance(lex); return make_token(lex, TOK_ELLIPSIS); }
             return make_token(lex, TOK_DOT);
@@ -256,7 +303,9 @@ static Token scan_raw_token(Lexer *lex) {
             if (match(lex, '=')) return make_token(lex, TOK_PERCENT_ASSIGN);
             return make_token(lex, TOK_PERCENT);
         case '&': return make_token(lex, TOK_AMPERSAND);
-        case '|': return make_token(lex, TOK_PIPE);
+        case '|':
+            if (match(lex, '>')) return make_token(lex, TOK_PIPE_ARROW);
+            return make_token(lex, TOK_PIPE);
         case '^': return make_token(lex, TOK_CARET);
         case '~': return make_token(lex, TOK_TILDE);
         case '<':
@@ -268,6 +317,7 @@ static Token scan_raw_token(Lexer *lex) {
             if (match(lex, '=')) return make_token(lex, TOK_GTE);
             return make_token(lex, TOK_GT);
         case '=':
+            if (match(lex, '>')) return make_token(lex, TOK_FAT_ARROW);
             if (match(lex, '=')) return make_token(lex, TOK_EQ);
             return make_token(lex, TOK_ASSIGN);
         case '!':
@@ -416,69 +466,79 @@ Token lexer_peek(Lexer *lex) {
 
 const char *token_kind_name(TokenKind kind) {
     switch (kind) {
-        case TOK_INT:       return "INT";
-        case TOK_FLOAT:     return "FLOAT";
-        case TOK_STRING:    return "STRING";
-        case TOK_TRUE:      return "TRUE";
-        case TOK_FALSE:     return "FALSE";
-        case TOK_NULL:      return "NULL";
-        case TOK_IDENT:     return "IDENT";
-        case TOK_FUNC:      return "func";
-        case TOK_ASYNC:     return "async";
-        case TOK_AWAIT:     return "await";
-        case TOK_YIELD:     return "yield";
-        case TOK_RETURN:    return "return";
-        case TOK_IF:        return "if";
-        case TOK_ELIF:      return "elif";
-        case TOK_ELSE:      return "else";
-        case TOK_WHILE:     return "while";
-        case TOK_FOR:       return "for";
-        case TOK_IN:        return "in";
-        case TOK_BREAK:     return "break";
-        case TOK_CONTINUE:  return "continue";
-        case TOK_PASS:      return "pass";
-        case TOK_CLASS:     return "class";
-        case TOK_SELF:      return "self";
-        case TOK_SUPER:     return "super";
-        case TOK_IMPORT:    return "import";
-        case TOK_FROM:      return "from";
-        case TOK_AS:        return "as";
-        case TOK_AND:       return "and";
-        case TOK_OR:        return "or";
-        case TOK_NOT:       return "not";
-        case TOK_IS:        return "is";
-        case TOK_PLUS:      return "+";
-        case TOK_MINUS:     return "-";
-        case TOK_STAR:      return "*";
+        case TOK_INT:        return "INT";
+        case TOK_FLOAT:      return "FLOAT";
+        case TOK_STRING:     return "STRING";
+        case TOK_FSTRING:    return "FSTRING";
+        case TOK_TRUE:       return "TRUE";
+        case TOK_FALSE:      return "FALSE";
+        case TOK_NULL:       return "NULL";
+        case TOK_IDENT:      return "IDENT";
+        case TOK_FUNC:       return "func";
+        case TOK_ASYNC:      return "async";
+        case TOK_AWAIT:      return "await";
+        case TOK_YIELD:      return "yield";
+        case TOK_RETURN:     return "return";
+        case TOK_IF:         return "if";
+        case TOK_ELIF:       return "elif";
+        case TOK_ELSE:       return "else";
+        case TOK_WHILE:      return "while";
+        case TOK_FOR:        return "for";
+        case TOK_IN:         return "in";
+        case TOK_BREAK:      return "break";
+        case TOK_CONTINUE:   return "continue";
+        case TOK_PASS:       return "pass";
+        case TOK_CLASS:      return "class";
+        case TOK_SELF:       return "self";
+        case TOK_SUPER:      return "super";
+        case TOK_IMPORT:     return "import";
+        case TOK_FROM:       return "from";
+        case TOK_AS:         return "as";
+        case TOK_AND:        return "and";
+        case TOK_OR:         return "or";
+        case TOK_NOT:        return "not";
+        case TOK_IS:         return "is";
+        case TOK_LET:        return "let";
+        case TOK_CONST:      return "const";
+        case TOK_MATCH:      return "match";
+        case TOK_STRUCT:     return "struct";
+        case TOK_ENUM:       return "enum";
+        case TOK_SPAWN:      return "spawn";
+        case TOK_PLUS:       return "+";
+        case TOK_MINUS:      return "-";
+        case TOK_STAR:       return "*";
         case TOK_SLASH:       return "/";
         case TOK_SLASH_SLASH: return "//";
-        case TOK_PERCENT:   return "%";
-        case TOK_STAR_STAR: return "**";
-        case TOK_ASSIGN:    return "=";
-        case TOK_EQ:        return "==";
-        case TOK_NEQ:       return "!=";
-        case TOK_LT:        return "<";
-        case TOK_LTE:       return "<=";
-        case TOK_GT:        return ">";
-        case TOK_GTE:       return ">=";
-        case TOK_LPAREN:    return "(";
-        case TOK_RPAREN:    return ")";
-        case TOK_LBRACKET:  return "[";
-        case TOK_RBRACKET:  return "]";
-        case TOK_LBRACE:    return "{";
-        case TOK_RBRACE:    return "}";
-        case TOK_COMMA:     return ",";
-        case TOK_DOT:       return ".";
-        case TOK_COLON:     return ":";
-        case TOK_NEWLINE:   return "NEWLINE";
-        case TOK_INDENT:    return "INDENT";
-        case TOK_DEDENT:    return "DEDENT";
-        case TOK_EOF:       return "EOF";
-        case TOK_ERROR:     return "ERROR";
-        default:            return "?";
+        case TOK_PERCENT:    return "%";
+        case TOK_STAR_STAR:  return "**";
+        case TOK_PIPE_ARROW: return "|>";
+        case TOK_FAT_ARROW:  return "=>";
+        case TOK_QUESTION:   return "?";
+        case TOK_ASSIGN:     return "=";
+        case TOK_EQ:         return "==";
+        case TOK_NEQ:        return "!=";
+        case TOK_LT:         return "<";
+        case TOK_LTE:        return "<=";
+        case TOK_GT:         return ">";
+        case TOK_GTE:        return ">=";
+        case TOK_LPAREN:     return "(";
+        case TOK_RPAREN:     return ")";
+        case TOK_LBRACKET:   return "[";
+        case TOK_RBRACKET:   return "]";
+        case TOK_LBRACE:     return "{";
+        case TOK_RBRACE:     return "}";
+        case TOK_COMMA:      return ",";
+        case TOK_DOT:        return ".";
+        case TOK_COLON:      return ":";
+        case TOK_NEWLINE:    return "NEWLINE";
+        case TOK_INDENT:     return "INDENT";
+        case TOK_DEDENT:     return "DEDENT";
+        case TOK_EOF:        return "EOF";
+        case TOK_ERROR:      return "ERROR";
+        default:             return "?";
     }
 }
 
 bool token_is_keyword(TokenKind kind) {
-    return kind >= TOK_FUNC && kind <= TOK_IS;
+    return kind >= TOK_FUNC && kind <= TOK_SPAWN;
 }

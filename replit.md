@@ -54,10 +54,48 @@ flux/
 
 ## Language Features
 
+### Core (original)
 - Python-like syntax with `func`/`class`/`if`/`while`/`for`
 - Bytecode VM (stack-based, switch-dispatch)
 - Mark-and-sweep garbage collector
 - Closures and upvalues
+
+### New in Flux 2.0
+| Feature | Syntax | Notes |
+|---------|--------|-------|
+| Variable declarations | `let name = expr` / `const name = expr` | Type annotation `let name: Type = expr` is accepted and ignored |
+| F-strings | `` f"Hello {expr}!" `` | Arbitrary expressions inside `{}`, auto-converted to string |
+| Match statement | `match val:` / `200:` / `_:` | Pattern equality; `_` is wildcard; compiled as if-elif chain |
+| Lambda | `\|x\| => x * 2` or `\|a, b\| => a + b` | Arrow body is an expression; full block body also supported |
+| Pipeline operator | `val \|> func` or `val \|> func(extra_args)` | Prepends left as first argument to right |
+| Struct | `struct Point:` / `    let x: float` | Auto-generates `init` from `let` fields; `Point(1.0, 2.0)` |
+| Enum | `enum Color:` / `    Red` / `    Green` | Compiled as dict `{"Red":0,"Green":1,...}`; access via `Color.Red` |
+| Spawn | `spawn coroutine()` | Creates a task/coroutine; works with existing `async`/`await` |
+
+### CLI subcommands
+```bash
+flux run <file.flx>      # execute
+flux build <file.flx>    # compile (currently runs)
+flux test <file.flx>     # run and report pass/fail
+flux fmt <file.flx>      # format (stub)
+flux lint <file.flx>     # lint (stub)
+flux doc <file.flx>      # docs (stub)
+flux repl                # interactive REPL
+flux package <cmd>       # package manager (stub)
+flux <file.flx>          # shorthand for run
+flux -e "<code>"         # evaluate inline
+flux --version
+```
+
+### Type annotation syntax (parsed, not enforced)
+```flux
+let name: string = "Alice"
+func greet(name: string) -> string:
+    return f"Hello, {name}!"
+```
+
+### See also
+- `examples/new_syntax.flx` — comprehensive showcase of all Flux 2.0 features
 - Class and single inheritance
 - Async/await coroutines
 - Standard library: `io`, `fs`, `math`, `time`, `string`

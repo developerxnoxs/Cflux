@@ -17,6 +17,7 @@ typedef enum {
     TOK_INT,        /* 42         */
     TOK_FLOAT,      /* 3.14       */
     TOK_STRING,     /* "hello"    */
+    TOK_FSTRING,    /* f"hello {name}" */
     TOK_TRUE,       /* true       */
     TOK_FALSE,      /* false      */
     TOK_NULL,       /* null       */
@@ -47,6 +48,12 @@ typedef enum {
     TOK_OR,
     TOK_NOT,
     TOK_IS,
+    TOK_LET,        /* let    */
+    TOK_CONST,      /* const  */
+    TOK_MATCH,      /* match  */
+    TOK_STRUCT,     /* struct */
+    TOK_ENUM,       /* enum   */
+    TOK_SPAWN,      /* spawn  */
 
     /* Operators */
     TOK_PLUS,       /* +  */
@@ -62,6 +69,9 @@ typedef enum {
     TOK_TILDE,      /* ~  */
     TOK_LSHIFT,     /* << */
     TOK_RSHIFT,     /* >> */
+    TOK_PIPE_ARROW, /* |> */
+    TOK_FAT_ARROW,  /* => */
+    TOK_QUESTION,   /* ?  */
 
     /* Assignment */
     TOK_ASSIGN,         /* =  */

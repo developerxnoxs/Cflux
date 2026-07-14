@@ -30,9 +30,10 @@ Dokumen ini adalah panduan pemakaian bahasa Flux — dari instalasi/build sampai
 10. [Async / Await / Coroutine](#10-async--await--coroutine)
 11. [Sistem Import Modul](#11-sistem-import-modul)
 12. [Standard Library](#12-standard-library)
-13. [Embed libflux ke Program C](#13-embed-libflux-ke-program-c)
-14. [Struktur Proyek](#14-struktur-proyek)
-15. [Arsitektur Internal](#15-arsitektur-internal)
+13. [Ekstensi Native (.so Plugin)](#13-ekstensi-native-so-plugin)
+14. [Embed libflux ke Program C](#14-embed-libflux-ke-program-c)
+15. [Struktur Proyek](#15-struktur-proyek)
+16. [Arsitektur Internal](#16-arsitektur-internal)
 
 ---
 
@@ -433,7 +434,76 @@ baris = io.read_line()
 
 ---
 
-## 13. Embed libflux ke Program C
+## 13. Ekstensi Native (.so Plugin)
+
+Selain modul `.flx`, Flux juga bisa memuat **ekstensi native** — shared library (`.so`) yang membungkus library C (misalnya `libpq`) sebagai modul yang bisa di-`import`. Ini dipakai saat sebuah kapabilitas butuh library C asli (driver database, dll.) yang tidak bisa/tidak praktis ditulis ulang di Flux.
+
+**Cara kerja resolusi `import`:**
+1. `import nama` pertama tetap mencari `nama.flx` seperti biasa (lihat [Bab 11](#11-sistem-import-modul)).
+2. Jika `nama.flx` tidak ditemukan, VM mencari ekstensi native di `extension/nama/libnama.so` (relatif terhadap folder file yang meng-import, lalu working directory proses).
+3. Jika file `.so` ditemukan, VM memuatnya (`dlopen`) dan memanggil satu fungsi entry point wajib bernama `flux_extension_init`. Hasilnya (dict modul) di-cache seperti modul stdlib biasa — jadi `import` berikutnya untuk nama yang sama tidak perlu memuat ulang.
+
+**Build:** ekstensi native **tidak** ikut dibangun oleh `make`/`make all` karena butuh library sistem eksternal yang belum pasti terpasang. Build secara terpisah:
+
+```bash
+make extensions                    # build semua folder di extension/
+make -C extension/postgresql       # atau build satu ekstensi saja
+```
+
+### Contoh: ekstensi `postgresql`
+
+Proyek ini menyertakan ekstensi `postgresql` (`extension/postgresql/`) yang membungkus `libpq` — client C resmi PostgreSQL (paket Nix `postgresql` + `libpq`, sudah terpasang di environment ini).
+
+```flux
+import os
+import postgresql
+
+conn = postgresql.connect(os.getenv("DATABASE_URL"))
+print("connected:", postgresql.status(conn))
+
+postgresql.query(conn, "CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, name TEXT)")
+
+nama_aman = postgresql.escape_literal(conn, "O'Brien")
+postgresql.query(conn, f"INSERT INTO users (name) VALUES ({nama_aman})")
+
+rows = postgresql.query(conn, "SELECT id, name FROM users ORDER BY id")
+for row in rows:
+    print(row["id"], row["name"])
+
+postgresql.close(conn)
+```
+
+Fungsi yang tersedia di modul `postgresql`:
+
+| Fungsi | Deskripsi |
+|---|---|
+| `postgresql.connect(conninfo)` | Membuka koneksi. `conninfo` adalah connection string libpq (mis. `postgresql://user:pass@host:port/db`). Runtime error jika gagal konek. |
+| `postgresql.query(conn, sql)` / `postgresql.exec(conn, sql)` | Menjalankan SQL. Untuk `SELECT` mengembalikan **list of dict** (nama kolom → nilai string, `NULL` → `null`). Untuk `INSERT`/`UPDATE`/`DELETE` mengembalikan **jumlah baris terdampak** (int). Runtime error jika SQL salah. |
+| `postgresql.escape_literal(conn, str)` | Mengubah string jadi literal SQL yang aman (quote otomatis) — dipakai untuk menyusun query tanpa risiko SQL injection dari string concat manual. |
+| `postgresql.status(conn)` | `true` jika koneksi masih hidup. |
+| `postgresql.close(conn)` | Menutup koneksi. Aman dipanggil lebih dari sekali. |
+
+Contoh lengkap: [`examples/postgresql_extension.flx`](examples/postgresql_extension.flx).
+
+> **Catatan implementasi:** handle koneksi direpresentasikan sebagai dict bertanda `{"__flux_ext__": "pg_connection", "__ptr__": <alamat>}` — jangan membaca/menulis kedua key tersebut secara manual.
+
+### Menulis ekstensi native sendiri
+
+Sebuah ekstensi wajib:
+1. `#include "flux/extension.h"` (otomatis membawa `flux/vm.h`, `flux/object.h`, `flux/value.h`).
+2. Mengekspor fungsi C bernama tepat `flux_extension_init`:
+   ```c
+   bool flux_extension_init(FluxVM *vm, Value *out_module);
+   ```
+   Bangun dict modul lewat `object_dict_new` + `object_native_new` + `dict_set` (persis seperti pola modul stdlib bawaan Flux), `vm_push`/`vm_pop` dict tersebut selama proses pengisian untuk melindunginya dari garbage collector, lalu set `*out_module`. Return `true` jika sukses; jika gagal, panggil `vm_runtime_error(vm, "...")` lalu return `false`.
+3. Dikompilasi terhadap header Flux yang sama persis dengan interpreter yang memuatnya (ABI ini bersifat in-tree, bukan ABI stabil lintas versi).
+4. Menghasilkan file `extension/<nama>/lib<nama>.so` — lihat `extension/postgresql/Makefile` sebagai contoh konvensi build (termasuk flag `-fPIC -shared`).
+
+Detail lengkap ABI plugin ada di komentar `include/flux/extension.h`.
+
+---
+
+## 14. Embed libflux ke Program C
 
 ```c
 #include <flux/flux.h>
@@ -459,7 +529,7 @@ gcc myapp.c -Iinclude -Lbuild_make -lflux -lm -o myapp
 
 ---
 
-## 14. Struktur Proyek
+## 15. Struktur Proyek
 
 ```
 .
@@ -481,13 +551,14 @@ gcc myapp.c -Iinclude -Lbuild_make -lflux -lm -o myapp
 │   ├── util/util.c          Wrapper memory
 │   └── main.c               Entry point CLI
 ├── examples/                Contoh program Flux (termasuk examples/modules/)
+├── extension/               Ekstensi native (.so), mis. extension/postgresql/
 ├── tests/                   Unit test C
 └── build_make/              Hasil build (flux, libflux.a)
 ```
 
 ---
 
-## 15. Arsitektur Internal
+## 16. Arsitektur Internal
 
 ```
 Source Code (.flx)

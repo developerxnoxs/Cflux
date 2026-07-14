@@ -69,9 +69,10 @@ typedef enum {
     TOK_TILDE,      /* ~  */
     TOK_LSHIFT,     /* << */
     TOK_RSHIFT,     /* >> */
-    TOK_PIPE_ARROW, /* |> */
-    TOK_FAT_ARROW,  /* => */
-    TOK_QUESTION,   /* ?  */
+    TOK_PIPE_ARROW, /* |>  */
+    TOK_FAT_ARROW,  /* =>  */
+    TOK_AT_ARROW,   /* @>  (decorator) */
+    TOK_QUESTION,   /* ?   */
 
     /* Assignment */
     TOK_ASSIGN,         /* =  */

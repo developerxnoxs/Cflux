@@ -206,6 +206,7 @@ struct AstNode {
             AstParamList params;
             AstNode     *body;
             bool         is_async;
+            AstList      decorators; /* @> exprs, in source order (top → bottom) */
         } func_def;
 
         /* AST_CLASS_DEF / AST_STRUCT_DEF (same layout) */

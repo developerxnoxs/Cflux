@@ -785,6 +785,7 @@ static AstNode *parse_func_def(Parser *p, bool is_async) {
     n->as.func_def.params   = params;
     n->as.func_def.body     = body;
     n->as.func_def.is_async = is_async;
+    ast_list_init(&n->as.func_def.decorators); /* filled by parse_stmt if @> present */
     return n;
 }
 
@@ -1118,6 +1119,29 @@ static AstNode *parse_stmt(Parser *p) {
     skip_newlines(p);
     int line = p->current.line, col = p->current.column;
 
+    /* Decorator: @> expr \n  (one or more, then func / async func) */
+    if (check(p, TOK_AT_ARROW)) {
+        AstList decorators;
+        ast_list_init(&decorators);
+        while (match(p, TOK_AT_ARROW)) {
+            AstNode *dec = parse_expr(p);
+            ast_list_push(&decorators, dec);
+            match(p, TOK_NEWLINE);
+            skip_newlines(p);
+        }
+        bool is_async = false;
+        if (match(p, TOK_ASYNC)) {
+            is_async = true;
+            consume(p, TOK_FUNC, "Expected 'func' after 'async' in decorated definition");
+        } else if (!match(p, TOK_FUNC)) {
+            parser_error(p, "Expected 'func' or 'async func' after '@>' decorator");
+            return NULL;
+        }
+        AstNode *n = parse_func_def(p, is_async);
+        n->as.func_def.decorators = decorators;
+        match(p, TOK_NEWLINE);
+        return n;
+    }
     if (match(p, TOK_FUNC)) {
         AstNode *n = parse_func_def(p, false);
         match(p, TOK_NEWLINE);

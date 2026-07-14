@@ -630,7 +630,175 @@ func gen_numbers(n):
 
 ---
 
-## 15. Modul dan Import
+## 15. Decorator
+
+Decorator membungkus fungsi dengan fungsi lain secara deklaratif. Di Flux, simbol decorator adalah `@>` (at-arrow), berbeda dari Python yang memakai `@`.
+
+### Sintaks Dasar
+
+```flux
+@>nama_decorator
+func fungsi():
+    ...
+```
+
+`@>nama_decorator` tepat sebelum `func` setara dengan:
+
+```flux
+func fungsi(): ...
+fungsi = nama_decorator(fungsi)
+```
+
+### Decorator dengan Argumen
+
+Jika decorator membutuhkan argumen, tulis seperti pemanggilan fungsi biasa:
+
+```flux
+@>retry(3)
+func fetch_data():
+    ...
+# setara dengan: fetch_data = retry(3)(fetch_data)
+```
+
+### Decorator Bertumpuk (Stacked)
+
+Beberapa decorator ditulis satu per baris. Decorator paling dekat dengan `func` diterapkan pertama (paling dalam):
+
+```flux
+@>logged        # diterapkan paling luar (kedua)
+@>retry(3)      # diterapkan paling dalam (pertama)
+func fetch():
+    ...
+# setara dengan: fetch = logged(retry(3)(fetch))
+```
+
+### Decorator pada async func
+
+```flux
+@>timer
+async func load():
+    ...
+```
+
+### Contoh Lengkap
+
+```flux
+# ─── Decorator sederhana ──────────────────────────────────────────────────────
+func logged(fn):
+    func wrapper():
+        print("[log] mulai")
+        result = fn()
+        print("[log] selesai")
+        return result
+    return wrapper
+
+@>logged
+func hello():
+    print("Hello!")
+    return 42
+
+r = hello()
+# [log] mulai
+# Hello!
+# [log] selesai
+# r = 42
+
+
+# ─── Decorator pabrik (menerima argumen) ──────────────────────────────────────
+func repeat(n):
+    func decorator(fn):
+        func wrapper():
+            i = 0
+            while i < n:
+                fn()
+                i += 1
+        return wrapper
+    return decorator
+
+@>repeat(3)
+func beep():
+    print("beep!")
+
+beep()   # beep! beep! beep!
+
+
+# ─── Decorator bertumpuk ──────────────────────────────────────────────────────
+func uppercase_result(fn):
+    func wrapper(x):
+        return "<<" + fn(x) + ">>"
+    return wrapper
+
+func add_greeting(fn):
+    func wrapper(x):
+        return "Halo, " + fn(x)
+    return wrapper
+
+@>uppercase_result
+@>add_greeting
+func nama(s):
+    return s
+
+print(nama("Flux"))   # <<Halo, Flux>>
+
+
+# ─── Decorator validator ──────────────────────────────────────────────────────
+func positive_only(fn):
+    func wrapper(x):
+        if x < 0:
+            print("Error: nilai harus positif")
+            return null
+        return fn(x)
+    return wrapper
+
+@>positive_only
+func sqrt_approx(x):
+    g = x / 2.0
+    i = 0
+    while i < 10:
+        g = (g + x / g) / 2.0
+        i += 1
+    return g
+
+print(sqrt_approx(16))   # ~4.0
+print(sqrt_approx(-4))   # Error: nilai harus positif
+
+
+# ─── Decorator pengubah return value ─────────────────────────────────────────
+func stringify(fn):
+    func wrapper(a, b):
+        return "result=" + str(fn(a, b))
+    return wrapper
+
+@>stringify
+func add(a, b):
+    return a + b
+
+print(add(3, 4))   # result=7
+```
+
+### Cara Kerja Internal
+
+```flux
+@>A
+@>B
+@>C
+func f(): ...
+```
+
+Dikompilasi menjadi (urutan aplikasi bawah ke atas):
+
+```flux
+func f(): ...
+f = C(f)   # paling dekat dengan func → diterapkan pertama
+f = B(f)
+f = A(f)   # paling jauh dari func → diterapkan terakhir
+```
+
+Decorator hanyalah fungsi yang menerima fungsi dan mengembalikan fungsi. Tidak ada magic — hanya closure biasa.
+
+---
+
+## 16. Modul dan Import
 
 Lihat [Module System](modules.md) untuk dokumentasi lengkap.
 

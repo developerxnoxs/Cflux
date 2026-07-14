@@ -1,0 +1,125 @@
+# Test fitur decorator @> di Flux
+
+# ─── Decorator sederhana ──────────────────────────────────────────────────────
+func logged(fn):
+    func wrapper():
+        print("[log] calling function")
+        result = fn()
+        print("[log] done")
+        return result
+    return wrapper
+
+@>logged
+func hello():
+    print("Hello, World!")
+    return 42
+
+r = hello()
+print("returned:", r)
+print("")
+
+# ─── Decorator dengan argumen ─────────────────────────────────────────────────
+func repeat(n):
+    func decorator(fn):
+        func wrapper():
+            i = 0
+            while i < n:
+                fn()
+                i += 1
+        return wrapper
+    return decorator
+
+@>repeat(3)
+func beep():
+    print("beep!")
+
+beep()
+print("")
+
+# ─── Decorator bertumpuk (stacked) ───────────────────────────────────────────
+# logged_fn diterapkan lebih luar, repeat(2) lebih dalam
+# Setara: ping = logged_fn(repeat(2)(ping_orig))
+func logged_fn(fn):
+    func wrapper():
+        print("[log] start")
+        fn()
+        print("[log] end")
+    return wrapper
+
+@>logged_fn
+@>repeat(2)
+func ping():
+    print("ping!")
+
+ping()
+print("")
+
+# ─── Decorator pada fungsi dengan argumen ────────────────────────────────────
+func wrap_result(fn):
+    func wrapper(x):
+        result = fn(x)
+        return "<<" + result + ">>"
+    return wrapper
+
+@>wrap_result
+func greet(name):
+    return "Hello, " + name
+
+print(greet("Flux"))
+print("")
+
+# ─── Decorator sebagai validator ─────────────────────────────────────────────
+func positive_only(fn):
+    func wrapper(x):
+        if x < 0:
+            print("Error: argumen harus positif, dapat " + str(x))
+            return null
+        return fn(x)
+    return wrapper
+
+@>positive_only
+func sqrt_approx(x):
+    g = x / 2.0
+    i = 0
+    while i < 10:
+        g = (g + x / g) / 2.0
+        i += 1
+    return g
+
+print(sqrt_approx(16))
+print(sqrt_approx(-1))
+print("")
+
+# ─── Decorator pada fungsi rekursif dengan cache manual ──────────────────────
+func call_counter(fn):
+    count = 0
+    func wrapper(n):
+        count = count + 1
+        return fn(n)
+    return wrapper
+
+@>call_counter
+func factorial(n):
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+
+print("factorial(5):", factorial(5))
+print("factorial(10):", factorial(10))
+print("")
+
+# ─── Decorator mengubah return value ─────────────────────────────────────────
+func stringify(fn):
+    func wrapper(a, b):
+        result = fn(a, b)
+        return "result=" + str(result)
+    return wrapper
+
+@>stringify
+func add(a, b):
+    return a + b
+
+print(add(3, 4))
+print("")
+
+print("OK semua decorator test selesai")

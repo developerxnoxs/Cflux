@@ -320,6 +320,9 @@ static Token scan_raw_token(Lexer *lex) {
             if (match(lex, '>')) return make_token(lex, TOK_FAT_ARROW);
             if (match(lex, '=')) return make_token(lex, TOK_EQ);
             return make_token(lex, TOK_ASSIGN);
+        case '@':
+            if (match(lex, '>')) return make_token(lex, TOK_AT_ARROW);
+            return error_token(lex, "Expected '>' after '@' (decorator syntax is '@>')");
         case '!':
             if (match(lex, '=')) return make_token(lex, TOK_NEQ);
             return error_token(lex, "Expected '=' after '!'");
@@ -513,6 +516,7 @@ const char *token_kind_name(TokenKind kind) {
         case TOK_STAR_STAR:  return "**";
         case TOK_PIPE_ARROW: return "|>";
         case TOK_FAT_ARROW:  return "=>";
+        case TOK_AT_ARROW:   return "@>";
         case TOK_QUESTION:   return "?";
         case TOK_ASSIGN:     return "=";
         case TOK_EQ:         return "==";

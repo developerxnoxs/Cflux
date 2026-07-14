@@ -549,31 +549,66 @@ static void compile_expr(Compiler *c, AstNode *node) {
 
         case AST_AUGMENTED_ASSIGN: {
             AstNode *target = node->as.aug_assign.target;
-            /* Load current value */
-            if (target->kind == AST_IDENT)
+
+#define EMIT_AUG_OP() \
+    switch (node->as.aug_assign.op) { \
+        case TOK_PLUS_ASSIGN:    emit_byte(c, OP_ADD, line); break; \
+        case TOK_MINUS_ASSIGN:   emit_byte(c, OP_SUB, line); break; \
+        case TOK_STAR_ASSIGN:    emit_byte(c, OP_MUL, line); break; \
+        case TOK_SLASH_ASSIGN:   emit_byte(c, OP_DIV, line); break; \
+        case TOK_PERCENT_ASSIGN: emit_byte(c, OP_MOD, line); break; \
+        default: break; \
+    }
+
+            if (target->kind == AST_IDENT) {
+                /* i op= value
+                 *
+                 * Stack discipline (same as AST_ASSIGN for existing locals):
+                 *   LOAD current value
+                 *   compile RHS
+                 *   OP_xxx
+                 *   STORE_VAR  ← leaves result on stack via peek
+                 *   (EXPR_STMT emits the single OP_POP that consumes the residual)
+                 *
+                 * Do NOT emit an extra OP_POP here — that would double-pop and
+                 * destroy the local slot on the VM stack.
+                 */
                 emit_load_var(c, target->as.ident.name, line);
-            else if (target->kind == AST_ATTR) {
+                compile_expr(c, node->as.aug_assign.value);
+                EMIT_AUG_OP();
+                emit_store_var(c, target->as.ident.name, line);
+                /* leave result on stack; EXPR_STMT pops it */
+
+            } else if (target->kind == AST_ATTR) {
+                /* obj.attr op= value
+                 *
+                 * Stack:
+                 *   [obj]           ← compile object
+                 *   [obj, obj]      ← DUP (need obj twice: once for GET, once for SET)
+                 *   [obj, old_val]  ← GET_ATTR (pops one obj copy, pushes attr value)
+                 *   [obj, old_val, rhs] ← compile RHS
+                 *   [obj, new_val]  ← OP_xxx
+                 *   []              ← SET_ATTR (pops obj + new_val, stores)
+                 *   [null]          ← PUSH_NULL as expression result
+                 *   (EXPR_STMT pops the null)
+                 */
+                const char *attr = target->as.attr.attr;
                 compile_expr(c, target->as.attr.object);
                 emit_byte(c, OP_DUP, line);
-                const char *attr = target->as.attr.attr;
                 emit_byte(c, OP_GET_ATTR, line);
                 emit_uint16(c, identifier_constant(c, attr, (int)strlen(attr), line), line);
+                compile_expr(c, node->as.aug_assign.value);
+                EMIT_AUG_OP();
+                emit_byte(c, OP_SET_ATTR, line);
+                emit_uint16(c, identifier_constant(c, attr, (int)strlen(attr), line), line);
+                emit_byte(c, OP_PUSH_NULL, line);   /* expr result */
+
             } else {
                 compile_error(c, line, "Invalid augmented assignment target");
-                break;
+                emit_byte(c, OP_PUSH_NULL, line);   /* prevent stack underflow */
             }
-            compile_expr(c, node->as.aug_assign.value);
-            switch (node->as.aug_assign.op) {
-                case TOK_PLUS_ASSIGN:    emit_byte(c, OP_ADD, line); break;
-                case TOK_MINUS_ASSIGN:   emit_byte(c, OP_SUB, line); break;
-                case TOK_STAR_ASSIGN:    emit_byte(c, OP_MUL, line); break;
-                case TOK_SLASH_ASSIGN:   emit_byte(c, OP_DIV, line); break;
-                case TOK_PERCENT_ASSIGN: emit_byte(c, OP_MOD, line); break;
-                default: break;
-            }
-            if (target->kind == AST_IDENT)
-                emit_store_var(c, target->as.ident.name, line);
-            emit_byte(c, OP_POP, line);
+
+#undef EMIT_AUG_OP
             break;
         }
 
@@ -1154,6 +1189,26 @@ static void compile_node(Compiler *c, AstNode *node) {
                 compiler_declare_global(c, name);
             } else {
                 add_local(c, name, line);
+            }
+
+            /* Apply decorators bottom-up (reverse source order).
+             * Each iteration:
+             *   1. compile decorator expr   → pushes callable onto stack
+             *   2. load current func value  → pushes it as argument
+             *   3. OP_CALL 1                → calls decorator(func), result on stack
+             *   4. store result back        → re-binds the name (STORE_GLOBAL/LOCAL)
+             *   5. OP_POP                   → emit_store_var leaves value on stack
+             */
+            {
+                AstList *decs = &node->as.func_def.decorators;
+                for (int i = decs->count - 1; i >= 0; i--) {
+                    compile_expr(c, decs->data[i]);  /* push decorator */
+                    emit_load_var(c, name, line);     /* push current func value */
+                    emit_byte(c, OP_CALL, line);
+                    emit_byte(c, 1, line);            /* decorator(func) */
+                    emit_store_var(c, name, line);    /* rebind name (leaves val on stack) */
+                    emit_byte(c, OP_POP, line);       /* discard */
+                }
             }
             break;
         }

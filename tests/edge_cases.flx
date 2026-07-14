@@ -1,0 +1,7 @@
+# Edge case tests for Flux
+
+# 1. Division by zero
+print("=== Division by zero ===")
+result = 10 / 0
+print(result)
+

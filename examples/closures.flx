@@ -1,0 +1,47 @@
+# Closures dan higher-order functions
+
+func counter(start):
+    count = start
+    func increment(step):
+        count = count + step
+        return count
+    return increment
+
+c1 = counter(0)
+c2 = counter(100)
+
+print(c1(1))   # 1
+print(c1(1))   # 2
+print(c1(5))   # 7
+print(c2(10))  # 110
+print(c2(10))  # 120
+
+# Map / filter simulasi dengan list
+func map_list(lst, fn):
+    result = []
+    for x in lst:
+        result.append(fn(x))
+    return result
+
+func filter_list(lst, fn):
+    result = []
+    for x in lst:
+        if fn(x):
+            result.append(x)
+    return result
+
+func double(x):
+    return x * 2
+
+func is_even(x):
+    return x % 2 == 0
+
+numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+doubled = map_list(numbers, double)
+evens   = filter_list(numbers, is_even)
+
+print("Doubled:")
+print(doubled)
+
+print("Evens:")
+print(evens)

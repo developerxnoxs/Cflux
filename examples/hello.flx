@@ -1,0 +1,14 @@
+# Hello World - program Flux paling sederhana
+print("Hello, World!")
+
+# Variabel
+name = "Flux"
+version = "0.1.0"
+print("Welcome to " + name + " " + version)
+
+# Fungsi
+func greet(who):
+    print("Hello, " + who + "!")
+
+greet("Developer")
+greet("World")

@@ -1,0 +1,46 @@
+# Kelas dan Inheritance - OOP di Flux
+
+class Animal:
+    func init(name, sound):
+        self.name = name
+        self.sound = sound
+
+    func speak():
+        print(self.name + " says " + self.sound)
+
+    func describe():
+        print("I am " + self.name)
+
+class Dog(Animal):
+    func init(name):
+        self.name = name
+        self.sound = "Woof!"
+
+    func fetch():
+        print(self.name + " fetches the ball!")
+
+class Cat(Animal):
+    func init(name):
+        self.name = name
+        self.sound = "Meow!"
+
+    func purr():
+        print(self.name + " purrs...")
+
+# Buat instance
+dog = Dog("Rex")
+cat = Cat("Whiskers")
+
+dog.speak()
+dog.fetch()
+dog.describe()
+
+cat.speak()
+cat.purr()
+cat.describe()
+
+# List of animals
+animals = [dog, cat, Animal("Cow", "Moo")]
+print("All animals:")
+for a in animals:
+    a.speak()

@@ -1,0 +1,62 @@
+# Bug Hunt: Built-in functions
+print("=== BUILT-INS ===")
+
+# len()
+print(len("hello"))     # 5
+print(len([1,2,3]))     # 3
+print(len({"a":1}))     # 1
+print(len(""))          # 0
+print(len([]))          # 0
+
+# range()
+r = range(5)
+print(r)   # [0, 1, 2, 3, 4]?
+
+r2 = range(2, 7)
+print(r2)  # [2, 3, 4, 5, 6]?
+
+r3 = range(0, 10, 2)
+print(r3)  # [0, 2, 4, 6, 8]?
+
+r4 = range(10, 0, -1)
+print(r4)  # [10, 9, 8, 7, 6, 5, 4, 3, 2, 1]?
+
+# range used in for loop
+total = 0
+for x in range(1, 6):
+    total = total + x
+print(total)   # 15
+
+total2 = 0
+for x in range(0, 10, 3):
+    total2 = total2 + x
+print(total2)  # 0+3+6+9 = 18
+
+# assert
+assert(true)
+assert(1 == 1)
+assert("hi" != "bye")
+print("asserts passed")
+
+# str/int/float already tested
+
+# print vs println
+print("print adds newline")   # with newline
+# println("println also newline")  # test if both work
+
+# Multiple args to print?
+# print(1, 2, 3)  # 1 2 3?
+
+# id() - returns object identity
+x = [1,2,3]
+y = x
+z = [1,2,3]
+print(id(x) == id(y))   # true (same object)
+print(id(x) == id(z))   # false (different objects)
+
+# min / max built-in (or math.min/math.max?)
+# If there's a top-level min/max:
+# print(min(3, 7))   # 3
+# print(max(3, 7))   # 7
+
+print("BUILT-INS TESTS DONE")

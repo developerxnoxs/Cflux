@@ -1,0 +1,4 @@
+# Test: Division by zero
+print("=== Division by zero ===")
+result = 10 / 0
+print(result)

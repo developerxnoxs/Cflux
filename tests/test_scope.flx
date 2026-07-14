@@ -1,0 +1,113 @@
+# Flux Scoping Semantics Test
+# ============================
+# Flux scoping rules:
+#   1. Assignment inside a function creates a function-LOCAL variable –
+#      globals with the same name are NOT modified.
+#   2. When a variable is assigned inside a nested block (if/while) within
+#      a function, it is HOISTED to function scope so it remains visible
+#      after the block ends (similar to Python's function-wide locals).
+#   3. If the assigned name resolves as an upvalue from an ENCLOSING
+#      FUNCTION, the assignment MUTATES the upvalue (SET_UPVALUE). This
+#      is how Flux closures work – e.g. counter() patterns. To shadow an
+#      outer variable without mutating it, use a different name.
+
+# -------------------------------------------------------------------
+# Test 1: Global is NOT modified by a function-local assignment
+# -------------------------------------------------------------------
+g = 10
+func test_global_preservation():
+    g = 99   # local g in this function – global g must stay 10
+test_global_preservation()
+assert(g == 10)
+print("PASS 1: global preserved after function assigns same name")
+
+# -------------------------------------------------------------------
+# Test 2: Block-assigned variable is hoisted to function scope
+# -------------------------------------------------------------------
+func test_block_hoist():
+    cond = true
+    if cond:
+        result = 42
+    return result  # result must be visible here, not just inside 'if'
+assert(test_block_hoist() == 42)
+print("PASS 2: block-assigned variable visible after the block")
+
+# -------------------------------------------------------------------
+# Test 3: Closure counter (upvalue mutation is intentional)
+# -------------------------------------------------------------------
+func make_counter():
+    n = 0
+    func inc():
+        n = n + 1   # SET_UPVALUE – mutates make_counter's local n
+        return n
+    return inc
+
+c = make_counter()
+assert(c() == 1)
+assert(c() == 2)
+assert(c() == 3)
+print("PASS 3: closure counter works via upvalue mutation")
+
+# -------------------------------------------------------------------
+# Test 4: Two closures from the same factory are independent
+# -------------------------------------------------------------------
+ca = make_counter()
+cb = make_counter()
+assert(ca() == 1)
+assert(ca() == 2)
+assert(cb() == 1)   # cb has its own copy of n
+print("PASS 4: independent closure state")
+
+# -------------------------------------------------------------------
+# Test 5: Adder closure – pure read of upvalue, no mutation
+# -------------------------------------------------------------------
+func make_adder(x):
+    func adder(y):
+        return x + y   # reads x as upvalue, does not assign x
+    return adder
+
+add5  = make_adder(5)
+add10 = make_adder(10)
+assert(add5(3)  == 8)
+assert(add10(3) == 13)
+print("PASS 5: adder closure reads upvalue correctly")
+
+# -------------------------------------------------------------------
+# Test 6: Variable first-assigned inside a while loop body is visible
+#         after the loop ends (hoisted to function scope).
+# -------------------------------------------------------------------
+func test_while_hoist():
+    i = 0
+    while i < 3:
+        x = i * 10
+        i = i + 1
+    return x   # x was assigned inside the loop; must be visible here
+assert(test_while_hoist() == 20)
+print("PASS 6: while-loop-assigned variable visible after the loop")
+
+# -------------------------------------------------------------------
+# Test 7: Variable first-assigned inside a for loop body is visible
+#         after the loop ends.
+# -------------------------------------------------------------------
+func test_for_hoist():
+    for i in range(5):
+        last = i
+    return last  # last was assigned every iteration; final value = 4
+assert(test_for_hoist() == 4)
+print("PASS 7: for-loop-assigned variable visible after the loop")
+
+# -------------------------------------------------------------------
+# Test 8: Variable assigned only inside the 'if' branch of a for body
+#         is still accessible after the loop (covers nested if+loop).
+# -------------------------------------------------------------------
+func test_loop_if_hoist():
+    total = 0
+    for i in range(4):
+        if i > 1:
+            big = i
+        total = total + i
+    return big   # last iteration where i > 1 was i = 3
+assert(test_loop_if_hoist() == 3)
+print("PASS 8: loop-and-if-nested variable visible after the loops")
+
+print("All scoping tests passed.")

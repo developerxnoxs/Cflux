@@ -1,0 +1,125 @@
+# Bug Hunt: Classes and inheritance
+print("=== CLASSES ===")
+
+# Basic class
+class Point:
+    func init(x, y):
+        self.x = x
+        self.y = y
+
+    func distance_origin():
+        return math.sqrt(self.x * self.x + self.y * self.y)
+
+    func to_string():
+        return "(" + str(self.x) + ", " + str(self.y) + ")"
+
+p = Point(3, 4)
+print(p.x)              # 3
+print(p.y)              # 4
+print(p.to_string())    # (3, 4)
+print(p.distance_origin())  # 5.0
+
+# Inheritance
+class Shape:
+    func init(color):
+        self.color = color
+
+    func describe():
+        return "Shape: " + self.color
+
+class Circle(Shape):
+    func init(color, radius):
+        self.color = color
+        self.radius = radius
+
+    func area():
+        return math.pi * self.radius * self.radius
+
+    func describe():
+        return "Circle: " + self.color + ", r=" + str(self.radius)
+
+c = Circle("red", 5)
+print(c.color)       # red
+print(c.radius)      # 5
+print(c.describe())  # Circle: red, r=5
+print(c.area())      # ~78.54
+
+# Inherited method (not overridden in child)
+class Rectangle(Shape):
+    func init(color, w, h):
+        self.color = color
+        self.width = w
+        self.height = h
+
+    func area():
+        return self.width * self.height
+
+r = Rectangle("blue", 4, 6)
+print(r.describe())  # Shape: blue  (inherited from Shape)
+print(r.area())      # 24
+
+# Multiple levels of inheritance
+class Animal:
+    func init(name):
+        self.name = name
+    func speak():
+        return self.name + " makes a sound"
+
+class Dog(Animal):
+    func speak():
+        return self.name + " says Woof"
+
+class Puppy(Dog):
+    func speak():
+        return self.name + " says Yip"
+
+dog = Dog("Rex")
+puppy = Puppy("Tiny")
+print(dog.speak())    # Rex says Woof
+print(puppy.speak())  # Tiny says Yip
+
+# Dynamic attribute assignment
+class Empty:
+    func init():
+        pass
+
+e = Empty()
+e.x = 42
+e.label = "hello"
+print(e.x)      # 42
+print(e.label)  # hello
+
+# Class with list attribute
+class Stack:
+    func init():
+        self.items = []
+
+    func push(val):
+        self.items.append(val)
+
+    func pop():
+        return self.items.pop()
+
+    func size():
+        return len(self.items)
+
+    func is_empty():
+        return self.size() == 0
+
+stk = Stack()
+print(stk.is_empty())  # true
+stk.push(1)
+stk.push(2)
+stk.push(3)
+print(stk.size())      # 3
+print(stk.pop())       # 3
+print(stk.size())      # 2
+
+# Two instances don't share state
+s1 = Stack()
+s2 = Stack()
+s1.push(99)
+print(s1.size())   # 1
+print(s2.size())   # 0 (independent)
+
+print("CLASS TESTS DONE")

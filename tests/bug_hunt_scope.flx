@@ -1,0 +1,80 @@
+# Bug Hunt: Scoping edge cases
+print("=== SCOPING ===")
+
+# Global vs local
+x = "global"
+func test_scope():
+    x = "local"
+    return x
+print(test_scope())   # local
+print(x)              # global (unchanged)
+
+# Nested function scope
+outer_val = 10
+func outer():
+    inner_val = 20
+    func inner():
+        return inner_val  # captures from outer()
+    return inner()
+print(outer())   # 20
+
+# Loop variable visible after loop (for)
+for i in range(5):
+    pass
+print(i)   # 4 (last value)
+
+# Loop variable visible after loop (while)
+k = 0
+while k < 5:
+    k = k + 1
+print(k)   # 5
+
+# Variable from if block
+if true:
+    block_var = 42
+print(block_var)   # 42
+
+# Variable from else block
+if false:
+    pass
+else:
+    else_var = "from else"
+print(else_var)   # from else
+
+# Nested for loop - inner variable visible in outer scope after inner break
+found = false
+for i in range(5):
+    for j in range(5):
+        if i == 2 and j == 3:
+            found = true
+            break
+    if found:
+        break
+print(i)      # 2
+print(j)      # 3  <-- this is the BUG candidate
+print(found)  # true
+
+# Function parameters don't leak
+func with_param(p):
+    return p * 2
+with_param(5)
+# print(p)  # should be error - don't test this
+
+# Multiple assignment in loop
+results = []
+for n in range(5):
+    doubled = n * 2
+    results.append(doubled)
+print(results)   # [0, 2, 4, 6, 8]
+print(doubled)   # 8 (last value, visible after loop)
+print(n)         # 4
+
+# Shadowing in nested function
+outer_x = 100
+func shadow_test():
+    outer_x = 999  # should be local, not modifying global
+    return outer_x
+print(shadow_test())   # 999
+print(outer_x)         # 100 (global unchanged)
+
+print("SCOPE TESTS DONE")

@@ -1,0 +1,130 @@
+# Bug Hunt: Edge cases and tricky scenarios
+print("=== EDGE CASES ===")
+
+# Recursive data structures not possible due to no reference cycle, but test deep recursion
+func factorial(n):
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+
+print(factorial(10))   # 3628800
+print(factorial(0))    # 1
+print(factorial(1))    # 1
+
+# Fibonacci
+func fib(n):
+    if n <= 1:
+        return n
+    return fib(n-1) + fib(n-2)
+
+print(fib(10))   # 55
+print(fib(0))    # 0
+print(fib(1))    # 1
+
+# Mutual recursion
+func is_even(n):
+    if n == 0:
+        return true
+    return is_odd(n - 1)
+
+func is_odd(n):
+    if n == 0:
+        return false
+    return is_even(n - 1)
+
+print(is_even(4))   # true
+print(is_odd(5))    # true
+print(is_even(7))   # false
+
+# String with special chars
+print("Hello\nWorld")    # two lines
+print("Tab\there")       # tab
+print("Quote: \"hi\"")   # Quote: "hi"
+print("Backslash: \\")   # Backslash: \
+
+# Large numbers
+print(1000000 * 1000000)   # 1000000000000
+print(2 ** 30)              # 1073741824
+print(2 ** 40)              # 1099511627776
+
+# Float precision
+print(1.0 / 3.0)           # 0.333...
+print(int(1.0 / 3.0 * 3))  # should be 1
+
+# Chained method calls
+result = "  Hello World  ".trim().lower()
+print(result)   # hello world
+
+result2 = "a,b,c".split(",").len()
+print(result2)  # 3
+
+# Empty function
+func noop():
+    pass
+
+val = noop()
+print(val)   # null (implicit return)
+print(val == null)  # true
+
+# Function with no explicit return
+func no_return(x):
+    y = x + 1
+
+val2 = no_return(5)
+print(val2)   # null
+
+# Nested list comprehension via loops
+matrix = []
+for i in range(3):
+    row = []
+    for j in range(3):
+        row.append(i * 3 + j)
+    matrix.append(row)
+print(matrix[0])   # [0, 1, 2]
+print(matrix[1])   # [3, 4, 5]
+print(matrix[2])   # [6, 7, 8]
+print(matrix[1][2])  # 5
+
+# String multiplication (is * supported for strings?)
+# print("abc" * 3)   # abcabcabc
+
+# Boolean as int in arithmetic
+print(true + true)    # 2?  or error?
+print(true + 1)       # 2?  or error?
+
+# Comparison chaining (does Flux support a < b < c?)
+# print(1 < 2 < 3)  # true in Python, but in Flux?
+
+# Passing function as argument
+func apply(fn, val):
+    return fn(val)
+
+func double(x):
+    return x * 2
+
+func square(x):
+    return x * x
+
+print(apply(double, 5))   # 10
+print(apply(square, 5))   # 25
+
+# List of functions
+fns = [double, square]
+print(fns[0](4))   # 8
+print(fns[1](4))   # 16
+
+# Default parameter values (if supported)
+# func greet(name, greeting="Hello"):
+#     print(greeting + ", " + name + "!")
+
+# Variadic args (if supported)
+# func sum(*args):
+#     ...
+
+# String formatting
+name = "Flux"
+version = 1
+# If format/f-strings supported:
+# print(f"Welcome to {name} v{version}")
+
+print("EDGE CASE TESTS DONE")

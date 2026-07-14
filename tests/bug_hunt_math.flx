@@ -1,0 +1,101 @@
+# Bug Hunt: Arithmetic and Math module
+print("=== ARITHMETIC ===")
+
+# Integer arithmetic
+print(10 + 3)     # 13
+print(10 - 3)     # 7
+print(10 * 3)     # 30
+print(10 / 3)     # 3.333... (float division)
+print(10 // 3)    # 3 (floor division)
+print(10 % 3)     # 1 (modulo)
+print(2 ** 10)    # 1024 (power)
+
+# Negative modulo
+print(-7 % 3)     # should be 2 (Python semantics) or -1 (C semantics)?
+print(7 % -3)     # should be -2 (Python) or 1 (C)?
+
+# Float arithmetic
+print(0.1 + 0.2)        # ~0.3 (float imprecision)
+print(1.5 * 2.0)        # 3.0
+print(5.0 / 2.0)        # 2.5
+print(5.0 // 2.0)       # 2.0 (floor div on floats)
+print(5.0 % 2.0)        # 1.0 (modulo on floats)
+
+# Mixed int/float
+print(1 + 1.5)    # 2.5
+print(3 * 1.5)    # 4.5
+print(4 / 2)      # 2.0? or 2?
+
+# Comparison operators
+print(1 < 2)    # true
+print(2 <= 2)   # true
+print(3 > 2)    # true
+print(3 >= 4)   # false
+print(2 == 2)   # true
+print(2 != 3)   # true
+
+# Boolean operators
+print(true and true)    # true
+print(true and false)   # false
+print(false or true)    # true
+print(false or false)   # false
+print(not true)         # false
+print(not false)        # true
+
+# Short-circuit evaluation
+x = 0
+func side_effect():
+    x = x + 1
+    return true
+
+# false and side_effect() should NOT call side_effect
+# But x is a global here, so let's test differently
+print(false and true)    # false
+print(true or false)     # true
+
+# Unary minus
+print(-5)      # -5
+print(-(-5))   # 5
+print(-(3+4))  # -7
+
+# Integer division truncation
+print(7 // 2)    # 3
+print(-7 // 2)   # -4 (floor)
+print(7 // -2)   # -4 (floor)
+print(-7 // -2)  # 3
+
+print("=== MATH MODULE ===")
+
+# Basic math functions
+print(math.abs(-5))        # 5
+print(math.abs(5))         # 5
+print(math.floor(3.7))     # 3
+print(math.ceil(3.2))      # 4
+print(math.round(3.5))     # 4
+print(math.round(3.4))     # 3
+print(math.sqrt(25.0))     # 5.0
+print(math.sqrt(2.0))      # 1.4142...
+
+# pow
+print(math.pow(2, 10))    # 1024.0
+print(math.pow(3, 3))     # 27.0
+
+# min/max
+print(math.min(3, 7))     # 3
+print(math.max(3, 7))     # 7
+print(math.min(-1, -5))   # -5
+print(math.max(-1, -5))   # -1
+
+# trig
+print(math.sin(0.0))      # 0.0
+print(math.cos(0.0))      # 1.0
+
+# log
+print(math.log(1.0))      # 0.0
+print(math.log(math.e))   # ~1.0
+
+# constants
+print(math.pi)    # ~3.14159
+print(math.e)     # ~2.71828
+
+print("MATH TESTS DONE")

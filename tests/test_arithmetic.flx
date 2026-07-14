@@ -1,0 +1,21 @@
+# Test: Arithmetic edge cases
+print("=== Arithmetic ===")
+
+# Integer ops
+print(2 ** 10)      # power - may not be supported
+print(10 % 3)       # modulo
+print(-10 % 3)      # negative modulo
+print(10 // 3)      # floor div - may not be supported
+print(-7 // 2)      # negative floor div
+
+# Float precision
+print(0.1 + 0.2)
+print(1.0 / 3.0)
+
+# Large numbers
+print(999999999 * 999999999)
+
+# Unary minus
+print(-5)
+print(--5)          # double negation
+print(-(-5))

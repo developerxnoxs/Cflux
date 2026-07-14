@@ -1,0 +1,26 @@
+# Test: String edge cases
+print("=== String tests ===")
+
+# Empty string
+s = ""
+print(len(s))
+
+# String concatenation
+a = "hello"
+b = " world"
+print(a + b)
+
+# String * int (should error or work)
+# print(a * 3)
+
+# Nested string methods
+s2 = "Hello World"
+print(s2.upper())
+print(s2.lower())
+print(s2.replace("World", "Flux"))
+print(s2.split(" "))
+print(s2.strip())
+
+# Edge: empty split
+s3 = ""
+print(len(s3))

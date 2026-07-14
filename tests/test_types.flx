@@ -1,0 +1,20 @@
+# Test: type() function and type coercions
+print("=== Types ===")
+print(type(1))
+print(type(3.14))
+print(type("hello"))
+print(type(true))
+print(type(null))
+print(type([]))
+print(type({}))
+
+# Conversions
+print(int("42"))
+print(float("3.14"))
+print(str(100))
+print(int(3.9))   # truncates?
+print(float(5))
+
+# Bad conversion
+print("Bad int conversion:")
+print(int("abc"))

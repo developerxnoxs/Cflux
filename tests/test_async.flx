@@ -1,0 +1,12 @@
+# Test: Async / coroutine
+print("=== Async ===")
+
+async func delayed(msg):
+    await sleep(0.01)
+    return msg
+
+async func main():
+    r = await delayed("hello from async")
+    print(r)
+
+main()

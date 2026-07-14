@@ -1,0 +1,40 @@
+# ── Build output ──────────────────────────────────────────────────────────────
+build_make/
+build/
+build_dbg/
+build_trace/
+build_asan/
+build_gcdbg/
+
+# Object files, static libs, compiled binaries
+*.o
+*.a
+*.so
+*.dylib
+*.out
+
+# CMake cache
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# ── Replit internal files ──────────────────────────────────────────────────────
+.replit
+.cache/
+.local/
+.agents/
+attached_assets/
+
+# ── Editor & OS ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.code-workspace
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+*.log
+.gitignore_flux_old

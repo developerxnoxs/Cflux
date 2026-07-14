@@ -1,0 +1,92 @@
+# Bug Hunt: List methods
+print("=== LIST METHODS ===")
+
+# append
+lst = []
+lst.append(10)
+lst.append(20)
+lst.append(30)
+print(lst)        # [10, 20, 30]
+print(len(lst))   # 3
+
+# pop (no arg - removes last)
+val = lst.pop()
+print(val)        # 30
+print(lst)        # [10, 20]
+
+# pop with index
+lst2 = [1, 2, 3, 4, 5]
+val2 = lst2.pop(1)
+print(val2)       # 2
+print(lst2)       # [1, 3, 4, 5]
+
+# insert
+lst3 = [1, 2, 4, 5]
+lst3.insert(2, 3)
+print(lst3)       # [1, 2, 3, 4, 5]
+
+# insert at start
+lst4 = [2, 3, 4]
+lst4.insert(0, 1)
+print(lst4)       # [1, 2, 3, 4]
+
+# remove (removes first occurrence of value)
+lst5 = [1, 2, 3, 2, 1]
+lst5.remove(2)
+print(lst5)       # [1, 3, 2, 1]
+
+# contains
+lst6 = [10, 20, 30]
+print(lst6.contains(20))   # true
+print(lst6.contains(99))   # false
+
+# reverse
+lst7 = [1, 2, 3, 4, 5]
+lst7.reverse()
+print(lst7)       # [5, 4, 3, 2, 1]
+
+# len via method vs built-in
+lst8 = [1, 2, 3]
+print(lst8.len())  # 3
+print(len(lst8))   # 3
+
+# Negative indexing
+lst9 = [10, 20, 30, 40]
+print(lst9[-1])   # 40
+print(lst9[-2])   # 30
+print(lst9[-4])   # 10
+
+# Nested lists
+nested = [[1, 2], [3, 4], [5, 6]]
+print(nested[0])      # [1, 2]
+print(nested[1][0])   # 3
+print(nested[2][1])   # 6
+
+# List assignment
+lst10 = [1, 2, 3]
+lst10[1] = 99
+print(lst10)      # [1, 99, 3]
+
+# List concatenation / slicing (if supported)
+# lst11 = [1, 2] + [3, 4]
+# print(lst11)  # [1, 2, 3, 4]
+
+# Empty list operations
+empty = []
+print(len(empty))     # 0
+print(empty.contains(1))  # false
+empty.append(1)
+print(empty)          # [1]
+
+# for loop over list
+total = 0
+for x in [1, 2, 3, 4, 5]:
+    total = total + x
+print(total)   # 15
+
+# sort (if supported)
+# lst_sort = [3, 1, 4, 1, 5, 9, 2, 6]
+# lst_sort.sort()
+# print(lst_sort)
+
+print("LIST TESTS DONE")

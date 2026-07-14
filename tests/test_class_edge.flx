@@ -1,0 +1,25 @@
+# Test: Class edge cases
+print("=== Class edge cases ===")
+
+class Base:
+    func init(x):
+        self.x = x
+
+    func get_x():
+        return self.x
+
+class Child(Base):
+    func init(x, y):
+        self.x = x
+        self.y = y
+
+    func get_sum():
+        return self.x + self.y
+
+c = Child(3, 4)
+print(c.get_x())    # 3
+print(c.get_sum())  # 7
+
+# Access undefined attribute
+print("Undefined attr:")
+print(c.z)

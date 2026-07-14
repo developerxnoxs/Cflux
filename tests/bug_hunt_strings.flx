@@ -1,0 +1,68 @@
+# Bug Hunt: String methods
+print("=== STRING METHODS ===")
+
+s = "  Hello, World!  "
+
+# trim/strip
+print(s.trim())         # "Hello, World!"
+print(s.strip())        # "Hello, World!" (alias)
+
+# upper / lower
+print("hello".upper())  # HELLO
+print("HELLO".lower())  # hello
+
+# starts_with / ends_with
+print("flux".starts_with("fl"))   # true
+print("flux".starts_with("lx"))   # false
+print("flux".ends_with("ux"))     # true
+print("flux".ends_with("fl"))     # false
+
+# contains
+print("hello world".contains("world"))  # true
+print("hello world".contains("xyz"))    # false
+
+# replace
+print("aabbcc".replace("bb", "XX"))  # aaXXcc
+print("abab".replace("a", "Z"))      # ZbZb (replaces all?)
+
+# split
+parts = "a,b,c".split(",")
+print(parts)          # [a, b, c]
+print(len(parts))     # 3
+print(parts[0])       # a
+print(parts[2])       # c
+
+# join
+print(",".join(["x", "y", "z"]))  # x,y,z
+print(" ".join(["hello", "world"])) # hello world
+
+# len on string
+print(len("hello"))   # 5
+print(len(""))        # 0
+
+# String indexing
+word = "Flux"
+print(word[0])   # F
+print(word[3])   # x
+print(word[-1])  # x (negative index)
+print(word[-4])  # F (negative index)
+
+# String concatenation edge cases
+print("" + "hello")  # hello
+print("hello" + "")  # hello
+print("" + "")       # (empty)
+
+# String comparison
+print("abc" == "abc")  # true
+print("abc" == "ABC")  # false
+print("abc" != "xyz")  # true
+print("abc" < "abd")   # true
+print("z" > "a")       # true
+
+# String * repeat (if supported)
+# print("ab" * 3)  # ababab
+
+# find / index (if it exists)
+# print("hello world".find("world"))
+
+print("STRING TESTS DONE")

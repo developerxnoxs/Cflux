@@ -1,0 +1,68 @@
+# Bug Hunt: Dict methods
+print("=== DICT METHODS ===")
+
+d = {}
+d["a"] = 1
+d["b"] = 2
+d["c"] = 3
+
+# Basic access
+print(d["a"])   # 1
+print(d["b"])   # 2
+
+# has_key
+print(d.has_key("a"))   # true
+print(d.has_key("z"))   # false
+
+# get with default
+print(d.get("a", 0))    # 1
+print(d.get("z", 99))   # 99  (missing key -> default)
+print(d.get("z", null)) # null
+
+# keys
+ks = d.keys()
+print(len(ks))  # 3
+# Keys ordering may vary, but length should be 3
+
+# values
+vs = d.values()
+print(len(vs))  # 3
+
+# Update existing key
+d["a"] = 999
+print(d["a"])   # 999
+
+# Delete / remove key (if supported)
+# d.remove("a")
+# print(d.has_key("a"))  # false
+
+# Nested dict
+nd = {"user": {"name": "Flux", "age": 20}}
+print(nd["user"]["name"])  # Flux
+print(nd["user"]["age"])   # 20
+
+# Dict with mixed value types
+mixed = {"num": 42, "str": "hello", "lst": [1,2,3], "bool": true}
+print(mixed["num"])   # 42
+print(mixed["str"])   # hello
+print(mixed["lst"])   # [1, 2, 3]
+print(mixed["bool"])  # true
+
+# Iterate over keys
+total = 0
+counts = {"x": 10, "y": 20, "z": 30}
+for k in counts.keys():
+    total = total + counts[k]
+print(total)   # 60
+
+# Overwrite with different type
+d2 = {"val": 1}
+d2["val"] = "string now"
+print(d2["val"])   # string now
+
+# Empty dict
+ed = {}
+print(ed.has_key("any"))   # false
+print(ed.get("any", "def"))  # def
+
+print("DICT TESTS DONE")

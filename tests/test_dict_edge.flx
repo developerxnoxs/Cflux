@@ -1,0 +1,10 @@
+# Test: Dict edge cases
+print("=== Dict edge cases ===")
+
+d = {}
+d["key"] = "value"
+print(d["key"])
+
+# Missing key
+print("Missing key test:")
+print(d["nonexistent"])

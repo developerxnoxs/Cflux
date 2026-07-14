@@ -1,0 +1,116 @@
+# Bug Hunt: Control flow
+print("=== CONTROL FLOW ===")
+
+# while with break
+i = 0
+while true:
+    i = i + 1
+    if i == 5:
+        break
+print(i)   # 5
+
+# while with continue
+evens = []
+j = 0
+while j < 10:
+    j = j + 1
+    if j % 2 != 0:
+        continue
+    evens.append(j)
+print(evens)   # [2, 4, 6, 8, 10]
+
+# for with break
+found = -1
+for x in range(100):
+    if x * x > 50:
+        found = x
+        break
+print(found)   # 8 (8*8=64 > 50)
+
+# for with continue
+odds = []
+for x in range(10):
+    if x % 2 == 0:
+        continue
+    odds.append(x)
+print(odds)   # [1, 3, 5, 7, 9]
+
+# Nested loops - break only breaks inner loop
+outer_count = 0
+for i in range(5):
+    outer_count = outer_count + 1
+    for j in range(5):
+        if j == 2:
+            break
+print(outer_count)   # 5 (outer loop completes all iterations)
+
+# Nested loop with found pattern
+result = null
+for i in range(10):
+    for j in range(10):
+        if i + j == 15 and i > j:
+            result = [i, j]
+            break
+    if result != null:
+        break
+print(result)   # [8, 7] or similar where i+j=15 and i>j
+                # i=8, j=7? No, 8+7=15. But we go in order, first i where i+j=15 and i>j
+                # i=8: j starts at 0..7 (j=7: 8+7=15, 8>7 true) -> [8,7]
+
+# Return from nested loop
+func find_pair(target):
+    for i in range(10):
+        for j in range(10):
+            if i * j == target and i != j:
+                return [i, j]
+    return null
+
+pair = find_pair(12)
+print(pair)   # [2, 6] or [3, 4]
+
+# Ternary-like: if expression (if Flux supports it)
+# val = 10 if true else 20
+
+# if/elif/else chain
+func classify(n):
+    if n < 0:
+        return "negative"
+    elif n == 0:
+        return "zero"
+    elif n < 10:
+        return "small"
+    elif n < 100:
+        return "medium"
+    else:
+        return "large"
+
+print(classify(-5))    # negative
+print(classify(0))     # zero
+print(classify(7))     # small
+print(classify(42))    # medium
+print(classify(999))   # large
+
+# Nested if
+func abs_val(n):
+    if n < 0:
+        return -n
+    return n
+
+print(abs_val(-10))   # 10
+print(abs_val(10))    # 10
+print(abs_val(0))     # 0
+
+# Variable scoping across if branches
+val = 0
+if true:
+    val = 1
+print(val)   # 1
+
+flag = false
+if flag:
+    x = 100
+else:
+    x = 200
+print(x)   # 200
+
+print("CONTROL FLOW TESTS DONE")

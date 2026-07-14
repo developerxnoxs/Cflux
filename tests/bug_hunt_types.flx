@@ -1,0 +1,78 @@
+# Bug Hunt: Types and type coercions
+print("=== TYPES ===")
+
+# type() function
+print(type(42))        # int
+print(type(3.14))      # float
+print(type("hello"))   # string
+print(type(true))      # bool
+print(type(false))     # bool
+print(type(null))      # null
+print(type([]))        # list
+print(type({}))        # dict
+
+# int() conversions
+print(int(3.9))     # 3 (truncate)
+print(int(3.1))     # 3
+print(int(-3.9))    # -3 (truncate toward zero)
+print(int("42"))    # 42
+print(int("-10"))   # -10
+print(int(true))    # 1
+print(int(false))   # 0
+
+# float() conversions
+print(float(5))        # 5.0
+print(float("3.14"))   # 3.14
+print(float(true))     # 1.0
+print(float(false))    # 0.0
+print(float("1e3"))    # 1000.0
+
+# str() conversions
+print(str(42))      # 42
+print(str(3.14))    # 3.14
+print(str(true))    # true
+print(str(false))   # false
+print(str(null))    # null
+print(str([1,2]))   # [1, 2]
+
+# bool() conversions
+print(bool(1))       # true
+print(bool(0))       # false
+print(bool("hi"))    # true
+print(bool(""))      # false
+print(bool([1]))     # true
+print(bool([]))      # false
+print(bool(null))    # false
+print(bool(1.0))     # true
+print(bool(0.0))     # false
+
+# Truthiness in if
+if 1:
+    print("1 is truthy")      # printed
+if 0:
+    print("0 is truthy")      # NOT printed
+if "hello":
+    print("non-empty str truthy")  # printed
+if "":
+    print("empty str truthy")      # NOT printed
+if [1,2]:
+    print("non-empty list truthy") # printed
+if []:
+    print("empty list truthy")     # NOT printed
+if null:
+    print("null is truthy")        # NOT printed
+
+# Null comparisons
+print(null == null)   # true
+print(null != null)   # false
+print(null == false)  # false (null is not false)
+print(null == 0)      # false
+
+# Identity / equality
+a = [1,2,3]
+b = [1,2,3]
+c = a
+print(a == b)   # true (value equality?)
+print(a == c)   # true
+
+print("TYPES TESTS DONE")

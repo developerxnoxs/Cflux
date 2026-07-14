@@ -20,7 +20,7 @@
  * Limits
  * ---------------------------------------------------------------------- */
 #define FLUX_STACK_MAX       (256 * 64)
-#define FLUX_FRAMES_MAX      256
+#define FLUX_FRAMES_MAX      2000
 #define FLUX_GLOBALS_INITIAL 64
 #define FLUX_GC_HEAP_GROW_FACTOR 2
 #define FLUX_IMPORT_DIR_MAX  64

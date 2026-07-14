@@ -18,7 +18,12 @@ cd flux && make -j$(nproc)
 cd flux && make test
 ```
 
-The "Build Flux" workflow builds automatically on start.
+The **"Flux REPL"** workflow builds the project and drops into the interactive REPL automatically on start (console output, not a web app — this is a CLI language with no web preview).
+
+## Test Status
+
+- `make test` (C unit tests: lexer, VM, GC) — 33/33 passing.
+- All `.flx` scripts in `examples/` and `tests/` run correctly. Several `tests/*edge*`, `test_divzero.flx`, `test_class_edge.flx`, `test_dict_edge.flx`, and `test_types.flx` intentionally end by triggering a runtime error (division by zero, missing dict key, undefined attribute, bad conversion, out-of-range index) to verify the interpreter reports a clean `Runtime error: ...` message and exits — that non-zero exit is expected, not a bug.
 
 ## Project Structure
 
@@ -51,6 +56,7 @@ flux/
 | Variables in `if`/`else` blocks not visible after block | `compiler.c` | Variables first assigned inside an `if`/`elif`/`else` branch are now visible after the `if` statement |
 | `bool` not coercible in arithmetic | `vm.c` | `true + true` now yields `2`; booleans are coerced to int (0/1) for arithmetic and comparison |
 | Nested for-loop stack corruption | `compiler.c` | Inner `for j in ...` inside an outer loop no longer pushes extra stack slots on each outer iteration |
+| Recursion depth limit too low | `vm.h` | `FLUX_FRAMES_MAX` raised from 256 to 2000 — `tests/test_recursion.flx` (`countdown(1000)`) hit a spurious "Stack overflow" at only 256 call frames; the VM stack is heap-allocated and frames are pushed iteratively (no native C recursion per call), so raising the cap is safe |
 
 ## Language Features
 

@@ -1,0 +1,13 @@
+# Demonstrates Flux's module import system.
+#
+# `import <module>` loads `<module>.flx` from the importing file's own
+# directory (falling back to the current working directory), runs it once,
+# and binds its top-level names as `<module>.<name>`. A second `import` of
+# the same module reuses the cached result instead of re-running it.
+import mathutils
+import greeter as g
+
+print(mathutils.square(5))
+print(mathutils.cube(3))
+print(mathutils.PI_APPROX)
+print(g.greet("Flux"))

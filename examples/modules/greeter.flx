@@ -1,0 +1,4 @@
+import mathutils
+
+func greet(name):
+    return "Hello, " + name + "! square(3) = " + str(mathutils.square(3))

@@ -72,6 +72,17 @@ flux/
 | Enum | `enum Color:` / `    Red` / `    Green` | Compiled as dict `{"Red":0,"Green":1,...}`; access via `Color.Red` |
 | Spawn | `spawn coroutine()` | Creates a task/coroutine; works with existing `async`/`await` |
 
+### Module imports
+```flux
+import mathutils              # loads mathutils.flx, binds it as `mathutils`
+import net.http as http       # dotted names need an alias to be usable
+```
+- `import <name>` looks for `<name>.flx` next to the importing file first, then in the process's working directory (dots in the name become path separators, e.g. `net.http` → `net/http.flx`).
+- The module runs once; its top-level `func`/`let`/`const`/class names become fields on the bound name (`mathutils.square(5)`).
+- Re-importing the same file (by resolved path) reuses the first run's result instead of re-executing it; importing a module that is itself mid-import (a cycle) is a runtime error.
+- **Design trade-off**: a module's top-level names also remain visible as bare globals to whatever imported it (in addition to `module.name`). Flux compiles every top-level reference as a flat lookup against one global table with no per-module scope, so a module's own functions can call each other/reference its variables — removing the names from the shared table after load would break those self-references.
+- See `examples/modules/` for a working multi-file example.
+
 ### CLI subcommands
 ```bash
 flux run <file.flx>      # execute

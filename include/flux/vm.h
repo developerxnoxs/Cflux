@@ -23,6 +23,8 @@
 #define FLUX_FRAMES_MAX      256
 #define FLUX_GLOBALS_INITIAL 64
 #define FLUX_GC_HEAP_GROW_FACTOR 2
+#define FLUX_IMPORT_DIR_MAX  64
+#define FLUX_IMPORT_PATH_MAX 900
 
 /* -------------------------------------------------------------------------
  * Call frame
@@ -65,6 +67,11 @@ struct FluxVM {
 
     /* Global variables (name → Value) */
     FluxDict  *globals;
+
+    /* Module system (import) */
+    FluxDict *modules;                                   /* resolved path -> module dict (cache) */
+    char      import_dirs[FLUX_IMPORT_DIR_MAX][FLUX_IMPORT_PATH_MAX];
+    int       import_dir_count;
 
     /* String interning table */
     StringTable strings;
@@ -146,6 +153,18 @@ void  vm_set_global(FluxVM *vm, FluxString *name, Value value);
  * Native function registration
  * ---------------------------------------------------------------------- */
 void vm_register_native(FluxVM *vm, const char *name, NativeFn fn, int arity);
+
+/* -------------------------------------------------------------------------
+ * Module import directory stack
+ *
+ * Tracks the directory of the file currently being imported so relative
+ * imports (`import mymodule`) resolve next to the importing file rather
+ * than the process's working directory. Pushed/popped around each file
+ * load (main script in flux_execute_file, nested modules in OP_IMPORT).
+ * ---------------------------------------------------------------------- */
+void        vm_push_import_dir(FluxVM *vm, const char *dir);
+void        vm_pop_import_dir(FluxVM *vm);
+const char *vm_current_import_dir(FluxVM *vm); /* NULL if stack is empty */
 
 /* -------------------------------------------------------------------------
  * GC trigger

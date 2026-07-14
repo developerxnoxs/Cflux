@@ -82,6 +82,7 @@ static void mark_roots(FluxVM *vm) {
 
     /* Globals dict */
     gc_mark_object(vm, (FluxObject *)vm->globals);
+    gc_mark_object(vm, (FluxObject *)vm->modules);
 
     /* Built-in classes */
     gc_mark_object(vm, (FluxObject *)vm->class_string);

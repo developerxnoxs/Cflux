@@ -112,7 +112,22 @@ FluxResult flux_execute_file(FluxVM *vm, const char *path) {
     fclose(f);
     buf[read] = '\0';
 
+    /* Push this file's directory so any top-level `import` resolves
+     * relative to the script being run, not the process cwd. */
+    const char *slash = strrchr(path, '/');
+    char dir[900];
+    if (slash) {
+        size_t len = (size_t)(slash - path);
+        if (len == 0) len = 1; /* leading "/" */
+        if (len >= sizeof(dir)) len = sizeof(dir) - 1;
+        memcpy(dir, path, len);
+        dir[len] = '\0';
+    } else {
+        snprintf(dir, sizeof(dir), ".");
+    }
+    vm_push_import_dir(vm, dir);
     FluxResult result = compile_and_run(vm, buf, path);
+    vm_pop_import_dir(vm);
     FLUX_FREE(buf);
     return result;
 }

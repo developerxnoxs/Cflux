@@ -42,6 +42,10 @@ FluxVM *vm_new(void) {
     /* Globals */
     vm->globals = object_dict_new(vm);
 
+    /* Modules (import cache) */
+    vm->modules          = object_dict_new(vm);
+    vm->import_dir_count = 0;
+
     /* Scheduler */
     vm->ready_queue       = NULL;
     vm->ready_count       = 0;
@@ -173,6 +177,76 @@ static bool call_closure(FluxVM *vm, FluxClosure *closure, int argc) {
     frame->ip      = fn->chunk.code;
     frame->slots   = vm->stack_top - argc - 1;
     return true;
+}
+
+/* -------------------------------------------------------------------------
+ * Import directory stack
+ * ---------------------------------------------------------------------- */
+
+void vm_push_import_dir(FluxVM *vm, const char *dir) {
+    if (vm->import_dir_count >= FLUX_IMPORT_DIR_MAX) return; /* too deep: ignore, fall back to cwd */
+    snprintf(vm->import_dirs[vm->import_dir_count], FLUX_IMPORT_PATH_MAX, "%s", dir);
+    vm->import_dir_count++;
+}
+
+void vm_pop_import_dir(FluxVM *vm) {
+    if (vm->import_dir_count > 0) vm->import_dir_count--;
+}
+
+const char *vm_current_import_dir(FluxVM *vm) {
+    if (vm->import_dir_count == 0) return NULL;
+    return vm->import_dirs[vm->import_dir_count - 1];
+}
+
+/* -------------------------------------------------------------------------
+ * Module resolution helpers
+ * ---------------------------------------------------------------------- */
+
+static void path_dirname(const char *path, char *out, size_t out_size) {
+    const char *slash = strrchr(path, '/');
+    if (!slash) {
+        snprintf(out, out_size, ".");
+        return;
+    }
+    size_t len = (size_t)(slash - path);
+    if (len == 0) { snprintf(out, out_size, "/"); return; }
+    if (len >= out_size) len = out_size - 1;
+    memcpy(out, path, len);
+    out[len] = '\0';
+}
+
+static bool file_exists(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    fclose(f);
+    return true;
+}
+
+/* Convert a module name ("net.http") into a relative file path
+ * ("net/http.flx"). Dots become path separators; ".flx" is appended. */
+static void module_name_to_relpath(const char *module, char *out, size_t out_size) {
+    size_t i = 0;
+    for (; module[i] != '\0' && i + 5 < out_size; i++)
+        out[i] = (module[i] == '.') ? '/' : module[i];
+    out[i] = '\0';
+    strncat(out, ".flx", out_size - strlen(out) - 1);
+}
+
+/* Try (in order): next to the importing file, then the process cwd. */
+static bool resolve_import_path(FluxVM *vm, const char *module, char *out, size_t out_size) {
+    char relpath[FLUX_IMPORT_PATH_MAX];
+    module_name_to_relpath(module, relpath, sizeof(relpath));
+
+    const char *cur_dir = vm_current_import_dir(vm);
+    if (cur_dir) {
+        snprintf(out, out_size, "%s/%s", cur_dir, relpath);
+        if (file_exists(out)) return true;
+    }
+
+    snprintf(out, out_size, "%s", relpath);
+    if (file_exists(out)) return true;
+
+    return false;
 }
 
 static bool call_native(FluxVM *vm, FluxNative *nat, int argc) {
@@ -314,11 +388,178 @@ static Value value_add(FluxVM *vm, Value a, Value b) {
  * Main execution loop
  * ---------------------------------------------------------------------- */
 
+/* Forward declaration: do_import (below) needs to re-enter the dispatch
+ * loop to run an imported module's top-level code to completion before
+ * OP_IMPORT can push its resulting namespace dict. */
+static VMResult vm_run(FluxVM *vm, int base_frame_count);
+
 VMResult vm_execute(FluxVM *vm, FluxFunction *fn) {
     FluxClosure *main_closure = object_closure_new(vm, fn);
     vm_push(vm, value_object((FluxObject *)main_closure));
+    int base = vm->frame_count; /* 0 for a fresh VM */
     call_closure(vm, main_closure, 0);
+    return vm_run(vm, base);
+}
 
+/* -------------------------------------------------------------------------
+ * do_import - resolve, load, compile and run an imported .flx module.
+ *
+ * The module runs on the SAME vm->globals table as the importer (so its
+ * own top-level `import`s and helper calls work normally). Once it
+ * finishes, every global it newly defined is moved out of vm->globals and
+ * into a fresh FluxDict "namespace" object, which is what OP_IMPORT
+ * pushes and the compiler then binds to the module/alias name - mirroring
+ * how the stdlib's math/io/fs/time modules are plain dicts of functions.
+ * ---------------------------------------------------------------------- */
+static bool do_import(FluxVM *vm, FluxString *module_name, Value *out) {
+    char resolved[FLUX_IMPORT_PATH_MAX];
+    if (!resolve_import_path(vm, module_name->chars, resolved, sizeof(resolved))) {
+        vm_runtime_error(vm, "Module '%s' not found", module_name->chars);
+        return false;
+    }
+
+    /* cache_key isn't reachable from any GC root the instant it's
+     * allocated (it isn't stored anywhere yet), so push it immediately -
+     * otherwise a GC triggered by the very next allocation (e.g. inside
+     * dict_set's table growth) could sweep it before we get a chance to
+     * store it anywhere, corrupting vm->modules. Every allocation below
+     * follows the same push-before-use rule for the same reason. */
+    FluxString *cache_key = object_string_copy(vm, resolved, (int)strlen(resolved));
+    vm_push(vm, value_object((FluxObject *)cache_key));
+
+    Value cached;
+    if (dict_get(vm->modules, cache_key, &cached)) {
+        vm_pop(vm); /* cache_key */
+        if (IS_DICT(cached)) {
+            *out = cached; /* already loaded: reuse the same namespace dict */
+            return true;
+        }
+        vm_runtime_error(vm, "Circular import detected while loading '%s'", module_name->chars);
+        return false;
+    }
+    /* Mark in-progress (non-dict sentinel) so a cycle is caught above.
+     * This also makes cache_key reachable via vm->modules from here on;
+     * we keep it pushed too for the rest of this function for symmetry. */
+    dict_set(vm, vm->modules, cache_key, value_bool(false));
+
+    FILE *f = fopen(resolved, "rb");
+    if (!f) {
+        vm_pop(vm); /* cache_key */
+        vm_runtime_error(vm, "Cannot open module file: %s", resolved);
+        dict_delete(vm->modules, cache_key);
+        return false;
+    }
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *buf = FLUX_ALLOC(char, size + 1);
+    long  read = (long)fread(buf, 1, (size_t)size, f);
+    fclose(f);
+    buf[read] = '\0';
+
+    Lexer lex;
+    AstArena *arena = ast_arena_new();
+    lexer_init(&lex, buf);
+
+    Parser p;
+    parser_init(&p, &lex, arena, resolved);
+    AstNode *module_ast = parser_parse(&p);
+
+    if (p.had_error) {
+        parser_print_errors(&p, buf);
+        ast_arena_free(arena);
+        FLUX_FREE(buf);
+        vm_pop(vm); /* cache_key */
+        vm_runtime_error(vm, "Failed to parse module '%s'", module_name->chars);
+        dict_delete(vm->modules, cache_key);
+        return false;
+    }
+
+    FluxFunction *fn = compiler_compile(vm, module_ast, resolved);
+    ast_arena_free(arena);
+    FLUX_FREE(buf);
+
+    if (!fn) {
+        vm_pop(vm); /* cache_key */
+        vm_runtime_error(vm, "Failed to compile module '%s'", module_name->chars);
+        dict_delete(vm->modules, cache_key);
+        return false;
+    }
+    /* fn is a freshly allocated GC object with no root pointing at it yet
+     * (it isn't wrapped in a closure until below) - protect it too. */
+    vm_push(vm, value_object((FluxObject *)fn));
+
+    /* Snapshot the set of global names that exist BEFORE running the
+     * module, so afterward we can tell which globals it newly defined. */
+    FluxDict *globals = vm->globals;
+    FluxDict *before  = object_dict_new(vm);
+    vm_push(vm, value_object((FluxObject *)before)); /* GC-protect */
+    for (int i = 0; i < globals->capacity; i++) {
+        DictEntry *e = &globals->entries[i];
+        if (e->key) dict_set(vm, before, e->key, value_bool(true));
+    }
+
+    char mod_dir[FLUX_IMPORT_PATH_MAX];
+    path_dirname(resolved, mod_dir, sizeof(mod_dir));
+    vm_push_import_dir(vm, mod_dir);
+
+    FluxClosure *closure = object_closure_new(vm, fn);
+    vm_push(vm, value_object((FluxObject *)closure));
+    int base = vm->frame_count;
+    bool called = call_closure(vm, closure, 0);
+    VMResult r = called ? vm_run(vm, base) : VM_RUNTIME_ERROR;
+
+    vm_pop_import_dir(vm);
+
+    if (r != VM_OK) {
+        /* The VM is erroring out entirely; leave the protective pushes
+         * (cache_key/fn/before) on the stack rather than unwind them,
+         * matching the RUNTIME_ERROR convention used elsewhere in this
+         * file (execution stops, so stack balance no longer matters). */
+        dict_delete(vm->modules, cache_key);
+        return false;
+    }
+
+    /* On success, the module's own frame already auto-popped its closure
+     * value (see OP_RETURN's base_frame_count check), so the stack here
+     * is exactly [..., cache_key, fn, before]. fn has done its job. */
+    vm_pop(vm); /* fn */
+
+    /* Copy every NEW global into the module's namespace dict so it can be
+     * accessed as `module.name`. Deliberately NOT removed from
+     * vm->globals: Flux compiles every top-level reference (including a
+     * module's own functions calling each other, or a function using a
+     * module-level variable) as a flat OP_LOAD_GLOBAL against the single
+     * vm->globals table - there is no per-module scope at the bytecode
+     * level. Deleting them here would break those intra-module
+     * references the moment the importer calls into the module. The
+     * trade-off is that a module's top-level names also become visible
+     * as bare globals to the importer, not just via `module.name`. */
+    FluxDict *mod_dict = object_dict_new(vm);
+    vm_push(vm, value_object((FluxObject *)mod_dict)); /* GC-protect */
+
+    for (int i = 0; i < globals->capacity; i++) {
+        DictEntry *e = &globals->entries[i];
+        if (!e->key) continue;
+        Value tmp;
+        if (dict_get(before, e->key, &tmp)) continue; /* pre-existing, not this module's */
+        dict_set(vm, mod_dict, e->key, e->value);
+    }
+
+    /* mod_dict is still on the stack (GC-protected) here: insert it into
+     * the cache BEFORE popping, so a GC triggered by this dict_set can
+     * never see it as unreachable. */
+    dict_set(vm, vm->modules, cache_key, value_object((FluxObject *)mod_dict));
+
+    vm_pop(vm); /* mod_dict */
+    vm_pop(vm); /* before */
+    vm_pop(vm); /* cache_key */
+
+    *out = value_object((FluxObject *)mod_dict);
+    return true;
+}
+
+static VMResult vm_run(FluxVM *vm, int base_frame_count) {
     CallFrame *frame = &vm->frames[vm->frame_count - 1];
     register uint8_t *ip = frame->ip;
 
@@ -756,8 +997,8 @@ VMResult vm_execute(FluxVM *vm, FluxFunction *fn) {
                 Value result = vm_pop(vm);
                 close_upvalues(vm, frame->slots);
                 vm->frame_count--;
-                if (vm->frame_count == 0) {
-                    vm_pop(vm); /* pop main script */
+                if (vm->frame_count == base_frame_count) {
+                    vm_pop(vm); /* pop main script / module closure */
                     return VM_OK;
                 }
                 vm->stack_top = frame->slots;
@@ -911,7 +1152,7 @@ VMResult vm_execute(FluxVM *vm, FluxFunction *fn) {
                 SYNC_IP();
                 close_upvalues(vm, frame->slots);
                 vm->frame_count--;
-                if (vm->frame_count == 0) return VM_OK;
+                if (vm->frame_count == base_frame_count) return VM_OK;
                 vm->stack_top = frame->slots;
                 vm_push(vm, result);
                 frame = &vm->frames[vm->frame_count - 1];
@@ -952,14 +1193,12 @@ VMResult vm_execute(FluxVM *vm, FluxFunction *fn) {
             case OP_IMPORT: {
                 uint16_t idx = READ_UINT16();
                 FluxString *name = READ_STRING(idx);
-                /* Check if module already loaded */
-                Value existing;
-                if (dict_get(vm->globals, name, &existing)) {
-                    vm_push(vm, existing);
-                } else {
-                    /* Module not found: push null for now */
-                    vm_push(vm, value_null());
-                }
+                SYNC_IP();
+                Value mod_val;
+                if (!do_import(vm, name, &mod_val)) return VM_RUNTIME_ERROR;
+                frame = &vm->frames[vm->frame_count - 1];
+                LOAD_IP();
+                vm_push(vm, mod_val);
                 break;
             }
 

@@ -23,6 +23,7 @@ Dokumen ini adalah panduan pemakaian bahasa Flux — dari instalasi/build sampai
    - [Closure](#52-closure)
    - [Lambda](#53-lambda)
    - [Pipeline operator](#54-pipeline-operator)
+   - [Decorator](#55-decorator)
 6. [List & Dictionary](#6-list--dictionary)
 7. [Class & Object](#7-class--object)
 8. [Struct](#8-struct)
@@ -244,6 +245,66 @@ func to_str(n): return str(n)
 result = 4 |> square |> inc |> to_str
 print(result)   # "17"
 ```
+
+### 5.5 Decorator
+
+Sintaks `@>ekspresi` di atas definisi `func`/`async func` menerapkan sebuah *decorator* — fungsi yang menerima fungsi yang didekorasi dan mengembalikan fungsi pengganti (biasanya wrapper). Ini setara dengan menulis ulang nama fungsi dengan hasil panggilan decorator, tapi lebih ringkas dan dideklarasikan tepat di atas definisinya.
+
+```flux
+func logged(fn):
+    func wrapper():
+        print("[log] calling function")
+        result = fn()
+        print("[log] done")
+        return result
+    return wrapper
+
+@>logged
+func hello():
+    print("Hello, World!")
+    return 42
+
+r = hello()
+# [log] calling function
+# Hello, World!
+# [log] done
+print("returned:", r)   # returned: 42
+```
+
+Setara dengan `hello = logged(hello)` yang dijalankan otomatis oleh compiler tepat setelah `hello` didefinisikan.
+
+**Decorator dengan argumen** — cukup panggil fungsi pembuat decorator sebelum `func`:
+
+```flux
+func repeat(n):
+    func decorator(fn):
+        func wrapper():
+            i = 0
+            while i < n:
+                fn()
+                i += 1
+        return wrapper
+    return decorator
+
+@>repeat(3)
+func beep():
+    print("beep!")
+
+beep()   # tercetak "beep!" tiga kali
+```
+
+**Decorator bertumpuk (stacked)** — boleh lebih dari satu `@>` di atas fungsi yang sama. Yang paling dekat dengan `func` diterapkan lebih dulu (paling dalam), lalu dibungkus oleh decorator di atasnya — sama seperti urutan di Python:
+
+```flux
+@>logged_fn
+@>repeat(2)
+func ping():
+    print("ping!")
+
+# setara dengan: ping = logged_fn(repeat(2)(ping))
+```
+
+Decorator adalah fungsi biasa, jadi bisa memvalidasi argumen, mengubah return value, menghitung jumlah pemanggilan, membungkus fungsi rekursif, dan sebagainya — lihat contoh lengkap di [`examples/test_decorators.flx`](examples/test_decorators.flx).
 
 ---
 

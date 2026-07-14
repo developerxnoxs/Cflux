@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="1080" viewBox="0 0 760 1080" font-family="'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4b5563"/>
+    </marker>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="760" height="1080" fill="url(#bgGrad)"/>
+
+  <text x="380" y="42" text-anchor="middle" fill="#f8fafc" font-size="24" font-weight="700">Pipeline Interpreter Flux</text>
+  <text x="380" y="66" text-anchor="middle" fill="#94a3b8" font-size="13">Dari kode sumber .flx sampai eksekusi bytecode di Virtual Machine</text>
+
+  <!-- Stage 1: Source -->
+  <g>
+    <rect x="230" y="96" width="300" height="66" rx="12" fill="#1e293b" stroke="#38bdf8" stroke-width="2"/>
+    <text x="380" y="123" text-anchor="middle" fill="#f1f5f9" font-size="16" font-weight="600">Source Code (.flx)</text>
+    <text x="380" y="144" text-anchor="middle" fill="#94a3b8" font-size="12">Teks program yang ditulis pengguna</text>
+  </g>
+  <line x1="380" y1="162" x2="380" y2="192" stroke="#4b5563" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Stage 2: Lexer -->
+  <g>
+    <rect x="200" y="196" width="360" height="70" rx="12" fill="#1e293b" stroke="#22d3ee" stroke-width="2"/>
+    <text x="380" y="224" text-anchor="middle" fill="#f1f5f9" font-size="16" font-weight="600">Lexer</text>
+    <text x="380" y="246" text-anchor="middle" fill="#94a3b8" font-size="12">Tokenizer indentation-aware &#8594; INDENT / DEDENT</text>
+  </g>
+  <line x1="380" y1="266" x2="380" y2="296" stroke="#4b5563" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Stage 3: Parser -->
+  <g>
+    <rect x="200" y="300" width="360" height="70" rx="12" fill="#1e293b" stroke="#34d399" stroke-width="2"/>
+    <text x="380" y="328" text-anchor="middle" fill="#f1f5f9" font-size="16" font-weight="600">Parser</text>
+    <text x="380" y="350" text-anchor="middle" fill="#94a3b8" font-size="12">Recursive-descent &#8594; membangun pohon sintaks</text>
+  </g>
+  <line x1="380" y1="370" x2="380" y2="400" stroke="#4b5563" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Stage 4: AST -->
+  <g>
+    <rect x="230" y="404" width="300" height="66" rx="12" fill="#1e293b" stroke="#a3e635" stroke-width="2"/>
+    <text x="380" y="431" text-anchor="middle" fill="#f1f5f9" font-size="16" font-weight="600">AST</text>
+    <text x="380" y="452" text-anchor="middle" fill="#94a3b8" font-size="12">Pohon sintaks abstrak (bump arena allocator)</text>
+  </g>
+  <line x1="380" y1="470" x2="380" y2="500" stroke="#4b5563" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Stage 5: Compiler -->
+  <g>
+    <rect x="180" y="504" width="400" height="76" rx="12" fill="#1e293b" stroke="#facc15" stroke-width="2"/>
+    <text x="380" y="530" text-anchor="middle" fill="#f1f5f9" font-size="16" font-weight="600">Compiler</text>
+    <text x="380" y="551" text-anchor="middle" fill="#94a3b8" font-size="12">AST &#8594; Bytecode: resolusi local/upvalue,</text>
+    <text x="380" y="568" text-anchor="middle" fill="#94a3b8" font-size="12">penangkapan closure</text>
+  </g>
+  <line x1="380" y1="580" x2="380" y2="610" stroke="#4b5563" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Stage 6: Bytecode Chunk -->
+  <g>
+    <rect x="230" y="614" width="300" height="66" rx="12" fill="#1e293b" stroke="#fb923c" stroke-width="2"/>
+    <text x="380" y="641" text-anchor="middle" fill="#f1f5f9" font-size="16" font-weight="600">Bytecode Chunk</text>
+    <text x="380" y="662" text-anchor="middle" fill="#94a3b8" font-size="12">FluxFunction: instruksi + konstanta</text>
+  </g>
+  <line x1="380" y1="680" x2="380" y2="710" stroke="#4b5563" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Stage 7: VM -->
+  <g>
+    <rect x="160" y="714" width="440" height="80" rx="12" fill="#1e293b" stroke="#f472b6" stroke-width="2"/>
+    <text x="380" y="742" text-anchor="middle" fill="#f1f5f9" font-size="17" font-weight="700">Virtual Machine</text>
+    <text x="380" y="764" text-anchor="middle" fill="#94a3b8" font-size="12">Stack-based, switch dispatch loop, call frames di heap,</text>
+    <text x="380" y="781" text-anchor="middle" fill="#94a3b8" font-size="12">sistem import modul &amp; ekstensi native (.so)</text>
+  </g>
+
+  <!-- split arrows to Runtime and GC -->
+  <line x1="300" y1="794" x2="220" y2="840" stroke="#4b5563" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="460" y1="794" x2="540" y2="840" stroke="#4b5563" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Stage 8a: Runtime -->
+  <g>
+    <rect x="60" y="844" width="320" height="86" rx="12" fill="#1e293b" stroke="#c084fc" stroke-width="2"/>
+    <text x="220" y="872" text-anchor="middle" fill="#f1f5f9" font-size="15" font-weight="600">Runtime</text>
+    <text x="220" y="893" text-anchor="middle" fill="#94a3b8" font-size="12">Method built-in string/list/dict,</text>
+    <text x="220" y="910" text-anchor="middle" fill="#94a3b8" font-size="12">standard library (math, io, fs, time, ...)</text>
+  </g>
+
+  <!-- Stage 8b: GC -->
+  <g>
+    <rect x="380" y="844" width="320" height="86" rx="12" fill="#1e293b" stroke="#60a5fa" stroke-width="2"/>
+    <text x="540" y="872" text-anchor="middle" fill="#f1f5f9" font-size="15" font-weight="600">Garbage Collector</text>
+    <text x="540" y="893" text-anchor="middle" fill="#94a3b8" font-size="12">Mark-and-sweep,</text>
+    <text x="540" y="910" text-anchor="middle" fill="#94a3b8" font-size="12">mengelola siklus hidup objek heap</text>
+  </g>
+
+  <!-- footer -->
+  <line x1="220" y1="930" x2="220" y2="960" stroke="#4b5563" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="540" y1="930" x2="540" y2="960" stroke="#4b5563" stroke-width="2" marker-end="url(#arrow)"/>
+  <g>
+    <rect x="130" y="964" width="500" height="66" rx="12" fill="#0b3d2e" stroke="#4ade80" stroke-width="2"/>
+    <text x="380" y="992" text-anchor="middle" fill="#f0fdf4" font-size="16" font-weight="700">Output Program</text>
+    <text x="380" y="1013" text-anchor="middle" fill="#bbf7d0" font-size="12">stdout, nilai kembali, efek samping (file, koneksi DB, dll.)</text>
+  </g>
+
+  <text x="380" y="1060" text-anchor="middle" fill="#64748b" font-size="11">Flux Programming Language — arsitektur internal (lihat Bab 16 di README.md)</text>
+</svg>

@@ -560,27 +560,22 @@ gcc myapp.c -Iinclude -Lbuild_make -lflux -lm -o myapp
 
 ## 16. Arsitektur Internal
 
-```
-Source Code (.flx)
-      │
-      ▼
-  Lexer (indentation-aware, INDENT/DEDENT)
-      │
-      ▼
-  Parser (recursive-descent)  →  AST (bump arena)
-      │
-      ▼
-  Compiler (AST → Bytecode, resolusi local/upvalue, closure capture)
-      │
-      ▼
-  Bytecode Chunk (FluxFunction)
-      │
-      ▼
-  Virtual Machine (stack-based, switch dispatch, call frames)
-      │
-      ▼
-  Runtime (method built-in) + Garbage Collector (mark-and-sweep)
-```
+Diagram berikut menggambarkan alur lengkap dari kode sumber `.flx` sampai program dieksekusi oleh Virtual Machine:
+
+![Pipeline Interpreter Flux](docs/architecture_pipeline.svg)
+
+Ringkasan tiap tahap:
+
+| Tahap | Tanggung Jawab |
+|---|---|
+| **Lexer** | Mengubah teks sumber jadi token, sadar indentasi (`INDENT`/`DEDENT`) seperti Python. |
+| **Parser** | Recursive-descent, mengubah aliran token jadi pohon sintaks (AST). |
+| **AST** | Dialokasikan dengan bump arena allocator (alokasi cepat, dibebaskan sekaligus). |
+| **Compiler** | Mengubah AST jadi bytecode: resolusi variabel local/upvalue, penangkapan closure. |
+| **Bytecode Chunk** | Representasi akhir tiap fungsi (`FluxFunction`): instruksi + tabel konstanta. |
+| **Virtual Machine** | Interpreter stack-based dengan switch dispatch loop; call frame disimpan di heap (bukan native C recursion) sehingga rekursi dalam tidak membebani call stack C; juga menangani sistem import modul & ekstensi native. |
+| **Runtime** | Implementasi method built-in (`string`/`list`/`dict`) dan standard library (`math`, `io`, `fs`, `time`, dst). |
+| **Garbage Collector** | Mark-and-sweep, mengelola siklus hidup seluruh objek yang dialokasikan di heap. |
 
 ### Rencana Pengembangan
 

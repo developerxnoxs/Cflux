@@ -497,23 +497,25 @@ baris = io.read_line()
 
 ## 13. Ekstensi Native (.so Plugin)
 
-Selain modul `.flx`, Flux juga bisa memuat **ekstensi native** — shared library (`.so`) yang membungkus library C (misalnya `libpq`) sebagai modul yang bisa di-`import`. Ini dipakai saat sebuah kapabilitas butuh library C asli (driver database, dll.) yang tidak bisa/tidak praktis ditulis ulang di Flux.
+Selain modul `.flx` dan modul stdlib bawaan (`math`, `io`, `fs`, dst — lihat [Bab 12](#12-standard-library)), Flux juga bisa memuat **ekstensi native**: shared library (`.so`) yang membungkus library C sistem (misalnya `libpq` untuk PostgreSQL) sebagai modul yang bisa di-`import` langsung dari script Flux.
+
+**Kegunaannya:** memberi script Flux akses ke kapabilitas yang cuma tersedia lewat library C asli — driver database, binding ke SDK sistem, kriptografi native, dsb. — tanpa harus menulis ulang logikanya di Flux (yang sering kali tidak praktis atau tidak mungkin, karena library C tersebut mengekspos API level-C langsung). Modul stdlib Flux sendiri hanya bergantung pada libc/libm; begitu sebuah kapabilitas butuh library eksternal lain, itu jadi ranah ekstensi, bukan stdlib.
 
 **Cara kerja resolusi `import`:**
 1. `import nama` pertama tetap mencari `nama.flx` seperti biasa (lihat [Bab 11](#11-sistem-import-modul)).
 2. Jika `nama.flx` tidak ditemukan, VM mencari ekstensi native di `extension/nama/libnama.so` (relatif terhadap folder file yang meng-import, lalu working directory proses).
 3. Jika file `.so` ditemukan, VM memuatnya (`dlopen`) dan memanggil satu fungsi entry point wajib bernama `flux_extension_init`. Hasilnya (dict modul) di-cache seperti modul stdlib biasa — jadi `import` berikutnya untuk nama yang sama tidak perlu memuat ulang.
 
-**Build:** ekstensi native **tidak** ikut dibangun oleh `make`/`make all` karena butuh library sistem eksternal yang belum pasti terpasang. Build secara terpisah:
+**Build:** ekstensi native ikut dibangun otomatis oleh `make`/`make all` (bersama VM dan modul stdlib), asalkan library sistem yang dibutuhkannya sudah terpasang — kalau belum, build ekstensi itu akan gagal (bukan `import`-nya di runtime). Untuk membangun ulang hanya bagian ekstensi tanpa build ulang semuanya:
 
 ```bash
-make extensions                    # build semua folder di extension/
+make extensions                    # build ulang semua folder di extension/
 make -C extension/postgresql       # atau build satu ekstensi saja
 ```
 
 ### Contoh: ekstensi `postgresql`
 
-Proyek ini menyertakan ekstensi `postgresql` (`extension/postgresql/`) yang membungkus `libpq` — client C resmi PostgreSQL. Pastikan header dan library development `libpq` terpasang di sistem sebelum build (mis. `apt install libpq-dev` di Debian/Ubuntu, `dnf install libpq-devel` di Fedora, `brew install libpq` di macOS, atau paket `postgresql`/`libpq` yang setara di distro lain).
+Proyek ini menyertakan ekstensi `postgresql` (`extension/postgresql/`) yang membungkus `libpq` — client C resmi PostgreSQL. Di environment Replit proyek ini, header dan library `libpq` sudah tersedia lewat `replit.nix` (paket `postgresql` + `libpq`), jadi tidak perlu instalasi tambahan. Di lingkungan lain, pastikan header dan library development `libpq` terpasang sebelum build (mis. `apt install libpq-dev` di Debian/Ubuntu, `dnf install libpq-devel` di Fedora, `brew install libpq` di macOS, atau paket `postgresql`/`libpq` yang setara di distro lain).
 
 ```flux
 import os

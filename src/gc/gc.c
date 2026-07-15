@@ -30,10 +30,16 @@ void *gc_alloc_object(FluxVM *vm, size_t size, ObjectType type) {
 }
 
 void *gc_realloc(FluxVM *vm, void *ptr, size_t old_size, size_t new_size) {
-    vm->bytes_allocated += new_size;
-    vm->bytes_allocated -= old_size;
-    if (new_size > old_size && vm->bytes_allocated > vm->next_gc)
-        gc_collect(vm);
+    /* Compute net delta with a single expression to avoid a transient
+     * wrong intermediate value (which could cause a spurious GC or,
+     * for size_t, an unsigned underflow when shrinking). */
+    if (new_size >= old_size) {
+        vm->bytes_allocated += (new_size - old_size);
+        if (vm->bytes_allocated > vm->next_gc)
+            gc_collect(vm);
+    } else {
+        vm->bytes_allocated -= (old_size - new_size);
+    }
     return flux_realloc(ptr, new_size);
 }
 
@@ -45,11 +51,14 @@ void gc_mark_object(FluxVM *vm, FluxObject *obj) {
     if (!obj || obj->marked) return;
     obj->marked = true;
 
-    /* Push onto grey stack for later processing */
+    /* Push onto grey stack for later processing, tracking the allocation. */
     if (vm->grey_count >= vm->grey_capacity) {
-        vm->grey_capacity = FLUX_GROW_CAPACITY(vm->grey_capacity);
-        vm->grey_stack    = (FluxObject **)flux_realloc(
-            vm->grey_stack, sizeof(FluxObject *) * (size_t)vm->grey_capacity);
+        int old_cap       = vm->grey_capacity;
+        vm->grey_capacity = FLUX_GROW_CAPACITY(old_cap);
+        size_t old_sz     = sizeof(FluxObject *) * (size_t)old_cap;
+        size_t new_sz     = sizeof(FluxObject *) * (size_t)vm->grey_capacity;
+        vm->bytes_allocated += (new_sz - old_sz);  /* track growth */
+        vm->grey_stack = (FluxObject **)flux_realloc(vm->grey_stack, new_sz);
     }
     vm->grey_stack[vm->grey_count++] = obj;
 }
@@ -209,6 +218,11 @@ static void sweep(FluxVM *vm) {
             if (unreached->type == OBJ_STRING)
                 string_table_remove(vm, (FluxString *)unreached);
 
+            /* Only subtract the *headline* struct size here.
+             * Dynamic internal arrays (dict entries, list elements,
+             * closure upvalue pointer arrays, coroutine stacks) are
+             * accounted for inside object_free() itself, which is called
+             * immediately after and has access to the live field values. */
             size_t sz = 0;
             switch (unreached->type) {
                 case OBJ_STRING:
@@ -259,4 +273,29 @@ void gc_collect(FluxVM *vm) {
 
 void gc_free_object(FluxVM *vm, FluxObject *obj) {
     object_free(vm, obj);
+}
+
+/* -------------------------------------------------------------------------
+ * GC-tracked ValueArray append (for FluxList element arrays).
+ *
+ * Wraps value_array_write() and keeps vm->bytes_allocated accurate as the
+ * backing buffer grows.  Use this instead of value_array_write() whenever
+ * the ValueArray belongs to a heap object (e.g. FluxList->elements) and
+ * the VM pointer is available.
+ * ---------------------------------------------------------------------- */
+void gc_value_array_write(FluxVM *vm, ValueArray *arr, Value v) {
+    if (arr->count >= arr->capacity) {
+        int    old_cap = arr->capacity;
+        int    new_cap = FLUX_GROW_CAPACITY(old_cap);
+        size_t old_sz  = sizeof(Value) * (size_t)old_cap;
+        size_t new_sz  = sizeof(Value) * (size_t)new_cap;
+        /* Track the growth before the realloc so the threshold check uses
+         * the updated byte count. */
+        if (new_sz > old_sz) {
+            vm->bytes_allocated += (new_sz - old_sz);
+            if (vm->bytes_allocated > vm->next_gc)
+                gc_collect(vm);
+        }
+    }
+    value_array_write(arr, v);
 }

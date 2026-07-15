@@ -54,4 +54,11 @@ void gc_mark_value(FluxVM *vm, Value v);
 void gc_mark_object(FluxVM *vm, FluxObject *obj);
 void gc_mark_array(FluxVM *vm, ValueArray *arr);
 
+/**
+ * GC-tracked ValueArray append.  Use instead of value_array_write() when the
+ * array belongs to a heap object (e.g. FluxList->elements) so that growth of
+ * the backing buffer is reflected in vm->bytes_allocated.
+ */
+void gc_value_array_write(FluxVM *vm, ValueArray *arr, Value v);
+
 #endif /* FLUX_GC_H */

@@ -1114,7 +1114,7 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                 /* Push list to protect from GC */
                 vm_push(vm, value_object((FluxObject *)list));
                 for (int i = 0; i < count; i++)
-                    value_array_write(&list->elements, elems[i]);
+                    gc_value_array_write(vm, &list->elements, elems[i]);
                 /* Remove the list from top, remove elems, re-push list */
                 Value list_val = vm_pop(vm);
                 vm->stack_top -= count;

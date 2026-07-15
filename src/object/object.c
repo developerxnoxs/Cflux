@@ -185,19 +185,32 @@ FluxString *string_table_find(FluxVM *vm, const char *chars, int length, uint32_
 static void string_table_grow(FluxVM *vm) {
     StringTable *t   = &vm->strings;
     int new_cap      = FLUX_GROW_CAPACITY(t->capacity);
-    FluxString **new = FLUX_ALLOC(FluxString *, new_cap);
-    memset(new, 0, sizeof(FluxString *) * (size_t)new_cap);
+    size_t old_sz    = sizeof(FluxString *) * (size_t)t->capacity;
+    size_t new_sz    = sizeof(FluxString *) * (size_t)new_cap;
+
+    /* Use raw alloc — do NOT call gc_realloc here.  string_table_grow is
+     * called from string_alloc which holds a freshly-allocated FluxString
+     * only in a C local (not yet on the VM stack).  If gc_realloc triggered
+     * a collection, that string could be swept while we still hold a pointer
+     * to it, causing a use-after-free.  We update bytes_allocated directly
+     * instead, which tracks the memory without risking a mid-op collection. */
+    FluxString **new_data = FLUX_ALLOC(FluxString *, new_cap);
+    memset(new_data, 0, new_sz);
+    /* Track: we're swapping old_sz bytes for new_sz bytes. */
+    vm->bytes_allocated += new_sz;
+    vm->bytes_allocated -= old_sz;
+
     int new_count = 0;
     for (int i = 0; i < t->capacity; i++) {
         FluxString *s = t->data[i];
         if (!s || s == (FluxString *)1) continue;
         uint32_t idx = s->hash & (uint32_t)(new_cap - 1);
-        while (new[idx]) idx = (idx + 1) & (uint32_t)(new_cap - 1);
-        new[idx] = s;
+        while (new_data[idx]) idx = (idx + 1) & (uint32_t)(new_cap - 1);
+        new_data[idx] = s;
         new_count++;
     }
     FLUX_FREE(t->data);
-    t->data     = new;
+    t->data     = new_data;
     t->capacity = new_cap;
     t->count    = new_count;
 }
@@ -309,8 +322,19 @@ static DictEntry *dict_find_entry(DictEntry *entries, int capacity, FluxString *
 }
 
 static void dict_grow(FluxVM *vm, FluxDict *dict) {
-    int new_cap       = FLUX_GROW_CAPACITY(dict->capacity);
+    int    new_cap  = FLUX_GROW_CAPACITY(dict->capacity);
+    size_t old_sz   = sizeof(DictEntry) * (size_t)dict->capacity;
+    size_t new_sz   = sizeof(DictEntry) * (size_t)new_cap;
+
+    /* Use raw alloc — do NOT call gc_realloc here.  dict_grow is called
+     * from dict_set while the dict may only be reachable through an object
+     * under construction (not yet fully GC-protected on the VM stack).  A
+     * gc_realloc-triggered collection could sweep that object mid-operation.
+     * Update bytes_allocated directly: tracks memory without risking a GC. */
     DictEntry *new_en = FLUX_ALLOC(DictEntry, new_cap);
+    vm->bytes_allocated += new_sz;
+    vm->bytes_allocated -= old_sz;
+
     for (int i = 0; i < new_cap; i++) {
         new_en[i].key   = NULL;
         new_en[i].value = value_null();
@@ -406,8 +430,16 @@ FluxUpvalue *object_upvalue_new(FluxVM *vm, Value *slot) {
  * ---------------------------------------------------------------------- */
 
 FluxClosure *object_closure_new(FluxVM *vm, FluxFunction *fn) {
-    FluxUpvalue **uvs = FLUX_ALLOC(FluxUpvalue *, fn->upvalue_count);
-    for (int i = 0; i < fn->upvalue_count; i++) uvs[i] = NULL;
+    /* Allocate the upvalue pointer array with a raw alloc and track the size
+     * directly in bytes_allocated (no GC trigger — the fn pointer is a C
+     * local at this point and would not survive a mid-op collection). */
+    size_t uv_sz = sizeof(FluxUpvalue *) * (size_t)fn->upvalue_count;
+    FluxUpvalue **uvs = NULL;
+    if (fn->upvalue_count > 0) {
+        uvs = FLUX_ALLOC(FluxUpvalue *, fn->upvalue_count);
+        vm->bytes_allocated += uv_sz;
+        for (int i = 0; i < fn->upvalue_count; i++) uvs[i] = NULL;
+    }
     FluxClosure *cl   = ALLOC_OBJ(vm, FluxClosure, OBJ_CLOSURE);
     cl->function       = fn;
     cl->upvalues       = uvs;
@@ -459,12 +491,16 @@ FluxCoroutine *object_coroutine_new(FluxVM *vm, FluxClosure *closure) {
     FluxCoroutine *co   = ALLOC_OBJ(vm, FluxCoroutine, OBJ_COROUTINE);
     co->state           = CORO_SUSPENDED;
     co->closure         = closure;
+    /* Raw alloc + direct bytes_allocated tracking (no GC trigger — the
+     * coroutine object is on vm->objects but may not be GC-rooted yet). */
     co->stack           = FLUX_ALLOC(Value, CORO_STACK_INITIAL);
     co->stack_top       = co->stack;
     co->stack_capacity  = CORO_STACK_INITIAL;
     co->frames          = FLUX_ALLOC(CallFrame, CORO_FRAMES_INITIAL);
     co->frame_count     = 0;
     co->frame_capacity  = CORO_FRAMES_INITIAL;
+    vm->bytes_allocated += sizeof(Value)     * CORO_STACK_INITIAL
+                         + sizeof(CallFrame) * CORO_FRAMES_INITIAL;
     co->result          = value_null();
     return co;
 }
@@ -474,7 +510,6 @@ FluxCoroutine *object_coroutine_new(FluxVM *vm, FluxClosure *closure) {
  * ---------------------------------------------------------------------- */
 
 void object_free(FluxVM *vm, FluxObject *obj) {
-    (void)vm;
     switch (obj->type) {
         case OBJ_STRING: {
             FluxString *s = (FluxString *)obj;
@@ -482,13 +517,20 @@ void object_free(FluxVM *vm, FluxObject *obj) {
             break;
         }
         case OBJ_LIST: {
+            /* Deduct the element backing-buffer size that was tracked by
+             * gc_value_array_write() as the list grew. */
             FluxList *l = (FluxList *)obj;
+            if (l->elements.capacity > 0)
+                vm->bytes_allocated -= sizeof(Value) * (size_t)l->elements.capacity;
             value_array_free(&l->elements);
             FLUX_FREE(l);
             break;
         }
         case OBJ_DICT: {
+            /* Deduct the entries array size that was tracked by dict_grow(). */
             FluxDict *d = (FluxDict *)obj;
+            if (d->capacity > 0)
+                vm->bytes_allocated -= sizeof(DictEntry) * (size_t)d->capacity;
             dict_free(d);
             FLUX_FREE(d);
             break;
@@ -504,7 +546,10 @@ void object_free(FluxVM *vm, FluxObject *obj) {
             break;
         }
         case OBJ_CLOSURE: {
+            /* Deduct the upvalue pointer array size tracked in object_closure_new(). */
             FluxClosure *cl = (FluxClosure *)obj;
+            if (cl->upvalue_count > 0)
+                vm->bytes_allocated -= sizeof(FluxUpvalue *) * (size_t)cl->upvalue_count;
             FLUX_FREE(cl->upvalues);
             FLUX_FREE(cl);
             break;
@@ -524,7 +569,10 @@ void object_free(FluxVM *vm, FluxObject *obj) {
             FLUX_FREE(obj);
             break;
         case OBJ_COROUTINE: {
+            /* Deduct stack and frame array sizes tracked in object_coroutine_new(). */
             FluxCoroutine *co = (FluxCoroutine *)obj;
+            vm->bytes_allocated -= sizeof(Value)     * (size_t)co->stack_capacity
+                                 + sizeof(CallFrame) * (size_t)co->frame_capacity;
             FLUX_FREE(co->stack);
             FLUX_FREE(co->frames);
             FLUX_FREE(co);

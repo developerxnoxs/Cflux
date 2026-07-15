@@ -86,6 +86,11 @@ void vm_destroy(FluxVM *vm) {
         obj = next;
     }
     FLUX_FREE(vm->strings.data);
+    /* Deduct the grey_stack backing array from bytes_allocated before freeing
+     * so the accounting stays accurate (it was added incrementally in
+     * gc_mark_object each time the stack grew, but never decremented). */
+    if (vm->grey_capacity > 0)
+        vm->bytes_allocated -= sizeof(FluxObject *) * (size_t)vm->grey_capacity;
     FLUX_FREE(vm->grey_stack);
     FLUX_FREE(vm->ready_queue);
     FLUX_FREE(vm->io_futures);

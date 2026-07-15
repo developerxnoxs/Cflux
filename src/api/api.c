@@ -199,27 +199,38 @@ void flux_register_function(FluxVM *vm, const char *name, FluxNativeFn fn, int a
 
 FluxResult flux_call(FluxVM *vm, const char *func_name,
                      int argc, FluxValue *argv, FluxValue *result_out) {
+    /* Look up the function in globals.  Protect the name string from GC by
+     * pushing it onto the stack while we use it. */
     FluxString *name = object_string_copy(vm, func_name, (int)strlen(func_name));
+    vm_push(vm, value_object((FluxObject *)name));
+
     Value fn_val;
     if (!dict_get(vm->globals, name, &fn_val)) {
+        vm_pop(vm); /* name */
         snprintf(vm->error_msg, sizeof(vm->error_msg),
                  "Function '%s' not found", func_name);
+        vm->has_error = true;
         return FLUX_RUNTIME_ERROR;
     }
+    vm_pop(vm); /* name — no longer needed */
 
-    /* Push callee then arguments */
-    vm_push(vm, fn_val);
-    for (int i = 0; i < argc; i++)
-        vm_push(vm, fv_to_v(argv[i]));
+    /* Convert arguments and invoke via vm_invoke, which handles both
+     * native functions (returns immediately) and Flux closures (drives
+     * vm_run to completion) and correctly protects all values from GC. */
+    Value *args = NULL;
+    if (argc > 0) {
+        args = FLUX_ALLOC(Value, argc);
+        for (int i = 0; i < argc; i++)
+            args[i] = fv_to_v(argv[i]);
+    }
 
-    VMResult r = vm_call_value(vm, fn_val, argc);
-    if (r != VM_OK) return FLUX_RUNTIME_ERROR;
+    Value result = vm_invoke(vm, fn_val, args, argc);
+    FLUX_FREE(args);
 
-    /* Run until the frame returns */
-    /* Re-enter the dispatch loop */
-    /* TODO: proper re-entry; for now run a quick eval */
-    (void)result_out;
-    return r == VM_OK ? FLUX_OK : FLUX_RUNTIME_ERROR;
+    if (vm->has_error) return FLUX_RUNTIME_ERROR;
+
+    if (result_out) *result_out = v_to_fv(result);
+    return FLUX_OK;
 }
 
 /* -------------------------------------------------------------------------

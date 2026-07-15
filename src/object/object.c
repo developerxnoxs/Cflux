@@ -458,7 +458,13 @@ FluxClosure *object_closure_new(FluxVM *vm, FluxFunction *fn) {
 FluxClass *object_class_new(FluxVM *vm, FluxString *name) {
     FluxClass *k = ALLOC_OBJ(vm, FluxClass, OBJ_CLASS);
     k->name      = name;
-    k->methods   = object_dict_new(vm);
+    k->methods   = NULL; /* safe sentinel before second allocation */
+    /* Push k onto the VM stack so the GC can reach it if object_dict_new()
+     * triggers a collection cycle.  Without this, k is live in C but not
+     * reachable from any GC root and would be swept. */
+    vm_push(vm, value_object((FluxObject *)k));
+    k->methods = object_dict_new(vm);
+    vm_pop(vm);
     return k;
 }
 
@@ -469,7 +475,13 @@ FluxClass *object_class_new(FluxVM *vm, FluxString *name) {
 FluxInstance *object_instance_new(FluxVM *vm, FluxClass *klass) {
     FluxInstance *inst = ALLOC_OBJ(vm, FluxInstance, OBJ_INSTANCE);
     inst->klass  = klass;
+    inst->fields = NULL; /* safe sentinel before second allocation */
+    /* Push inst onto the VM stack so the GC can reach it if object_dict_new()
+     * triggers a collection cycle.  Without this, inst is live in C but not
+     * reachable from any GC root and would be swept. */
+    vm_push(vm, value_object((FluxObject *)inst));
     inst->fields = object_dict_new(vm);
+    vm_pop(vm);
     return inst;
 }
 

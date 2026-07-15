@@ -19,23 +19,32 @@ VM_OBJ  := $(BUILD)/util.o    \
             $(BUILD)/runtime.o \
             $(BUILD)/api.o
 
-# Standard library objects — one per module
+# Standard library objects — only `core` is statically linked; every other
+# module (math, io, time, fs, os, sys, json) is built as its own lazily-
+# loaded .so under stdlib/<name>/ (see the `stdlib` target below).
 STDLIB_OBJ := \
             $(BUILD)/stdlib.o       \
-            $(BUILD)/stdlib_core.o  \
-            $(BUILD)/stdlib_math.o  \
-            $(BUILD)/stdlib_io.o    \
-            $(BUILD)/stdlib_time.o  \
-            $(BUILD)/stdlib_fs.o    \
-            $(BUILD)/stdlib_os.o    \
-            $(BUILD)/stdlib_sys.o   \
-            $(BUILD)/stdlib_json.o
+            $(BUILD)/stdlib_core.o
 
 LIB_OBJ := $(VM_OBJ) $(STDLIB_OBJ)
 
-.PHONY: all clean test extensions
+.PHONY: all clean test extensions stdlib
 
-all: $(BUILD)/flux $(BUILD)/libflux.a
+all: $(BUILD)/flux $(BUILD)/libflux.a stdlib
+
+# ----- stdlib modules (.so plugins, part of `all`) -----
+# Each subfolder under stdlib/ has its own Makefile that builds
+# stdlib/<name>/lib<name>.so. These are Flux's own official modules
+# (math, io, time, fs, os, sys, json) — unlike extension/, they only depend
+# on libc/libm, so they're built by default whenever `all` runs, and loaded
+# lazily the first time a script does `import <name>` (see vm.c).
+stdlib:
+	@for d in stdlib/*/; do \
+		if [ -f "$${d}Makefile" ]; then \
+			echo "==> building stdlib module: $$d"; \
+			$(MAKE) -C "$$d" FLUX_INCLUDE=$(CURDIR)/include || exit 1; \
+		fi; \
+	done
 
 # ----- native extensions (optional; not part of `all`) -----
 # Each subfolder under extension/ has its own Makefile that builds
@@ -44,7 +53,7 @@ all: $(BUILD)/flux $(BUILD)/libflux.a
 # not be installed; run `make extensions` explicitly once those are ready.
 extensions:
 	@for d in extension/*/; do \
-		if [ -f "$$d""Makefile" ]; then \
+		if [ -f "$${d}Makefile" ]; then \
 			echo "==> building extension: $$d"; \
 			$(MAKE) -C "$$d" FLUX_INCLUDE=$(CURDIR)/include || exit 1; \
 		fi; \
@@ -77,24 +86,10 @@ $(BUILD)/runtime.o:  src/runtime/runtime.c    | $(BUILD)
 $(BUILD)/api.o:      src/api/api.c            | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# ----- stdlib modules -----
+# ----- stdlib core (only statically-linked module) -----
 $(BUILD)/stdlib.o:      src/stdlib/stdlib.c       | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 $(BUILD)/stdlib_core.o: src/stdlib/stdlib_core.c  | $(BUILD)
-	$(CC) $(CFLAGS) -c $< -o $@
-$(BUILD)/stdlib_math.o: src/stdlib/stdlib_math.c  | $(BUILD)
-	$(CC) $(CFLAGS) -c $< -o $@
-$(BUILD)/stdlib_io.o:   src/stdlib/stdlib_io.c    | $(BUILD)
-	$(CC) $(CFLAGS) -c $< -o $@
-$(BUILD)/stdlib_time.o: src/stdlib/stdlib_time.c  | $(BUILD)
-	$(CC) $(CFLAGS) -c $< -o $@
-$(BUILD)/stdlib_fs.o:   src/stdlib/stdlib_fs.c    | $(BUILD)
-	$(CC) $(CFLAGS) -c $< -o $@
-$(BUILD)/stdlib_os.o:   src/stdlib/stdlib_os.c    | $(BUILD)
-	$(CC) $(CFLAGS) -c $< -o $@
-$(BUILD)/stdlib_sys.o:  src/stdlib/stdlib_sys.c   | $(BUILD)
-	$(CC) $(CFLAGS) -c $< -o $@
-$(BUILD)/stdlib_json.o: src/stdlib/stdlib_json.c  | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # ----- link targets -----

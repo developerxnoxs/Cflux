@@ -46,20 +46,11 @@ void module_set_value(FluxVM *vm, const char *module_name,
 
 /* -------------------------------------------------------------------------
  * Per-module init functions (called by flux_load_stdlib in stdlib.c)
+ *
+ * Only `core` remains statically linked. math/io/time/fs/os/sys/json now
+ * live under stdlib/<name>/ as native extensions (.so), loaded lazily by
+ * the VM's `import` machinery — see try_load_native_extension() in vm.c.
  * ---------------------------------------------------------------------- */
 void flux_stdlib_load_core(FluxVM *vm);
-void flux_stdlib_load_math(FluxVM *vm);
-void flux_stdlib_load_io(FluxVM *vm);
-void flux_stdlib_load_time(FluxVM *vm);
-void flux_stdlib_load_fs(FluxVM *vm);
-void flux_stdlib_load_os(FluxVM *vm);
-void flux_stdlib_load_sys(FluxVM *vm);
-void flux_stdlib_load_json(FluxVM *vm);
-
-/**
- * Set the command-line arguments made visible as sys.argv.
- * Call BEFORE flux_load_stdlib; argv[0] should be the script path.
- */
-void flux_stdlib_set_argv(int argc, char **argv);
 
 #endif /* FLUX_STDLIB_INTERNAL_H */

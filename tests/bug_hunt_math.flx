@@ -1,4 +1,5 @@
 # Bug Hunt: Arithmetic and Math module
+import math
 print("=== ARITHMETIC ===")
 
 # Integer arithmetic

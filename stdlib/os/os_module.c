@@ -1,10 +1,15 @@
 /**
- * src/stdlib/stdlib_os.c
+ * stdlib/os/os_module.c
  * os module: getenv, getcwd, chdir, listdir, mkdir, remove, rename,
  *            path_join, path_exists, path_basename, path_dirname,
  *            is_file, is_dir, sep
+ *
+ * Built as stdlib/os/libos.so and loaded lazily by the VM the first time a
+ * script does `import os`.
  */
-#include "stdlib_internal.h"
+#include "flux/ext_helpers.h"
+#include <stdio.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <errno.h>
 
@@ -18,6 +23,7 @@
    /* minimal dirent shim not provided — listdir returns empty list on Windows */
 #else
 #  include <dirent.h>
+#  include <unistd.h>
 #  define PATH_SEP "/"
 #endif
 
@@ -156,7 +162,7 @@ static Value os_is_dir(FluxVM *vm, int argc, Value *argv) {
     return value_bool(S_ISDIR(st.st_mode));
 }
 
-void flux_stdlib_load_os(FluxVM *vm) {
+bool flux_extension_init(FluxVM *vm, Value *out_module) {
     static const char *names[] = {
         "getenv","getcwd","chdir","listdir","mkdir","remove","rename",
         "path_join","path_exists","path_basename","path_dirname",
@@ -168,8 +174,15 @@ void flux_stdlib_load_os(FluxVM *vm) {
         os_is_file, os_is_dir
     };
     static int arities[] = { 1,0,1,1,1,1,2, 2,1,1,1, 1,1 };
-    register_module(vm, "os", names, fns, arities, 13);
+    int n = (int)(sizeof(names)/sizeof(names[0]));
 
-    module_set_value(vm, "os", "sep",
+    FluxDict *mod = object_dict_new(vm);
+    vm_push(vm, value_object((FluxObject *)mod));
+    flux_ext_register_fns(vm, mod, names, fns, arities, n);
+    flux_ext_set_value(vm, mod, "sep",
         value_object((FluxObject *)object_string_copy(vm, PATH_SEP, 1)));
+    vm_pop(vm);
+
+    *out_module = value_object((FluxObject *)mod);
+    return true;
 }

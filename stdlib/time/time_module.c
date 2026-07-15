@@ -1,8 +1,19 @@
 /**
- * src/stdlib/stdlib_time.c
- * time module: now, sleep, clock, format, monotonic
+ * stdlib/time/time_module.c
+ * time module: now, sleep, clock, monotonic, format, parse
+ *
+ * Built as stdlib/time/libtime.so and loaded lazily by the VM the first
+ * time a script does `import time`.
  */
-#include "stdlib_internal.h"
+#include "flux/ext_helpers.h"
+#include <time.h>
+#include <string.h>
+
+#ifdef _WIN32
+#  include <windows.h>
+#else
+#  include <unistd.h>
+#endif
 
 static Value t_now(FluxVM *vm, int argc, Value *argv) {
     (void)vm; (void)argc; (void)argv;
@@ -71,9 +82,17 @@ static Value t_parse(FluxVM *vm, int argc, Value *argv) {
     return value_float((double)t);
 }
 
-void flux_stdlib_load_time(FluxVM *vm) {
+bool flux_extension_init(FluxVM *vm, Value *out_module) {
     static const char *names[] = { "now","sleep","clock","monotonic","format","parse" };
     static NativeFn fns[]      = { t_now, t_sleep, t_clock, t_monotonic, t_format, t_parse };
     static int arities[]       = { 0, 1, 0, 0, -1, -1 };
-    register_module(vm, "time", names, fns, arities, 6);
+    int n = (int)(sizeof(names)/sizeof(names[0]));
+
+    FluxDict *mod = object_dict_new(vm);
+    vm_push(vm, value_object((FluxObject *)mod));
+    flux_ext_register_fns(vm, mod, names, fns, arities, n);
+    vm_pop(vm);
+
+    *out_module = value_object((FluxObject *)mod);
+    return true;
 }

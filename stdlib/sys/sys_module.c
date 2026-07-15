@@ -1,21 +1,17 @@
 /**
- * src/stdlib/stdlib_sys.c
+ * stdlib/sys/sys_module.c
  * sys module: argv, exit, platform, version, stdin_read, stdout_write
  *
- * Call flux_stdlib_set_argv(argc, argv) BEFORE flux_load_stdlib to populate
- * sys.argv with the script's command-line arguments.
+ * Built as stdlib/sys/libsys.so and loaded lazily by the VM the first time
+ * a script does `import sys`. argv/version come from the host binary via
+ * flux_get_argv() / flux_version() (flux/flux.h), resolved at dlopen() time
+ * through the -rdynamic-exported symbols of the main `flux` executable.
  */
-#include "stdlib_internal.h"
+#include "flux/ext_helpers.h"
 #include "flux/flux.h"
-
-/* Static storage for argv — set via flux_stdlib_set_argv before VM start */
-static int    s_argc = 0;
-static char **s_argv = NULL;
-
-void flux_stdlib_set_argv(int argc, char **argv) {
-    s_argc = argc;
-    s_argv = argv;
-}
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 static Value sys_exit(FluxVM *vm, int argc, Value *argv) {
     (void)vm;
@@ -41,22 +37,28 @@ static Value sys_stdout_write(FluxVM *vm, int argc, Value *argv) {
     return value_null();
 }
 
-void flux_stdlib_load_sys(FluxVM *vm) {
+bool flux_extension_init(FluxVM *vm, Value *out_module) {
     static const char *names[] = { "exit","stdin_read","stdout_write" };
     static NativeFn fns[]      = { sys_exit, sys_stdin_read, sys_stdout_write };
     static int arities[]       = { -1, 0, -1 };
-    register_module(vm, "sys", names, fns, arities, 3);
+    int n = (int)(sizeof(names)/sizeof(names[0]));
 
-    /* sys.argv — list of command-line arguments */
+    FluxDict *mod = object_dict_new(vm);
+    vm_push(vm, value_object((FluxObject *)mod));
+    flux_ext_register_fns(vm, mod, names, fns, arities, n);
+
+    /* sys.argv — list of command-line arguments, set via flux_set_argv() at
+     * process startup (see main.c) and retrieved here lazily. */
+    int argc = 0; char **host_argv = NULL;
+    flux_get_argv(&argc, &host_argv);
     FluxList *argv_list = object_list_new(vm);
     vm_push(vm, value_object((FluxObject *)argv_list));
-    for (int i = 0; i < s_argc; i++) {
-        FluxString *s = object_string_copy(vm, s_argv[i], (int)strlen(s_argv[i]));
+    for (int i = 0; i < argc; i++) {
+        FluxString *s = object_string_copy(vm, host_argv[i], (int)strlen(host_argv[i]));
         value_array_write(&argv_list->elements, value_object((FluxObject *)s));
     }
     vm_pop(vm);
-    module_set_value(vm, "sys", "argv",
-        value_object((FluxObject *)argv_list));
+    flux_ext_set_value(vm, mod, "argv", value_object((FluxObject *)argv_list));
 
     /* sys.platform */
 #if defined(_WIN32)
@@ -66,11 +68,15 @@ void flux_stdlib_load_sys(FluxVM *vm) {
 #else
     const char *plat = "linux";
 #endif
-    module_set_value(vm, "sys", "platform",
+    flux_ext_set_value(vm, mod, "platform",
         value_object((FluxObject *)object_string_copy(vm, plat, (int)strlen(plat))));
 
     /* sys.version */
     const char *ver = flux_version();
-    module_set_value(vm, "sys", "version",
+    flux_ext_set_value(vm, mod, "version",
         value_object((FluxObject *)object_string_copy(vm, ver, (int)strlen(ver))));
+
+    vm_pop(vm);
+    *out_module = value_object((FluxObject *)mod);
+    return true;
 }

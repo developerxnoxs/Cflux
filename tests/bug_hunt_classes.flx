@@ -1,4 +1,5 @@
 # Bug Hunt: Classes and inheritance
+import math
 print("=== CLASSES ===")
 
 # Basic class

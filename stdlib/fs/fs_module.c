@@ -1,8 +1,13 @@
 /**
- * src/stdlib/stdlib_fs.c
+ * stdlib/fs/fs_module.c
  * fs module: read, write, append, exists, size, remove, rename, copy
+ *
+ * Built as stdlib/fs/libfs.so and loaded lazily by the VM the first time a
+ * script does `import fs`.
  */
-#include "stdlib_internal.h"
+#include "flux/ext_helpers.h"
+#include <stdio.h>
+#include <string.h>
 #include <sys/stat.h>
 
 static Value fs_read(FluxVM *vm, int argc, Value *argv) {
@@ -91,7 +96,7 @@ static Value fs_copy(FluxVM *vm, int argc, Value *argv) {
     return value_bool(true);
 }
 
-void flux_stdlib_load_fs(FluxVM *vm) {
+bool flux_extension_init(FluxVM *vm, Value *out_module) {
     static const char *names[] = {
         "read","write","append","exists","size","remove","rename","copy"
     };
@@ -99,5 +104,13 @@ void flux_stdlib_load_fs(FluxVM *vm) {
         fs_read, fs_write, fs_append, fs_exists, fs_size, fs_remove, fs_rename, fs_copy
     };
     static int arities[] = { 1,2,2,1,1,1,2,2 };
-    register_module(vm, "fs", names, fns, arities, 8);
+    int n = (int)(sizeof(names)/sizeof(names[0]));
+
+    FluxDict *mod = object_dict_new(vm);
+    vm_push(vm, value_object((FluxObject *)mod));
+    flux_ext_register_fns(vm, mod, names, fns, arities, n);
+    vm_pop(vm);
+
+    *out_module = value_object((FluxObject *)mod);
+    return true;
 }

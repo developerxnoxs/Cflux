@@ -1,9 +1,14 @@
 /**
- * src/stdlib/stdlib_math.c
+ * stdlib/math/math_module.c
  * math module: sin, cos, tan, sqrt, pow, floor, ceil, abs, log,
  *              round, min, max, pi, e, tau, inf, nan, hypot, degrees, radians
+ *
+ * Built as stdlib/math/libmath.so (see Makefile) and loaded lazily by the VM
+ * the first time a script does `import math` — see try_load_native_extension
+ * in src/vm/vm.c.
  */
-#include "stdlib_internal.h"
+#include "flux/ext_helpers.h"
+#include <math.h>
 
 static Value m_sin(FluxVM *vm, int argc, Value *argv)   { (void)vm;(void)argc; return value_float(sin(value_to_double(argv[0]))); }
 static Value m_cos(FluxVM *vm, int argc, Value *argv)   { (void)vm;(void)argc; return value_float(cos(value_to_double(argv[0]))); }
@@ -56,7 +61,7 @@ static Value m_gcd(FluxVM *vm, int argc, Value *argv) {
     return value_int(a);
 }
 
-void flux_stdlib_load_math(FluxVM *vm) {
+bool flux_extension_init(FluxVM *vm, Value *out_module) {
     static const char *names[] = {
         "sin","cos","tan","asin","acos","atan","atan2",
         "sqrt","cbrt","pow","exp",
@@ -85,11 +90,18 @@ void flux_stdlib_load_math(FluxVM *vm) {
         1,1,1,2
     };
     int n = (int)(sizeof(names)/sizeof(names[0]));
-    register_module(vm, "math", names, fns, arities, n);
 
-    module_set_value(vm, "math", "pi",  value_float(M_PI));
-    module_set_value(vm, "math", "e",   value_float(M_E));
-    module_set_value(vm, "math", "tau", value_float(2.0 * M_PI));
-    module_set_value(vm, "math", "inf", value_float(INFINITY));
-    module_set_value(vm, "math", "nan", value_float(NAN));
+    FluxDict *mod = object_dict_new(vm);
+    vm_push(vm, value_object((FluxObject *)mod)); /* GC-protect while populating */
+
+    flux_ext_register_fns(vm, mod, names, fns, arities, n);
+    flux_ext_set_value(vm, mod, "pi",  value_float(M_PI));
+    flux_ext_set_value(vm, mod, "e",   value_float(M_E));
+    flux_ext_set_value(vm, mod, "tau", value_float(2.0 * M_PI));
+    flux_ext_set_value(vm, mod, "inf", value_float(INFINITY));
+    flux_ext_set_value(vm, mod, "nan", value_float(NAN));
+
+    vm_pop(vm);
+    *out_module = value_object((FluxObject *)mod);
+    return true;
 }

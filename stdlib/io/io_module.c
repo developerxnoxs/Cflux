@@ -1,9 +1,15 @@
 /**
- * src/stdlib/stdlib_io.c
+ * stdlib/io/io_module.c
  * io module: write, writeln, read_line, read_file, write_file, append_file,
  *            print_err, flush
+ *
+ * Built as stdlib/io/libio.so (see Makefile) and loaded lazily by the VM
+ * the first time a script does `import io`.
  */
-#include "stdlib_internal.h"
+#include "flux/ext_helpers.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 static Value io_write(FluxVM *vm, int argc, Value *argv) {
     for (int i = 0; i < argc; i++) {
@@ -86,7 +92,7 @@ static Value io_flush(FluxVM *vm, int argc, Value *argv) {
     return value_null();
 }
 
-void flux_stdlib_load_io(FluxVM *vm) {
+bool flux_extension_init(FluxVM *vm, Value *out_module) {
     static const char *names[] = {
         "write","writeln","read_line",
         "read_file","write_file","append_file",
@@ -98,5 +104,13 @@ void flux_stdlib_load_io(FluxVM *vm) {
         io_print_err, io_flush
     };
     static int arities[] = { -1,-1,0, 1,2,2, -1,0 };
-    register_module(vm, "io", names, fns, arities, 8);
+    int n = (int)(sizeof(names)/sizeof(names[0]));
+
+    FluxDict *mod = object_dict_new(vm);
+    vm_push(vm, value_object((FluxObject *)mod));
+    flux_ext_register_fns(vm, mod, names, fns, arities, n);
+    vm_pop(vm);
+
+    *out_module = value_object((FluxObject *)mod);
+    return true;
 }

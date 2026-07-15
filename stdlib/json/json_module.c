@@ -1,11 +1,18 @@
 /**
- * src/stdlib/stdlib_json.c
+ * stdlib/json/json_module.c
  * json module: encode(value) → string, decode(string) → value
  *
  * encode: Flux value → JSON string.
  * decode: JSON string → Flux value (recursive descent parser).
+ *
+ * Built as stdlib/json/libjson.so and loaded lazily by the VM the first
+ * time a script does `import json`.
  */
-#include "stdlib_internal.h"
+#include "flux/ext_helpers.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
 
 /* =========================================================================
  * JSON encode
@@ -319,12 +326,20 @@ static Value json_decode(FluxVM *vm, int argc, Value *argv) {
 }
 
 /* =========================================================================
- * flux_stdlib_load_json
+ * flux_extension_init
  * ====================================================================== */
 
-void flux_stdlib_load_json(FluxVM *vm) {
+bool flux_extension_init(FluxVM *vm, Value *out_module) {
     static const char *names[] = { "encode", "decode" };
     static NativeFn fns[]      = { json_encode, json_decode };
     static int arities[]       = { 1, 1 };
-    register_module(vm, "json", names, fns, arities, 2);
+    int n = (int)(sizeof(names)/sizeof(names[0]));
+
+    FluxDict *mod = object_dict_new(vm);
+    vm_push(vm, value_object((FluxObject *)mod));
+    flux_ext_register_fns(vm, mod, names, fns, arities, n);
+    vm_pop(vm);
+
+    *out_module = value_object((FluxObject *)mod);
+    return true;
 }

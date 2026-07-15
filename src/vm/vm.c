@@ -416,23 +416,33 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count);
  * Native extension (.so) loading — see include/flux/extension.h
  *
  * When a plain `import <name>` can't find `<name>.flx`, we look for a
- * native extension at `extension/<name>/lib<name>.so` (next to the
- * importing file first, then the process cwd — mirroring
- * resolve_import_path's own search order) and, if present, dlopen() it and
- * call its `flux_extension_init` entry point once.
+ * native extension at `<dir>/lib<name>.so`, trying two base directories in
+ * order:
+ *   1. stdlib/<name>/    — Flux's own official modules (math, io, time,
+ *      fs, os, sys, json); tried first since these are the interpreter's
+ *      own standard library.
+ *   2. extension/<name>/ — user/third-party native extensions.
+ * Each base directory is itself searched next to the importing file first,
+ * then the process cwd — mirroring resolve_import_path's own search order.
+ * If found, the .so is dlopen()'d and its `flux_extension_init` entry
+ * point is called once.
  * ---------------------------------------------------------------------- */
-static bool try_load_native_extension(FluxVM *vm, const char *module_name, Value *out) {
-    char path[FLUX_IMPORT_PATH_MAX];
-    bool found = false;
-
+static bool find_native_extension_path(FluxVM *vm, const char *base_dir,
+        const char *module_name, char *path, size_t path_size) {
     const char *cur_dir = vm_current_import_dir(vm);
     if (cur_dir) {
-        snprintf(path, sizeof(path), "%s/extension/%s/lib%s.so", cur_dir, module_name, module_name);
-        if (file_exists(path)) found = true;
+        snprintf(path, path_size, "%s/%s/%s/lib%s.so", cur_dir, base_dir, module_name, module_name);
+        if (file_exists(path)) return true;
     }
+    snprintf(path, path_size, "%s/%s/lib%s.so", base_dir, module_name, module_name);
+    return file_exists(path);
+}
+
+static bool try_load_native_extension(FluxVM *vm, const char *module_name, Value *out) {
+    char path[FLUX_IMPORT_PATH_MAX];
+    bool found = find_native_extension_path(vm, "stdlib", module_name, path, sizeof(path));
     if (!found) {
-        snprintf(path, sizeof(path), "extension/%s/lib%s.so", module_name, module_name);
-        if (file_exists(path)) found = true;
+        found = find_native_extension_path(vm, "extension", module_name, path, sizeof(path));
     }
     if (!found) return false;
 

@@ -98,6 +98,13 @@ void flux_load_module(FluxVM *vm, const char *module_name);
  */
 void flux_set_argv(int argc, char **argv);
 
+/**
+ * Retrieve the command-line arguments previously stored by flux_set_argv().
+ * Used by the lazily-loaded `sys` stdlib module (stdlib/sys/sys_module.so)
+ * to build sys.argv only when `import sys` actually happens.
+ */
+void flux_get_argv(int *out_argc, char ***out_argv);
+
 /* -------------------------------------------------------------------------
  * Native function registration
  * ---------------------------------------------------------------------- */

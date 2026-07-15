@@ -148,6 +148,14 @@ func greet(name: string) -> string:
 - Async/await coroutines
 - Standard library: `io`, `fs`, `math`, `time`, `string`
 
+## stdlib Modules
+
+| Modul | Lokasi | Keterangan |
+|-------|--------|------------|
+| core | statically linked | `print`, `len`, `range`, `map`, `filter`, `reduce`, dll. |
+| math, io, fs, time, os, sys, json | `stdlib/<name>/lib<name>.so` | Dimuat lazily via `import <name>` |
+| shell | `stdlib/shell/libshell.so` | Eksekusi perintah sistem: `exec`, `capture`, `spawn` |
+
 ## User Preferences
 
 - Keep original C project structure; no migration to other build systems

@@ -1,0 +1,35 @@
+import shell
+
+# --- shell.exec(cmd) ---
+# Menjalankan perintah via shell, output langsung ke terminal.
+# Mengembalikan exit code (int).
+print("=== shell.exec ===")
+code = shell.exec("echo Halo dari shell!")
+print("exit code:", code)
+
+# --- shell.capture(cmd) ---
+# Menjalankan perintah dan menangkap stdout + stderr.
+# Mengembalikan dict: {stdout, stderr, code}
+print("\n=== shell.capture ===")
+result = shell.capture("ls -1 examples/")
+print("stdout:", result["stdout"])
+print("stderr:", result["stderr"])
+print("code  :", result["code"])
+
+# Contoh dengan perintah yang gagal
+result2 = shell.capture("ls /direktori_tidak_ada")
+print("\nPerintah gagal — code:", result2["code"])
+print("stderr:", result2["stderr"])
+
+# --- shell.spawn(cmd, args) ---
+# Menjalankan program dengan daftar argumen eksplisit (tanpa shell).
+# Lebih aman dari injeksi perintah.
+print("\n=== shell.spawn ===")
+r = shell.spawn("echo", ["Halo", "dari", "spawn!"])
+print("stdout:", r["stdout"])
+print("code  :", r["code"])
+
+# Contoh: jalankan python3 --version
+r2 = shell.spawn("python3", ["--version"])
+print("python3 version stdout:", r2["stdout"])
+print("python3 version stderr:", r2["stderr"])

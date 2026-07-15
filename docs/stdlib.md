@@ -14,6 +14,7 @@ Semua modul di bawah ini tersedia secara bawaan — tidak perlu file tambahan. G
 | [os](#os) | Sistem operasi: `getcwd`, `listdir`, `mkdir`, `path_join`, `getenv`, dst. |
 | [sys](#sys) | Proses: `argv`, `platform`, `version`, `exit`, `stdin_read` |
 | [json](#json) | Encode dan decode JSON |
+| [shell](#shell) | Eksekusi perintah sistem: `exec`, `capture`, `spawn` |
 
 ---
 
@@ -801,4 +802,153 @@ from io import read_file
 loaded = decode(read_file("/tmp/config.json"))
 print(loaded["port"])     # 8080
 print(loaded["allowed"])  # [GET, POST, PUT]
+```
+
+---
+
+## shell
+
+Modul `shell` memungkinkan skrip Flux menjalankan perintah sistem operasi dan menangkap outputnya — mirip seperti `subprocess` dan `os.system()` di Python, tapi dengan nama dan API yang berbeda.
+
+```flux
+import shell
+```
+
+---
+
+### `shell.exec(cmd)`
+
+Jalankan `cmd` melalui shell (`/bin/sh -c`). Output (stdout/stderr) langsung ditampilkan di terminal. Kembalikan **exit code** sebagai `int`.
+
+| Parameter | Tipe | Keterangan |
+|-----------|------|------------|
+| `cmd`     | `string` | Perintah shell yang akan dijalankan |
+
+**Return:** `int` — exit code (0 = sukses, bukan 0 = gagal)
+
+```flux
+import shell
+
+code = shell.exec("echo Halo Dunia!")
+print("exit code:", code)   # exit code: 0
+
+code = shell.exec("ls /tidak_ada 2>/dev/null")
+print("exit code:", code)   # exit code: 2
+```
+
+> **Catatan:** Fungsi ini tidak menangkap output. Gunakan `shell.capture()` jika ingin mengambil stdout/stderr sebagai string.
+
+---
+
+### `shell.capture(cmd)`
+
+Jalankan `cmd` melalui shell dan **tangkap stdout serta stderr secara terpisah**. Output tidak ditampilkan di terminal.
+
+| Parameter | Tipe | Keterangan |
+|-----------|------|------------|
+| `cmd`     | `string` | Perintah shell yang akan dijalankan |
+
+**Return:** `dict` dengan tiga kunci:
+
+| Kunci     | Tipe     | Isi |
+|-----------|----------|-----|
+| `stdout`  | `string` | Keluaran standar (stdout) dari perintah |
+| `stderr`  | `string` | Keluaran error (stderr) dari perintah |
+| `code`    | `int`    | Exit code proses |
+
+```flux
+import shell
+
+# Tangkap output perintah
+result = shell.capture("ls -1 /tmp")
+print(result["stdout"])    # daftar file di /tmp
+print(result["code"])      # 0
+
+# Tangkap perintah yang gagal
+r = shell.capture("ls /direktori_tidak_ada")
+print(r["code"])            # 2
+print(r["stderr"])          # ls: cannot access '/direktori_tidak_ada': No such file or directory
+
+# Contoh: ambil tanggal sistem
+r = shell.capture("date +%Y-%m-%d")
+tanggal = r["stdout"]
+print("Hari ini:", tanggal)
+```
+
+---
+
+### `shell.spawn(cmd, args)`
+
+Jalankan program `cmd` dengan daftar argumen eksplisit, **tanpa melalui shell interpreter**. Lebih aman dari `exec`/`capture` karena tidak rentan terhadap *shell injection*.
+
+| Parameter | Tipe     | Keterangan |
+|-----------|----------|------------|
+| `cmd`     | `string` | Nama atau path program yang akan dijalankan |
+| `args`    | `list`   | Daftar argumen (setiap elemen adalah `string`) |
+
+**Return:** `dict` dengan tiga kunci — sama seperti `shell.capture()`:
+
+| Kunci     | Tipe     | Isi |
+|-----------|----------|-----|
+| `stdout`  | `string` | Keluaran standar (stdout) dari program |
+| `stderr`  | `string` | Keluaran error (stderr) dari program |
+| `code`    | `int`    | Exit code proses |
+
+```flux
+import shell
+
+# Jalankan "echo" dengan argumen terpisah
+r = shell.spawn("echo", ["Halo", "dari", "Flux!"])
+print(r["stdout"])    # Halo dari Flux!
+print(r["code"])      # 0
+
+# Jalankan "grep" untuk mencari kata dalam file
+r = shell.spawn("grep", ["-n", "import", "examples/shell_example.flx"])
+print(r["stdout"])
+
+# Jalankan "wc" untuk menghitung baris
+r = shell.spawn("wc", ["-l", "examples/hello.flx"])
+print(r["stdout"])
+```
+
+> **Kapan pakai `spawn` vs `capture`?**
+> - Gunakan `spawn` bila argumen berasal dari input pengguna (menghindari injection).
+> - Gunakan `capture` bila perintah sudah diketahui dan kamu butuh fitur shell (pipe `|`, redirect `>`, wildcard `*`).
+
+---
+
+### Perbandingan ketiga fungsi
+
+| Fungsi | Melalui shell? | Tangkap output? | Aman dari injection? |
+|--------|:--------------:|:---------------:|:--------------------:|
+| `exec(cmd)` | ✅ | ❌ (tampil di terminal) | ⚠️ |
+| `capture(cmd)` | ✅ | ✅ (stdout + stderr) | ⚠️ |
+| `spawn(cmd, args)` | ❌ | ✅ (stdout + stderr) | ✅ |
+
+---
+
+### Contoh lengkap
+
+```flux
+import shell
+
+# 1. Jalankan perintah sederhana
+shell.exec("mkdir -p /tmp/flux_test")
+
+# 2. Buat file dengan heredoc
+shell.exec("echo 'baris pertama' > /tmp/flux_test/data.txt")
+shell.exec("echo 'baris kedua'  >> /tmp/flux_test/data.txt")
+
+# 3. Baca file via capture
+r = shell.capture("cat /tmp/flux_test/data.txt")
+print("Isi file:")
+print(r["stdout"])
+
+# 4. Hitung baris dengan spawn (aman)
+r2 = shell.spawn("wc", ["-l", "/tmp/flux_test/data.txt"])
+print("Jumlah baris:", r2["stdout"])
+
+# 5. Bersihkan
+shell.exec("rm -rf /tmp/flux_test")
+print("Selesai.")
 ```

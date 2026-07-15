@@ -1,7 +1,8 @@
 # Makefile for Flux
 CC      ?= gcc
 CFLAGS  := -std=gnu17 -D_GNU_SOURCE -Wall -Wextra -Wpedantic \
-           -Wno-unused-parameter -Wno-unused-variable -Iinclude -g -O0
+           -Wno-unused-parameter -Wno-unused-variable -Iinclude -g -O0 \
+           -U_FORTIFY_SOURCE -Wno-cpp
 LDFLAGS := -lm -ldl
 
 BUILD   := build_make

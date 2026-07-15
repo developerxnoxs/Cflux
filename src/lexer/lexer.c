@@ -101,17 +101,6 @@ static void skip_whitespace(Lexer *lex) {
  * Indentation helpers
  * ---------------------------------------------------------------------- */
 
-/* Count leading spaces/tabs on current line (called at start of line) */
-static int measure_indent(const Lexer *lex) {
-    const char *p = lex->current;
-    int spaces = 0;
-    while (*p == ' ' || *p == '\t') {
-        spaces += (*p == '\t') ? 4 : 1; /* treat tab as 4 spaces */
-        p++;
-    }
-    return spaces;
-}
-
 /* -------------------------------------------------------------------------
  * Keyword table
  * ---------------------------------------------------------------------- */

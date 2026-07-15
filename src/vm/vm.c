@@ -462,7 +462,14 @@ static bool try_load_native_extension(FluxVM *vm, const char *module_name, Value
     }
 
     dlerror(); /* clear any stale error before dlsym, per dlsym(3) convention */
-    FluxExtensionInitFn init_fn = (FluxExtensionInitFn)dlsym(handle, FLUX_EXTENSION_INIT_SYMBOL);
+    /* POSIX explicitly allows casting dlsym()'s object pointer to a function
+     * pointer, but ISO C does not, so a direct cast trips -Wpedantic. Route
+     * through memcpy to perform the same reinterpretation without the
+     * diagnostic (both pointer kinds are the same size on every platform
+     * dlsym is supported on). */
+    void *init_sym = dlsym(handle, FLUX_EXTENSION_INIT_SYMBOL);
+    FluxExtensionInitFn init_fn;
+    memcpy(&init_fn, &init_sym, sizeof(init_fn));
     const char *sym_err = dlerror();
     if (!init_fn || sym_err) {
         vm_runtime_error(vm, "Extension '%s' (%s) is missing the '%s' entry point",

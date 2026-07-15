@@ -9,6 +9,7 @@
 #include "flux/ast.h"
 #include "flux/parser.h"
 #include "flux/extension.h"
+#include <uv.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
@@ -53,6 +54,15 @@ FluxVM *vm_new(void) {
     vm->ready_count       = 0;
     vm->ready_capacity    = 0;
     vm->current_coroutine = NULL;
+    vm->main_coroutine    = NULL;
+
+    /* libuv event loop */
+    vm->uv_loop = (uv_loop_t *)flux_malloc(sizeof(uv_loop_t));
+    uv_loop_init(vm->uv_loop);
+    vm->pending_io_count    = 0;
+    vm->io_futures          = NULL;
+    vm->io_future_count     = 0;
+    vm->io_future_capacity  = 0;
 
     vm->has_error = false;
     vm->error_msg[0] = '\0';
@@ -77,6 +87,12 @@ void vm_destroy(FluxVM *vm) {
     FLUX_FREE(vm->strings.data);
     FLUX_FREE(vm->grey_stack);
     FLUX_FREE(vm->ready_queue);
+    FLUX_FREE(vm->io_futures);
+    /* Close the libuv event loop.  Drain any still-open handles first so
+     * uv_loop_close() does not return UV_EBUSY. */
+    uv_run(vm->uv_loop, UV_RUN_NOWAIT);
+    uv_loop_close(vm->uv_loop);
+    FLUX_FREE(vm->uv_loop);
     for (int i = 0; i < vm->extension_handle_count; i++) {
         dlclose(vm->extension_handles[i]);
     }
@@ -146,6 +162,215 @@ void vm_register_native(FluxVM *vm, const char *name, NativeFn fn, int arity) {
     dict_set(vm, vm->globals, s, value_object((FluxObject *)nat));
     vm_pop(vm);
     vm_pop(vm);
+}
+
+/* -------------------------------------------------------------------------
+ * Coroutine context save / restore
+ *
+ * Each FluxCoroutine owns its own heap-allocated stack + frame arrays.
+ * When a coroutine suspends (OP_YIELD / OP_AWAIT) the current VM context
+ * is copied there; when it resumes the saved state is copied back.
+ *
+ * Crucially, CallFrame.slots is an absolute pointer into vm->stack.  We
+ * convert it to an integer offset on save and restore the pointer on resume
+ * so that the address remains valid after the copy.
+ *
+ * IMPORTANT: the caller must SYNC_IP() and close_upvalues(vm, vm->stack)
+ * before calling coro_save() to ensure the frame IP and all open upvalues
+ * are in a consistent state.
+ * ---------------------------------------------------------------------- */
+
+static void coro_save(FluxVM *vm, FluxCoroutine *co) {
+    int stack_size = (int)(vm->stack_top - vm->stack);
+
+    /* Grow own stack if needed */
+    if (stack_size > co->stack_capacity) {
+        int new_cap = stack_size * 2 + 8;
+        co->stack          = (Value *)flux_realloc(co->stack,
+                                 sizeof(Value) * (size_t)new_cap);
+        co->stack_capacity = new_cap;
+    }
+    memcpy(co->stack, vm->stack, (size_t)stack_size * sizeof(Value));
+    co->stack_top = co->stack + stack_size;
+
+    int fc = vm->frame_count;
+    /* Grow own frame arrays if needed */
+    if (fc > co->frame_capacity) {
+        int new_cap = fc * 2 + 4;
+        co->frames = (CallFrame *)flux_realloc(co->frames,
+                         sizeof(CallFrame) * (size_t)new_cap);
+        co->frame_slot_offsets = (int *)flux_realloc(co->frame_slot_offsets,
+                                     sizeof(int) * (size_t)new_cap);
+        co->frame_capacity = new_cap;
+    }
+    memcpy(co->frames, vm->frames, (size_t)fc * sizeof(CallFrame));
+    for (int i = 0; i < fc; i++)
+        co->frame_slot_offsets[i] = (int)(vm->frames[i].slots - vm->stack);
+    co->frame_count = fc;
+}
+
+static void coro_restore(FluxVM *vm, FluxCoroutine *co) {
+    int stack_size = (int)(co->stack_top - co->stack);
+    memcpy(vm->stack, co->stack, (size_t)stack_size * sizeof(Value));
+    vm->stack_top = vm->stack + stack_size;
+
+    int fc = co->frame_count;
+    memcpy(vm->frames, co->frames, (size_t)fc * sizeof(CallFrame));
+    for (int i = 0; i < fc; i++)
+        vm->frames[i].slots = vm->stack + co->frame_slot_offsets[i];
+    vm->frame_count = fc;
+}
+
+/* -------------------------------------------------------------------------
+ * Coroutine scheduler
+ * ---------------------------------------------------------------------- */
+
+void vm_scheduler_enqueue(FluxVM *vm, FluxCoroutine *co) {
+    if (vm->ready_count >= vm->ready_capacity) {
+        int new_cap = vm->ready_capacity == 0 ? 4 : vm->ready_capacity * 2;
+        vm->ready_queue = (FluxCoroutine **)flux_realloc(
+            vm->ready_queue, sizeof(FluxCoroutine *) * (size_t)new_cap);
+        vm->ready_capacity = new_cap;
+    }
+    vm->ready_queue[vm->ready_count++] = co;
+}
+
+static FluxCoroutine *vm_scheduler_dequeue(FluxVM *vm) {
+    if (vm->ready_count == 0) return NULL;
+    FluxCoroutine *co = vm->ready_queue[0];
+    vm->ready_count--;
+    if (vm->ready_count > 0)
+        memmove(vm->ready_queue, vm->ready_queue + 1,
+                sizeof(FluxCoroutine *) * (size_t)vm->ready_count);
+    return co;
+}
+
+/* Forward declaration — vm_scheduler_run_step calls vm_run */
+static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result);
+
+/* Run one ready coroutine to completion / suspension. */
+static VMResult vm_scheduler_run_step(FluxVM *vm) {
+    FluxCoroutine *co = vm_scheduler_dequeue(vm);
+    if (!co) return VM_OK;
+
+    /* Safety: skip stale entries (already dead or double-enqueued). */
+    if (co->state == CORO_DEAD || co->state == CORO_RUNNING)
+        return VM_OK;
+
+    coro_restore(vm, co);
+    vm->current_coroutine = co;
+    co->state = CORO_RUNNING;
+
+    VMResult r = vm_run(vm, 0, true);
+
+    if (r == VM_RUNTIME_ERROR) {
+        vm->current_coroutine = NULL;
+        vm->stack_top  = vm->stack;
+        vm->frame_count = 0;
+        return VM_RUNTIME_ERROR;
+    }
+
+    if (r == VM_OK) {
+        /* Coroutine finished: capture return value */
+        Value result = (vm->stack_top > vm->stack) ? vm_pop(vm) : value_null();
+        vm->stack_top  = vm->stack;
+        vm->frame_count = 0;
+        co->result = result;
+        co->state  = CORO_DEAD;
+
+        /* Wake the coroutine that was awaiting this one */
+        if (co->awaited_by) {
+            FluxCoroutine *waiter = co->awaited_by;
+            co->awaited_by = NULL;
+            /* Push result directly onto waiter's saved stack */
+            int n = (int)(waiter->stack_top - waiter->stack);
+            if (n >= waiter->stack_capacity) {
+                int new_cap = waiter->stack_capacity * 2 + 4;
+                waiter->stack = (Value *)flux_realloc(waiter->stack,
+                                     sizeof(Value) * (size_t)new_cap);
+                waiter->stack_top      = waiter->stack + n;
+                waiter->stack_capacity = new_cap;
+            }
+            waiter->stack[n] = result;
+            waiter->stack_top = waiter->stack + n + 1;
+            waiter->state = CORO_SUSPENDED;
+            vm_scheduler_enqueue(vm, waiter);
+        }
+    }
+    /* r == VM_YIELD: coroutine suspended itself; state already saved. */
+
+    vm->current_coroutine = NULL;
+    return VM_OK;
+}
+
+VMResult vm_scheduler_run(FluxVM *vm) {
+    while (vm->ready_count > 0 || vm->pending_io_count > 0) {
+        /* Drain all currently-ready coroutines */
+        while (vm->ready_count > 0) {
+            VMResult r = vm_scheduler_run_step(vm);
+            if (r == VM_RUNTIME_ERROR) return r;
+        }
+        /* Let libuv fire I/O callbacks (which re-enqueue waiting coroutines) */
+        if (vm->pending_io_count > 0 && vm->ready_count == 0) {
+            int uv_r = uv_run(vm->uv_loop, UV_RUN_ONCE);
+            if (uv_r == 0 && vm->ready_count == 0 && vm->pending_io_count > 0)
+                break; /* loop exhausted without satisfying all futures */
+        }
+    }
+    return VM_OK;
+}
+
+/* -------------------------------------------------------------------------
+ * I/O future lifecycle helpers  (used by the async stdlib extension)
+ * ---------------------------------------------------------------------- */
+
+void vm_io_future_register(FluxVM *vm, FluxFuture *fut) {
+    /* Add to GC-root list so the future isn't collected while libuv works */
+    if (vm->io_future_count >= vm->io_future_capacity) {
+        int new_cap = vm->io_future_capacity == 0 ? 4 : vm->io_future_capacity * 2;
+        vm->io_futures = (FluxFuture **)flux_realloc(
+            vm->io_futures, sizeof(FluxFuture *) * (size_t)new_cap);
+        vm->io_future_capacity = new_cap;
+    }
+    vm->io_futures[vm->io_future_count++] = fut;
+    vm->pending_io_count++;
+}
+
+void vm_io_future_complete(FluxVM *vm, FluxFuture *fut, Value result) {
+    fut->resolved = true;
+    fut->result   = result;
+    vm->pending_io_count--;
+
+    /* Remove from GC-root list */
+    for (int i = 0; i < vm->io_future_count; i++) {
+        if (vm->io_futures[i] == fut) {
+            vm->io_futures[i] = vm->io_futures[--vm->io_future_count];
+            break;
+        }
+    }
+
+    /* Wake the coroutine suspended on this future */
+    if (fut->waiting) {
+        FluxCoroutine *co = fut->waiting;
+        fut->waiting = NULL;
+        /* Push the result directly onto the suspended coroutine's saved stack.
+         * The coroutine was suspended right after popping the future from the
+         * stack (in OP_AWAIT), so adding one value here is exactly what it
+         * needs when the scheduler resumes it with coro_restore. */
+        int n = (int)(co->stack_top - co->stack);
+        if (n >= co->stack_capacity) {
+            int new_cap = co->stack_capacity * 2 + 4;
+            co->stack = (Value *)flux_realloc(co->stack,
+                             sizeof(Value) * (size_t)new_cap);
+            co->stack_top      = co->stack + n;
+            co->stack_capacity = new_cap;
+        }
+        co->stack[n] = result;
+        co->stack_top = co->stack + n + 1;
+        co->pending_future = NULL;
+        co->state = CORO_SUSPENDED;
+        vm_scheduler_enqueue(vm, co);
+    }
 }
 
 /* -------------------------------------------------------------------------
@@ -419,7 +644,6 @@ static Value value_add(FluxVM *vm, Value a, Value b) {
  * below) passes true so a *value* call - e.g. a callback invoked from a
  * native function like map()/filter()/reduce() - gets its result left on
  * top of the stack for the caller to vm_pop(). */
-static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result);
 
 /* -------------------------------------------------------------------------
  * Native extension (.so) loading — see include/flux/extension.h
@@ -509,7 +733,11 @@ VMResult vm_execute(FluxVM *vm, FluxFunction *fn) {
     vm_push(vm, value_object((FluxObject *)main_closure));
     int base = vm->frame_count; /* 0 for a fresh VM */
     call_closure(vm, main_closure, 0);
-    return vm_run(vm, base, false);
+    VMResult r = vm_run(vm, base, false);
+    if (r == VM_RUNTIME_ERROR) return r;
+    /* Drain the coroutine scheduler so spawned tasks (and their I/O waits)
+     * all run to completion after the main script returns. */
+    return vm_scheduler_run(vm);
 }
 
 /* -------------------------------------------------------------------------
@@ -1304,54 +1532,203 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
             }
 
             /* ---- Async / Coroutines -------------------------------- */
+
+            /* spawn f  — wraps a closure in a coroutine, enqueues it, returns handle */
             case OP_CREATE_TASK: {
                 Value callee = vm_pop(vm);
                 if (!IS_CLOSURE(callee))
-                    RUNTIME_ERROR("Expected coroutine function");
-                FluxCoroutine *co = object_coroutine_new(vm, AS_CLOSURE(callee));
+                    RUNTIME_ERROR("spawn requires a function");
+                FluxClosure   *cl = AS_CLOSURE(callee);
+                FluxCoroutine *co = object_coroutine_new(vm, cl);
+                /* Pre-load execution state: stack[0]=closure, frame[0] ready to run */
+                co->stack[0]              = callee;
+                co->stack_top             = co->stack + 1;
+                co->frames[0].closure     = cl;
+                co->frames[0].ip          = cl->function->chunk.code;
+                co->frames[0].slots       = co->stack;
+                co->frame_slot_offsets[0] = 0;
+                co->frame_count           = 1;
+                co->state                 = CORO_SUSPENDED;
                 vm_push(vm, value_object((FluxObject *)co));
+                vm_scheduler_enqueue(vm, co);
                 break;
             }
 
+            /* spawn f(args) — closure + N args on stack; creates pre-loaded coroutine */
+            case OP_SPAWN_CALL: {
+                uint8_t argc = READ_BYTE();
+                Value  *base_slot = vm->stack_top - argc - 1;
+                Value   callee    = *base_slot;
+                if (!IS_CLOSURE(callee))
+                    RUNTIME_ERROR("spawn requires a function");
+                FluxClosure *cl = AS_CLOSURE(callee);
+                if (argc != cl->function->arity)
+                    RUNTIME_ERROR("'%s' expects %d argument(s) but got %d",
+                        cl->function->name ? cl->function->name->chars : "?",
+                        cl->function->arity, argc);
+                FluxCoroutine *co = object_coroutine_new(vm, cl);
+                /* GC-protect while copying args */
+                vm_push(vm, value_object((FluxObject *)co));
+                /* Ensure own stack has room for closure + args */
+                int needed = argc + 1;
+                if (needed > co->stack_capacity) {
+                    int nc = needed * 2 + 8;
+                    co->stack          = (Value *)flux_realloc(co->stack,
+                                             sizeof(Value) * (size_t)nc);
+                    co->stack_capacity = nc;
+                    co->stack_top      = co->stack;
+                }
+                memcpy(co->stack, base_slot, (size_t)(argc + 1) * sizeof(Value));
+                co->stack_top             = co->stack + argc + 1;
+                co->frames[0].closure     = cl;
+                co->frames[0].ip          = cl->function->chunk.code;
+                co->frames[0].slots       = co->stack;
+                co->frame_slot_offsets[0] = 0;
+                co->frame_count           = 1;
+                co->state                 = CORO_SUSPENDED;
+                vm_pop(vm);                          /* un-protect handle */
+                vm->stack_top = base_slot;           /* pop callee + args  */
+                vm_push(vm, value_object((FluxObject *)co));
+                vm_scheduler_enqueue(vm, co);
+                break;
+            }
+
+            /* yield value — suspend the current coroutine and hand value to awaiter */
             case OP_YIELD: {
-                /* Simple yield: just return current value to caller */
                 Value result = vm_pop(vm);
+                FluxCoroutine *cur_co = vm->current_coroutine;
+
+                if (!cur_co) {
+                    /* yield from main context: legacy pop-frame behaviour */
+                    SYNC_IP();
+                    close_upvalues(vm, frame->slots);
+                    vm->frame_count--;
+                    if (vm->frame_count == base_frame_count) return VM_OK;
+                    vm->stack_top = frame->slots;
+                    vm_push(vm, result);
+                    frame = &vm->frames[vm->frame_count - 1];
+                    LOAD_IP();
+                    break;
+                }
+
+                /* Truly suspend: save state, hand value to whoever awaits us */
                 SYNC_IP();
-                close_upvalues(vm, frame->slots);
-                vm->frame_count--;
-                if (vm->frame_count == base_frame_count) return VM_OK;
-                vm->stack_top = frame->slots;
-                vm_push(vm, result);
-                frame = &vm->frames[vm->frame_count - 1];
-                LOAD_IP();
-                break;
+                close_upvalues(vm, vm->stack);
+                coro_save(vm, cur_co);
+                cur_co->state  = CORO_SUSPENDED;
+                cur_co->result = result;
+
+                /* If someone is currently awaiting this coroutine, push value
+                 * onto their saved stack and re-queue them */
+                if (cur_co->awaited_by) {
+                    FluxCoroutine *waiter = cur_co->awaited_by;
+                    cur_co->awaited_by = NULL;
+                    int n = (int)(waiter->stack_top - waiter->stack);
+                    if (n >= waiter->stack_capacity) {
+                        int nc = waiter->stack_capacity * 2 + 4;
+                        waiter->stack = (Value *)flux_realloc(waiter->stack,
+                                            sizeof(Value) * (size_t)nc);
+                        waiter->stack_top      = waiter->stack + n;
+                        waiter->stack_capacity = nc;
+                    }
+                    waiter->stack[n] = result;
+                    waiter->stack_top = waiter->stack + n + 1;
+                    waiter->state = CORO_SUSPENDED;
+                    vm_scheduler_enqueue(vm, waiter);
+                }
+
+                vm->stack_top         = vm->stack;
+                vm->frame_count       = 0;
+                vm->current_coroutine = NULL;
+                return VM_YIELD;
             }
 
+            /* await expr — suspend until expr (Future or Coroutine) resolves */
             case OP_AWAIT: {
-                /* In this basic implementation, await just calls the coroutine */
-                /* Full async scheduling is a future enhancement */
-                Value callee = vm_pop(vm);
-                if (IS_COROUTINE(callee)) {
-                    FluxCoroutine *co = AS_COROUTINE(callee);
-                    if (co->state == CORO_DEAD) {
-                        vm_push(vm, co->result);
-                    } else {
-                        /* Execute the coroutine's closure synchronously */
-                        SYNC_IP();
-                        VMResult r = vm_call_value(vm, value_object((FluxObject *)co->closure), 0);
-                        if (r != VM_OK) return r;
-                        co->state = CORO_DEAD;
-                        frame = &vm->frames[vm->frame_count - 1];
-                        LOAD_IP();
+                Value val = vm_pop(vm);
+                FluxCoroutine *cur_co = vm->current_coroutine;
+
+                /* ---- await Future --------------------------------------- */
+                if (IS_FUTURE(val)) {
+                    FluxFuture *fut = AS_FUTURE(val);
+                    if (fut->resolved) {
+                        vm_push(vm, fut->result);
+                        break;
                     }
-                } else if (IS_CLOSURE(callee)) {
+                    if (cur_co) {
+                        /* Suspend this coroutine until the future resolves */
+                        SYNC_IP();
+                        close_upvalues(vm, vm->stack);
+                        coro_save(vm, cur_co);
+                        cur_co->state          = CORO_SUSPENDED;
+                        cur_co->pending_future = fut;
+                        fut->waiting           = cur_co;
+                        vm->stack_top          = vm->stack;
+                        vm->frame_count        = 0;
+                        vm->current_coroutine  = NULL;
+                        return VM_YIELD;
+                    } else {
+                        /* Main context: drive event loop + scheduler until done */
+                        vm_push(vm, val);  /* GC-protect */
+                        while (!fut->resolved && !vm->has_error) {
+                            if (vm->ready_count > 0) {
+                                VMResult sr = vm_scheduler_run_step(vm);
+                                if (sr == VM_RUNTIME_ERROR) { vm_pop(vm); return sr; }
+                                continue;
+                            }
+                            if (vm->pending_io_count > 0) {
+                                uv_run(vm->uv_loop, UV_RUN_ONCE);
+                            } else break;
+                        }
+                        vm_pop(vm);  /* un-protect */
+                        if (vm->has_error) return VM_RUNTIME_ERROR;
+                        vm_push(vm, fut->resolved ? fut->result : value_null());
+                    }
+
+                /* ---- await Coroutine ------------------------------------ */
+                } else if (IS_COROUTINE(val)) {
+                    FluxCoroutine *target = AS_COROUTINE(val);
+                    if (target->state == CORO_DEAD) {
+                        vm_push(vm, target->result);
+                        break;
+                    }
+                    if (cur_co) {
+                        /* Suspend current, link as awaiter of target.
+                         * target was already enqueued by spawn; don't re-queue. */
+                        SYNC_IP();
+                        close_upvalues(vm, vm->stack);
+                        coro_save(vm, cur_co);
+                        cur_co->state      = CORO_SUSPENDED;
+                        target->awaited_by = cur_co;
+                        vm->stack_top         = vm->stack;
+                        vm->frame_count       = 0;
+                        vm->current_coroutine = NULL;
+                        return VM_YIELD;
+                    } else {
+                        /* Main context: spin scheduler until target is dead.
+                         * target was already enqueued by spawn; don't re-queue. */
+                        while (target->state != CORO_DEAD && !vm->has_error) {
+                            if (vm->ready_count > 0) {
+                                VMResult sr = vm_scheduler_run_step(vm);
+                                if (sr == VM_RUNTIME_ERROR) return sr;
+                            } else if (vm->pending_io_count > 0) {
+                                uv_run(vm->uv_loop, UV_RUN_ONCE);
+                            } else break;
+                        }
+                        if (vm->has_error) return VM_RUNTIME_ERROR;
+                        vm_push(vm, target->result);
+                    }
+
+                /* ---- await Closure (call synchronously) ----------------- */
+                } else if (IS_CLOSURE(val)) {
                     SYNC_IP();
-                    VMResult r = vm_call_value(vm, callee, 0);
+                    VMResult r = vm_call_value(vm, val, 0);
                     if (r != VM_OK) return r;
                     frame = &vm->frames[vm->frame_count - 1];
                     LOAD_IP();
+
                 } else {
-                    vm_push(vm, callee); /* passthrough */
+                    vm_push(vm, val);  /* passthrough for plain values */
                 }
                 break;
             }

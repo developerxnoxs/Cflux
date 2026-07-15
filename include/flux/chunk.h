@@ -96,7 +96,8 @@ typedef enum {
     OP_GET_SUPER,        /* operand: uint16 constant (name)    */
 
     /* Coroutines / async */
-    OP_CREATE_TASK,
+    OP_CREATE_TASK,      /* spawn f     — wraps closure; operand: none        */
+    OP_SPAWN_CALL,       /* spawn f(…)  — closure+args on stack; operand: u8 argc */
     OP_AWAIT,
     OP_YIELD,
 

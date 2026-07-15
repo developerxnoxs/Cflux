@@ -1,0 +1,26 @@
+# async_demo.flx — demonstrates TRUE async/await backed by libuv
+#
+# Expected output (B finishes before A because it sleeps less):
+#   Starting A (sleep 200ms)
+#   Starting B (sleep 50ms)
+#   B done after 50ms
+#   A done after 200ms
+#   Both finished: A B
+
+import aio
+
+async func task(name, delay):
+    print(f"Starting {name} (sleep {delay}ms)")
+    await aio.sleep(delay)
+    print(f"{name} done after {delay}ms")
+    return name
+
+# Spawn two concurrent tasks — they run in the scheduler simultaneously
+t1 = spawn task("A", 200)
+t2 = spawn task("B", 50)
+
+# Await both results
+r1 = await t1
+r2 = await t2
+
+print(f"Both finished: {r1} {r2}")

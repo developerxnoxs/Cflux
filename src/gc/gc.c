@@ -106,6 +106,13 @@ static void mark_roots(FluxVM *vm) {
         gc_mark_object(vm, (FluxObject *)vm->ready_queue[i]);
     if (vm->current_coroutine)
         gc_mark_object(vm, (FluxObject *)vm->current_coroutine);
+
+    /* In-flight futures (prevent collection while libuv I/O is pending) */
+    for (int i = 0; i < vm->io_future_count; i++)
+        gc_mark_object(vm, (FluxObject *)vm->io_futures[i]);
+
+    /* Main-script coroutine (holds saved context whenever main script awaits) */
+    gc_mark_object(vm, (FluxObject *)vm->main_coroutine);
 }
 
 /* -------------------------------------------------------------------------
@@ -184,6 +191,15 @@ static void blacken_object(FluxVM *vm, FluxObject *obj) {
             for (int i = 0; i < co->frame_count; i++)
                 gc_mark_object(vm, (FluxObject *)co->frames[i].closure);
             gc_mark_value(vm, co->result);
+            gc_mark_object(vm, (FluxObject *)co->awaited_by);
+            gc_mark_object(vm, (FluxObject *)co->pending_future);
+            break;
+        }
+
+        case OBJ_FUTURE: {
+            FluxFuture *fut = (FluxFuture *)obj;
+            gc_mark_value(vm, fut->result);
+            gc_mark_object(vm, (FluxObject *)fut->waiting);
             break;
         }
     }
@@ -237,7 +253,8 @@ static void sweep(FluxVM *vm) {
                 case OBJ_CLASS:     sz = sizeof(FluxClass);      break;
                 case OBJ_INSTANCE:  sz = sizeof(FluxInstance);   break;
                 case OBJ_BOUND_METHOD: sz = sizeof(FluxBoundMethod); break;
-                case OBJ_COROUTINE: sz = sizeof(FluxCoroutine);  break;
+                case OBJ_COROUTINE:    sz = sizeof(FluxCoroutine);  break;
+                case OBJ_FUTURE:       sz = sizeof(FluxFuture);     break;
             }
             vm->bytes_allocated -= sz;
             object_free(vm, unreached);

@@ -618,12 +618,18 @@ static void compile_expr(Compiler *c, AstNode *node) {
             break;
 
         case AST_SPAWN:
-            /* spawn f        → wrap the closure in a coroutine handle (OP_CREATE_TASK)
-             * spawn f(args)  → call f(args) eagerly; the return value IS the handle.
-             *                   For async functions this executes them synchronously,
-             *                   matching the VM's cooperative scheduler semantics. */
+            /* spawn f        → OP_CREATE_TASK  (wraps closure, enqueues it)
+             * spawn f(args)  → OP_SPAWN_CALL N (pushes closure + N args, then
+             *                   creates+enqueues a coroutine pre-loaded with them)
+             * Both leave a FluxCoroutine handle on the stack as the result. */
             if (node->as.ret.value && node->as.ret.value->kind == AST_CALL) {
-                compile_expr(c, node->as.ret.value);   /* call → push result */
+                AstNode *call = node->as.ret.value;
+                compile_expr(c, call->as.call.callee); /* push callee closure  */
+                int argc = call->as.call.args.count;
+                for (int i = 0; i < argc; i++)
+                    compile_expr(c, call->as.call.args.data[i]); /* push args */
+                emit_byte(c, OP_SPAWN_CALL, line);
+                emit_byte(c, (uint8_t)argc, line);
             } else {
                 compile_expr(c, node->as.ret.value);   /* push closure */
                 emit_byte(c, OP_CREATE_TASK, line);    /* wrap as coroutine */

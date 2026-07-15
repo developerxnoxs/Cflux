@@ -266,6 +266,7 @@ int chunk_disassemble_instruction(const Chunk *chunk, int offset) {
             return offset + 4;
         }
         case OP_CREATE_TASK:    return simple_instr("CREATE_TASK",   offset);
+        case OP_SPAWN_CALL:     return byte_instr  ("SPAWN_CALL",    chunk, offset);
         case OP_AWAIT:          return simple_instr("AWAIT",         offset);
         case OP_YIELD:          return simple_instr("YIELD",         offset);
         case OP_BIT_AND:        return simple_instr("BIT_AND",       offset);

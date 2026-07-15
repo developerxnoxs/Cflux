@@ -11,7 +11,7 @@ CFLAGS  := -std=gnu17 -D_GNU_SOURCE -Wall -Wextra -Wpedantic \
            -Wno-unused-parameter -Wno-unused-variable -Iinclude -g -O0 \
            -U_FORTIFY_SOURCE -Wno-cpp \
            -DFLUX_SHARE_DIR=\"$(PREFIX)/share/flux\"
-LDFLAGS := -lm -ldl
+LDFLAGS := -lm -ldl -luv
 
 BUILD   := build_make
 
@@ -44,9 +44,10 @@ all: $(BUILD)/flux $(BUILD)/libflux.a stdlib extensions
 # ----- stdlib modules (.so plugins, part of `all`) -----
 # Each subfolder under stdlib/ has its own Makefile that builds
 # stdlib/<name>/lib<name>.so. These are Flux's own official modules
-# (math, io, time, fs, os, sys, json) — unlike extension/, they only depend
-# on libc/libm, so they're built by default whenever `all` runs, and loaded
-# lazily the first time a script does `import <name>` (see vm.c).
+# (math, io, time, fs, os, sys, json, async) — unlike extension/, they only
+# depend on libc/libm (async also links libuv), so they're built by default
+# whenever `all` runs, and loaded lazily the first time a script does
+# `import <name>` (see vm.c).
 stdlib:
 	@for d in stdlib/*/; do \
 		if [ -f "$$d""Makefile" ]; then \

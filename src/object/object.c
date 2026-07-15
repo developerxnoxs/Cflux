@@ -67,6 +67,7 @@ const char *value_type_name(Value v) {
                 case OBJ_INSTANCE:     return "instance";
                 case OBJ_BOUND_METHOD: return "bound_method";
                 case OBJ_COROUTINE:    return "coroutine";
+                case OBJ_FUTURE:       return "future";
             }
     }
     return "unknown";
@@ -136,6 +137,9 @@ void object_print(Value v) {
             break;
         case OBJ_COROUTINE:
             printf("<coroutine>");
+            break;
+        case OBJ_FUTURE:
+            printf("<future>");
             break;
         case OBJ_UPVALUE:
             printf("<upvalue>");
@@ -488,21 +492,38 @@ FluxBoundMethod *object_bound_method_new(FluxVM *vm, Value receiver, FluxClosure
 #define CORO_FRAMES_INITIAL 8
 
 FluxCoroutine *object_coroutine_new(FluxVM *vm, FluxClosure *closure) {
-    FluxCoroutine *co   = ALLOC_OBJ(vm, FluxCoroutine, OBJ_COROUTINE);
-    co->state           = CORO_SUSPENDED;
-    co->closure         = closure;
+    FluxCoroutine *co       = ALLOC_OBJ(vm, FluxCoroutine, OBJ_COROUTINE);
+    co->state               = CORO_SUSPENDED;
+    co->closure             = closure;
     /* Raw alloc + direct bytes_allocated tracking (no GC trigger — the
      * coroutine object is on vm->objects but may not be GC-rooted yet). */
-    co->stack           = FLUX_ALLOC(Value, CORO_STACK_INITIAL);
-    co->stack_top       = co->stack;
-    co->stack_capacity  = CORO_STACK_INITIAL;
-    co->frames          = FLUX_ALLOC(CallFrame, CORO_FRAMES_INITIAL);
-    co->frame_count     = 0;
-    co->frame_capacity  = CORO_FRAMES_INITIAL;
-    vm->bytes_allocated += sizeof(Value)     * CORO_STACK_INITIAL
-                         + sizeof(CallFrame) * CORO_FRAMES_INITIAL;
-    co->result          = value_null();
+    co->stack               = FLUX_ALLOC(Value, CORO_STACK_INITIAL);
+    co->stack_top           = co->stack;
+    co->stack_capacity      = CORO_STACK_INITIAL;
+    co->frames              = FLUX_ALLOC(CallFrame, CORO_FRAMES_INITIAL);
+    co->frame_count         = 0;
+    co->frame_capacity      = CORO_FRAMES_INITIAL;
+    co->frame_slot_offsets  = FLUX_ALLOC(int, CORO_FRAMES_INITIAL);
+    co->result              = value_null();
+    co->awaited_by          = NULL;
+    co->pending_future      = NULL;
+    vm->bytes_allocated    += sizeof(Value)     * CORO_STACK_INITIAL
+                            + sizeof(CallFrame) * CORO_FRAMES_INITIAL
+                            + sizeof(int)       * CORO_FRAMES_INITIAL;
     return co;
+}
+
+/* -------------------------------------------------------------------------
+ * Future  (async I/O result handle, backed by libuv)
+ * ---------------------------------------------------------------------- */
+
+FluxFuture *object_future_new(FluxVM *vm) {
+    FluxFuture *fut = ALLOC_OBJ(vm, FluxFuture, OBJ_FUTURE);
+    fut->resolved   = false;
+    fut->result     = value_null();
+    fut->waiting    = NULL;
+    fut->uv_handle  = NULL;
+    return fut;
 }
 
 /* -------------------------------------------------------------------------
@@ -569,13 +590,24 @@ void object_free(FluxVM *vm, FluxObject *obj) {
             FLUX_FREE(obj);
             break;
         case OBJ_COROUTINE: {
-            /* Deduct stack and frame array sizes tracked in object_coroutine_new(). */
+            /* Deduct stack, frame and slot-offset array sizes tracked in
+             * object_coroutine_new(). */
             FluxCoroutine *co = (FluxCoroutine *)obj;
             vm->bytes_allocated -= sizeof(Value)     * (size_t)co->stack_capacity
-                                 + sizeof(CallFrame) * (size_t)co->frame_capacity;
+                                 + sizeof(CallFrame) * (size_t)co->frame_capacity
+                                 + sizeof(int)       * (size_t)co->frame_capacity;
             FLUX_FREE(co->stack);
             FLUX_FREE(co->frames);
+            FLUX_FREE(co->frame_slot_offsets);
             FLUX_FREE(co);
+            break;
+        }
+
+        case OBJ_FUTURE: {
+            /* The libuv handle (uv_handle) is managed externally by the async
+             * module and will be closed/freed via uv_close() before or after
+             * the GC collects this object.  Nothing to free here. */
+            FLUX_FREE(obj);
             break;
         }
     }

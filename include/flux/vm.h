@@ -51,6 +51,7 @@ typedef enum {
     VM_OK,
     VM_RUNTIME_ERROR,
     VM_COMPILE_ERROR,
+    VM_YIELD,     /* coroutine suspended (await on unresolved future / yield) */
 } VMResult;
 
 /* -------------------------------------------------------------------------
@@ -100,6 +101,20 @@ struct FluxVM {
     int             ready_count;
     int             ready_capacity;
     FluxCoroutine  *current_coroutine; /* NULL if running on main fiber */
+
+    /* Main-script coroutine — allocated in vm_execute so the main execution
+     * context can be saved/restored by coro_save/coro_restore whenever the
+     * main script hits an `await` expression, just like any spawned task. */
+    struct FluxCoroutine *main_coroutine;
+
+    /* libuv event loop for true async I/O */
+    struct uv_loop_s *uv_loop;
+    int               pending_io_count; /* number of in-flight libuv ops      */
+
+    /* GC roots for in-flight futures (prevents collection while I/O pending) */
+    struct FluxFuture **io_futures;
+    int                 io_future_count;
+    int                 io_future_capacity;
 
     /* Runtime error state */
     char error_msg[512];
@@ -171,6 +186,28 @@ void  vm_set_global(FluxVM *vm, FluxString *name, Value value);
  * Native function registration
  * ---------------------------------------------------------------------- */
 void vm_register_native(FluxVM *vm, const char *name, NativeFn fn, int arity);
+
+/* -------------------------------------------------------------------------
+ * Async / coroutine scheduler
+ *
+ * vm_scheduler_enqueue  – add a SUSPENDED coroutine to the ready queue.
+ * vm_scheduler_run      – drain the ready queue, interleaving with the libuv
+ *                         event loop whenever all coroutines are blocked on I/O.
+ * ---------------------------------------------------------------------- */
+void     vm_scheduler_enqueue(FluxVM *vm, FluxCoroutine *co);
+VMResult vm_scheduler_run(FluxVM *vm);
+
+/* -------------------------------------------------------------------------
+ * I/O future lifecycle helpers  (used by the async stdlib extension)
+ *
+ * vm_io_future_register – called when a libuv op starts; GC-roots the future
+ *                         so it isn't collected while the OS is still working.
+ * vm_io_future_complete – called from the libuv callback when the op ends;
+ *                         resolves the future, unroots it, and re-queues the
+ *                         waiting coroutine (if any).
+ * ---------------------------------------------------------------------- */
+void vm_io_future_register(FluxVM *vm, struct FluxFuture *fut);
+void vm_io_future_complete(FluxVM *vm, struct FluxFuture *fut, Value result);
 
 /* -------------------------------------------------------------------------
  * Module import directory stack

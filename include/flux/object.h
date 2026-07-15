@@ -27,6 +27,7 @@ typedef enum {
     OBJ_INSTANCE,
     OBJ_BOUND_METHOD,
     OBJ_COROUTINE,
+    OBJ_FUTURE,       /* async I/O result handle (backed by libuv) */
 } ObjectType;
 
 /* -------------------------------------------------------------------------
@@ -52,6 +53,7 @@ struct FluxObject {
 #define IS_INSTANCE(v)    IS_OBJ_TYPE(v, OBJ_INSTANCE)
 #define IS_BOUND_METHOD(v) IS_OBJ_TYPE(v, OBJ_BOUND_METHOD)
 #define IS_COROUTINE(v)   IS_OBJ_TYPE(v, OBJ_COROUTINE)
+#define IS_FUTURE(v)      IS_OBJ_TYPE(v, OBJ_FUTURE)
 
 #define AS_STRING(v)       ((FluxString *)value_as_object(v))
 #define AS_LIST(v)         ((FluxList *)value_as_object(v))
@@ -63,6 +65,7 @@ struct FluxObject {
 #define AS_INSTANCE(v)     ((FluxInstance *)value_as_object(v))
 #define AS_BOUND_METHOD(v) ((FluxBoundMethod *)value_as_object(v))
 #define AS_COROUTINE(v)    ((FluxCoroutine *)value_as_object(v))
+#define AS_FUTURE(v)       ((FluxFuture    *)value_as_object(v))
 
 /* -------------------------------------------------------------------------
  * String
@@ -180,18 +183,48 @@ typedef enum {
 
 typedef struct CallFrame CallFrame;
 
-typedef struct {
+typedef struct FluxFuture FluxFuture;  /* forward decl */
+
+typedef struct FluxCoroutine {
     FluxObject      obj;
     CoroutineState  state;
     FluxClosure    *closure;
+    /* Per-coroutine saved stack (copied from vm->stack when suspended) */
     Value          *stack;
-    Value          *stack_top;
+    Value          *stack_top;      /* points into own stack */
     int             stack_capacity;
+    /* Per-coroutine saved frames */
     CallFrame      *frames;
     int             frame_count;
     int             frame_capacity;
-    Value           result;    /* result after DEAD */
+    /* frame_slot_offsets[i] = frames[i].slots - stack_base (from vm->stack)
+     * Stored so we can fix up the slot pointers after coro_restore(). */
+    int            *frame_slot_offsets;
+    /* Final result once state == CORO_DEAD */
+    Value           result;
+    /* Chaining: who is waiting for this coroutine to finish */
+    struct FluxCoroutine *awaited_by;
+    /* Pending future this coroutine is suspended on (set by OP_AWAIT) */
+    FluxFuture     *pending_future;
 } FluxCoroutine;
+
+/* -------------------------------------------------------------------------
+ * Future – represents a pending async I/O result (backed by libuv).
+ *
+ * Produced by async stdlib functions (async.sleep, async.read_file …).
+ * Awaiting an unresolved Future suspends the current coroutine; when libuv
+ * fires the callback, it sets resolved=true, stores result, and re-queues
+ * the waiting coroutine via vm_scheduler_enqueue().
+ * ---------------------------------------------------------------------- */
+struct FluxFuture {
+    FluxObject      obj;
+    bool            resolved;
+    Value           result;
+    FluxCoroutine  *waiting;    /* coroutine suspended on this future   */
+    /* GC-protection slot: the libuv handle is raw C memory; we store its
+     * native pointer here so the GC can ignore it (not a heap object). */
+    void           *uv_handle; /* uv_timer_t* / uv_fs_t* etc, or NULL  */
+};
 
 /* -------------------------------------------------------------------------
  * Allocation helpers (called by vm/gc)
@@ -209,6 +242,7 @@ FluxClass      *object_class_new(FluxVM *vm, FluxString *name);
 FluxInstance   *object_instance_new(FluxVM *vm, FluxClass *klass);
 FluxBoundMethod *object_bound_method_new(FluxVM *vm, Value receiver, FluxClosure *method);
 FluxCoroutine  *object_coroutine_new(FluxVM *vm, FluxClosure *closure);
+FluxFuture     *object_future_new(FluxVM *vm);
 
 /* Dict operations */
 bool  dict_get(FluxDict *dict, FluxString *key, Value *out);

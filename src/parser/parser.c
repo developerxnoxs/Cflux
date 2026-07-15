@@ -1081,7 +1081,15 @@ static AstNode *parse_from_import(Parser *p) {
 
 static AstNode *parse_import(Parser *p) {
     int line = p->previous.line, col = p->previous.column;
-    consume(p, TOK_IDENT, "Expected module name");
+    /* Accept plain identifiers AND keyword tokens (e.g. 'async', 'from') as
+     * module names — keywords are valid module names in Flux just as they are
+     * in Python.  token_is_keyword() is already used elsewhere in the parser
+     * for the same purpose (see attribute-access handling above). */
+    if (check(p, TOK_IDENT) || token_is_keyword(p->current.kind)) {
+        advance(p);
+    } else {
+        consume(p, TOK_IDENT, "Expected module name");
+    }
     int   mlen = p->previous.length;
     char *mbuf = FLUX_ALLOC(char, mlen + 1);
     memcpy(mbuf, p->previous.start, (size_t)mlen);

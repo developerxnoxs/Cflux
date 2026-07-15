@@ -407,20 +407,144 @@ print(dir)   # 2
 
 ## 10. Async / Await / Coroutine
 
-```flux
-async func fetch_data():
-    await sleep(0.1)
-    return "data"
+Flux mengimplementasikan async/await yang **nyata** — bukan fake/sequential. Di baliknya ditenagai oleh **libuv** (library I/O non-blocking yang sama dipakai Node.js). Ketika sebuah coroutine menunggu I/O, coroutine lain tetap berjalan secara bersamaan.
 
-async func main():
-    result = await fetch_data()
-    print(result)
+### Cara kerja singkat
 
-main()
-
-# Coroutine independen dengan spawn
-spawn fetch_data()
 ```
+async func  →  mendefinisikan coroutine (fungsi yang bisa disuspend)
+spawn f()   →  membuat task baru dan langsung memasukkannya ke scheduler
+await expr  →  mensuspend coroutine saat ini sampai expr selesai
+```
+
+Scheduler Flux menjalankan semua coroutine yang siap, lalu memutar libuv event loop untuk menunggu I/O — persis seperti event loop Node.js.
+
+---
+
+### Contoh: dua task berjalan bersamaan
+
+```flux
+import aio
+
+async func task(name, delay):
+    print(f"Mulai {name} (tunggu {delay}ms)")
+    await aio.sleep(delay)
+    print(f"{name} selesai setelah {delay}ms")
+    return name
+
+# Spawn dua task — keduanya langsung masuk ke scheduler
+t1 = spawn task("A", 200)
+t2 = spawn task("B", 50)
+
+# Tunggu kedua hasil
+r1 = await t1
+r2 = await t2
+
+print(f"Keduanya selesai: {r1} {r2}")
+```
+
+Output (B selesai lebih dulu karena delay-nya lebih kecil):
+
+```
+Mulai A (tunggu 200ms)
+Mulai B (tunggu 50ms)
+B selesai setelah 50ms
+A selesai setelah 200ms
+Keduanya selesai: A B
+```
+
+> Jika implementasinya fake/sequential, A pasti selesai dulu. Kenyataannya B yang 50 ms selesai lebih cepat — bukti concurrency sejati.
+
+---
+
+### Modul `aio` — I/O asinkron
+
+Import dengan `import aio`. Semua fungsi di bawah mengembalikan **Future** yang bisa di-`await`.
+
+| Fungsi | Keterangan |
+|--------|-----------|
+| `aio.sleep(ms)` | Tunda eksekusi selama `ms` milidetik tanpa memblokir coroutine lain |
+| `aio.read_file(path)` | Baca file secara non-blocking, kembalikan isi file sebagai string |
+| `aio.write_file(path, isi)` | Tulis string ke file secara non-blocking, kembalikan `true` jika berhasil |
+
+```flux
+import aio
+
+async func baca_tulis():
+    # Tulis file
+    await aio.write_file("hasil.txt", "Halo dari Flux!")
+
+    # Baca file yang baru ditulis
+    isi = await aio.read_file("hasil.txt")
+    print(isi)   # → Halo dari Flux!
+
+t = spawn baca_tulis()
+await t
+```
+
+---
+
+### `spawn` — membuat task konkuren
+
+`spawn` menerima sebuah pemanggilan fungsi async dan langsung mendaftarkannya ke scheduler. Hasilnya adalah handle **Coroutine** yang bisa di-`await` nanti.
+
+```flux
+import aio
+
+async func kerja(n):
+    await aio.sleep(n * 10)
+    return n * n
+
+# Tiga task berjalan bersamaan
+a = spawn kerja(1)
+b = spawn kerja(2)
+c = spawn kerja(3)
+
+print(await a)   # 1
+print(await b)   # 4
+print(await c)   # 9
+```
+
+---
+
+### `await` dari dalam coroutine
+
+`await` di dalam `async func` mensuspend coroutine itu saja — coroutine lain tetap berjalan.
+
+```flux
+import aio
+
+async func langkah(nama):
+    print(f"{nama}: mulai")
+    await aio.sleep(100)
+    print(f"{nama}: selesai")
+    return nama
+
+async func pipeline():
+    # Kedua langkah berjalan paralel
+    x = spawn langkah("X")
+    y = spawn langkah("Y")
+    hx = await x
+    hy = await y
+    print(f"Pipeline selesai: {hx}, {hy}")
+
+t = spawn pipeline()
+await t
+```
+
+---
+
+### Arsitektur internal
+
+```
+async func  ──compile──►  FluxClosure (ditandai is_async)
+spawn f()   ──────────►  FluxCoroutine (masuk ready_queue)
+await fut   ──────────►  suspend coroutine, pasang callback ke libuv
+libuv cb    ──────────►  future resolved → coroutine kembali ke ready_queue
+scheduler   ──────────►  jalankan semua coroutine ready, lalu uv_run(ONCE)
+```
+
+State tiap coroutine (stack + frame) disimpan secara terpisah sehingga ratusan coroutine bisa berjalan bersamaan tanpa konflik.
 
 ---
 

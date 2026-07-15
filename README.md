@@ -58,6 +58,22 @@ make test
 
 Prasyarat: `gcc`/`cc` dan `make` (toolchain standar di kebanyakan sistem Linux/Unix; instal via package manager OS jika belum ada, mis. `apt install build-essential` di Debian/Ubuntu).
 
+### Install sistem-wide (`make install`)
+
+Supaya `flux` bisa dipanggil dari direktori manapun (bukan hanya `./build_make/flux` di dalam repo ini):
+
+```bash
+sudo make install                    # default ke /usr/local (bin + share/flux)
+# atau tanpa sudo, ke prefix custom:
+make install PREFIX=$HOME/.local
+
+flux examples/hello.flx              # sekarang bisa dipanggil dari mana saja
+```
+
+`make install` menyalin binary ke `<PREFIX>/bin/flux` **dan** menyalin modul `stdlib/`+`extension/` (termasuk `.so` yang sudah dibangun) ke `<PREFIX>/share/flux/`. Ini penting karena modul seperti `math`/`io`/`fs` dimuat lewat `dlopen()` saat runtime — binary yang di-*install* dikompilasi dengan lokasi `share/flux` itu tertanam sebagai fallback, jadi `import math` dkk tetap berfungsi walau dijalankan di luar source tree.
+
+Untuk mencopot: `sudo make uninstall` (atau dengan `PREFIX` yang sama seperti saat install).
+
 ---
 
 ## 2. Perintah CLI

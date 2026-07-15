@@ -20,6 +20,10 @@ cd flux && make test
 
 The **"Flux REPL"** workflow builds the project and drops into the interactive REPL automatically on start (console output, not a web app — this is a CLI language with no web preview).
 
+### System-wide install (`make install`)
+
+`make install` (default `PREFIX=/usr/local`, override with `make install PREFIX=...`) copies the binary to `<PREFIX>/bin/flux` and the `stdlib/`+`extension/` module trees (built `.so`s included) to `<PREFIX>/share/flux/`, then compiles the binary with that share dir baked in as `FLUX_SHARE_DIR` (a `-D` macro fed into `find_native_extension_path()` in `vm.c` as a last-resort fallback, tried after the cwd/script-relative lookups). This makes `import math`/`import io`/etc. keep working when `flux` is run from outside this source tree. `make uninstall` reverses it. Note: since `FLUX_SHARE_DIR` is baked in via `CFLAGS` at compile time and object files don't track `CFLAGS` as a dependency, changing `PREFIX` requires `make clean` first or the old path silently persists.
+
 ## Test Status
 
 - `make test` (C unit tests: lexer, VM, GC) — 33/33 passing.

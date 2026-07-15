@@ -1,8 +1,16 @@
 # Makefile for Flux
 CC      ?= gcc
+
+# Install locations for `make install` (override e.g. `make install PREFIX=$HOME/.local`).
+# DESTDIR is a separate staging-root prefix, honored by convention for packaging.
+PREFIX  ?= /usr/local
+BINDIR  := $(DESTDIR)$(PREFIX)/bin
+SHAREDIR:= $(DESTDIR)$(PREFIX)/share/flux
+
 CFLAGS  := -std=gnu17 -D_GNU_SOURCE -Wall -Wextra -Wpedantic \
            -Wno-unused-parameter -Wno-unused-variable -Iinclude -g -O0 \
-           -U_FORTIFY_SOURCE -Wno-cpp
+           -U_FORTIFY_SOURCE -Wno-cpp \
+           -DFLUX_SHARE_DIR=\"$(PREFIX)/share/flux\"
 LDFLAGS := -lm -ldl
 
 BUILD   := build_make
@@ -29,7 +37,7 @@ STDLIB_OBJ := \
 
 LIB_OBJ := $(VM_OBJ) $(STDLIB_OBJ)
 
-.PHONY: all clean test extensions stdlib
+.PHONY: all clean test extensions stdlib install uninstall
 
 all: $(BUILD)/flux $(BUILD)/libflux.a stdlib extensions
 
@@ -128,3 +136,25 @@ test: $(BUILD)/test_lexer $(BUILD)/test_vm $(BUILD)/test_gc
 
 clean:
 	rm -rf $(BUILD)
+
+# ----- system-wide install -----
+# Installs the interpreter to $(BINDIR)/flux and copies the stdlib/ and
+# extension/ module trees (built .so's included) to $(SHAREDIR), so `flux`
+# and its `import math` / `import io` / ... keep working when run from any
+# directory, not just this source tree. The binary is compiled with
+# FLUX_SHARE_DIR baked in (see CFLAGS above) so it knows where to fall back
+# to when a module isn't found next to the running script or in the cwd.
+install: all
+	install -d "$(BINDIR)"
+	install -m 755 $(BUILD)/flux "$(BINDIR)/flux"
+	install -d "$(SHAREDIR)"
+	rm -rf "$(SHAREDIR)/stdlib" "$(SHAREDIR)/extension"
+	cp -r stdlib "$(SHAREDIR)/stdlib"
+	cp -r extension "$(SHAREDIR)/extension"
+	@echo "Installed flux to $(BINDIR)/flux"
+	@echo "Installed stdlib/extension modules to $(SHAREDIR)"
+
+uninstall:
+	rm -f "$(BINDIR)/flux"
+	rm -rf "$(SHAREDIR)"
+	@echo "Removed $(BINDIR)/flux and $(SHAREDIR)"

@@ -444,7 +444,16 @@ static bool find_native_extension_path(FluxVM *vm, const char *base_dir,
         if (file_exists(path)) return true;
     }
     snprintf(path, path_size, "%s/%s/lib%s.so", base_dir, module_name, module_name);
-    return file_exists(path);
+    if (file_exists(path)) return true;
+#ifdef FLUX_SHARE_DIR
+    /* Fallback for a `make install`'d binary run outside the source tree:
+     * modules are copied to FLUX_SHARE_DIR/<base_dir>/<module>/lib<module>.so
+     * at install time (see the `install` Makefile target). Tried last so a
+     * project-local copy always wins over the system-wide one. */
+    snprintf(path, path_size, "%s/%s/%s/lib%s.so", FLUX_SHARE_DIR, base_dir, module_name, module_name);
+    if (file_exists(path)) return true;
+#endif
+    return false;
 }
 
 static bool try_load_native_extension(FluxVM *vm, const char *module_name, Value *out) {

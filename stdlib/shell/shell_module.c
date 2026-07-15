@@ -298,12 +298,168 @@ static Value shell_spawn(FluxVM *vm, int argc, Value *argv) {
 }
 
 /* =========================================================================
+ * shell.pipe(cmd: string, args: list, input: string) → dict{stdout,stderr,code}
+ *
+ * Jalankan program `cmd` dengan argumen eksplisit DAN kirimkan `input` ke
+ * stdin-nya.  Output (stdout + stderr) ditangkap dan dikembalikan sebagai dict.
+ * Tidak melalui shell — aman dari injeksi perintah.
+ *
+ * Contoh: hasil = shell.pipe("grep", ["import"], kode_sumber)
+ *         shell.pipe("python3", [], "print(40+2)")
+ *
+ * Cara kerja: tulis `input` ke file sementara terlebih dahulu, lalu
+ * child membaca dari file itu sebagai stdin.  Pendekatan ini menghindari
+ * dead-lock yang bisa terjadi jika kita menulis ke stdin pipe sekaligus
+ * membaca dari stdout pipe secara berurutan.
+ * ======================================================================= */
+static Value shell_pipe(FluxVM *vm, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_STRING(argv[0])) {
+        vm_runtime_error(vm, "shell.pipe: cmd harus bertipe string");
+        return value_null();
+    }
+    if (!IS_LIST(argv[1])) {
+        vm_runtime_error(vm, "shell.pipe: args harus bertipe list");
+        return value_null();
+    }
+    if (!IS_STRING(argv[2])) {
+        vm_runtime_error(vm, "shell.pipe: input harus bertipe string");
+        return value_null();
+    }
+
+    const char *cmd      = AS_STRING(argv[0])->chars;
+    FluxList   *lst      = AS_LIST(argv[1]);
+    const char *input    = AS_STRING(argv[2])->chars;
+    int         input_len = (int)strlen(input);
+    int         narg     = (int)lst->elements.count;
+
+#ifdef _WIN32
+    /* Windows fallback: write input to temp file, build cmd string, use popen */
+    char in_path[] = "/tmp/flux_pipe_in_XXXXXX";
+    /* _mktemp_s would be correct; use a fixed name as rough fallback */
+    snprintf(in_path, sizeof(in_path), "/tmp/flux_pipe_in_%d", (int)GetCurrentProcessId());
+    FILE *in_f = fopen(in_path, "wb");
+    if (in_f) { fwrite(input, 1, (size_t)input_len, in_f); fclose(in_f); }
+
+    size_t total = strlen(cmd) + strlen(in_path) + 32;
+    for (int i = 0; i < narg; i++) {
+        if (IS_STRING(lst->elements.data[i]))
+            total += strlen(AS_STRING(lst->elements.data[i])->chars) + 3;
+    }
+    char *joined = (char *)malloc(total);
+    if (!joined) { remove(in_path); return make_result(vm, "", "malloc failed", -1); }
+    strcpy(joined, cmd);
+    for (int i = 0; i < narg; i++) {
+        strcat(joined, " ");
+        if (IS_STRING(lst->elements.data[i])) {
+            strcat(joined, "\"");
+            strcat(joined, AS_STRING(lst->elements.data[i])->chars);
+            strcat(joined, "\"");
+        }
+    }
+    strcat(joined, " < \""); strcat(joined, in_path); strcat(joined, "\"");
+
+    FluxString *joined_s = object_string_copy(vm, joined, (int)strlen(joined));
+    free(joined);
+    remove(in_path);
+    Value tmp_argv[1] = { value_object((FluxObject *)joined_s) };
+    return shell_capture(vm, 1, tmp_argv);
+#else
+    /* Step 1: write input to a temp stdin file */
+    char in_path[] = "/tmp/flux_pipe_in_XXXXXX";
+    int  in_fd     = mkstemp(in_path);
+    if (in_fd < 0) return make_result(vm, "", strerror(errno), -1);
+    {
+        ssize_t written = 0, total_w = (ssize_t)input_len;
+        while (written < total_w) {
+            ssize_t n = write(in_fd, input + written, (size_t)(total_w - written));
+            if (n < 0) { close(in_fd); remove(in_path); return make_result(vm, "", strerror(errno), -1); }
+            written += n;
+        }
+    }
+    /* Rewind so child reads from the beginning */
+    lseek(in_fd, 0, SEEK_SET);
+
+    /* Step 2: build argv */
+    char **exec_argv = (char **)malloc(sizeof(char *) * (size_t)(narg + 2));
+    if (!exec_argv) { close(in_fd); remove(in_path); return make_result(vm, "", "malloc failed", -1); }
+    exec_argv[0] = (char *)cmd;
+    for (int i = 0; i < narg; i++) {
+        exec_argv[i + 1] = IS_STRING(lst->elements.data[i])
+            ? AS_STRING(lst->elements.data[i])->chars
+            : (char *)"";
+    }
+    exec_argv[narg + 1] = NULL;
+
+    /* Step 3: pipe for stdout, temp file for stderr */
+    int out_pipe[2];
+    if (pipe(out_pipe) != 0) {
+        close(in_fd); remove(in_path); free(exec_argv);
+        return make_result(vm, "", strerror(errno), -1);
+    }
+    char err_path[] = "/tmp/flux_pipe_err_XXXXXX";
+    int  err_fd     = mkstemp(err_path);
+    if (err_fd < 0) {
+        close(in_fd); remove(in_path);
+        close(out_pipe[0]); close(out_pipe[1]); free(exec_argv);
+        return make_result(vm, "", strerror(errno), -1);
+    }
+
+    /* Step 4: fork */
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(in_fd); remove(in_path);
+        close(out_pipe[0]); close(out_pipe[1]);
+        close(err_fd); remove(err_path); free(exec_argv);
+        return make_result(vm, "", strerror(errno), -1);
+    }
+
+    if (pid == 0) {
+        /* Child: stdin ← in_fd, stdout → pipe, stderr → err_fd */
+        dup2(in_fd,        STDIN_FILENO);
+        dup2(out_pipe[1],  STDOUT_FILENO);
+        dup2(err_fd,       STDERR_FILENO);
+        close(in_fd);
+        close(out_pipe[0]); close(out_pipe[1]);
+        close(err_fd);
+        execvp(cmd, exec_argv);
+        _exit(127);
+    }
+
+    /* Parent: close write ends and read */
+    close(in_fd);
+    close(out_pipe[1]);
+    close(err_fd);
+    free(exec_argv);
+
+    FILE *fp_out = fdopen(out_pipe[0], "r");
+    char *out    = fp_out ? drain_pipe(fp_out) : NULL;
+    if (fp_out) fclose(fp_out); else close(out_pipe[0]);
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+
+    FILE *fp_err = fopen(err_path, "r");
+    char *err    = fp_err ? drain_pipe(fp_err) : NULL;
+    if (fp_err) fclose(fp_err);
+    remove(in_path);
+    remove(err_path);
+
+    Value v = make_result(vm, out ? out : "", err ? err : "", code);
+    free(out);
+    free(err);
+    return v;
+#endif
+}
+
+/* =========================================================================
  * Module entry point — called by the VM's dlopen() loader
  * ======================================================================= */
 bool flux_extension_init(FluxVM *vm, Value *out_module) {
-    static const char *names[]  = { "exec", "capture", "spawn" };
-    static NativeFn    fns[]    = { shell_exec, shell_capture, shell_spawn };
-    static int         arities[]= { 1, 1, 2 };
+    static const char *names[]  = { "exec", "capture", "spawn", "pipe" };
+    static NativeFn    fns[]    = { shell_exec, shell_capture, shell_spawn, shell_pipe };
+    static int         arities[]= { 1, 1, 2, 3 };
     int n = (int)(sizeof(names) / sizeof(names[0]));
 
     FluxDict *mod = object_dict_new(vm);

@@ -29,7 +29,27 @@ r = shell.spawn("echo", ["Halo", "dari", "spawn!"])
 print("stdout:", r["stdout"])
 print("code  :", r["code"])
 
-# Contoh: jalankan python3 --version
-r2 = shell.spawn("python3", ["--version"])
-print("python3 version stdout:", r2["stdout"])
-print("python3 version stderr:", r2["stderr"])
+# --- shell.pipe(cmd, args, input) ---
+# Menjalankan program dengan argumen eksplisit DAN mengirimkan string ke stdin-nya.
+# Berguna untuk memproses teks atau mem-pipe output satu perintah ke perintah lain.
+print("\n=== shell.pipe ===")
+
+# Filter baris yang mengandung ".flx"
+daftar_file = shell.capture("ls examples/")
+hanya_flx = shell.pipe("grep", [".flx"], daftar_file["stdout"])
+print("File .flx di examples/:")
+print(hanya_flx["stdout"])
+
+# Hitung kata dalam sebuah kalimat
+r2 = shell.pipe("wc", ["-w"], "Flux adalah bahasa pemrograman buatan sendiri")
+print("Jumlah kata:", r2["stdout"])
+
+# Ubah teks ke huruf kapital
+r3 = shell.pipe("tr", ["a-z", "A-Z"], "flux programming language")
+print("Kapital:", r3["stdout"])
+
+# Chain multi-langkah: list file → filter → hitung
+semua = shell.capture("ls -1 examples/")
+hanya_flx2 = shell.pipe("grep", ["\\.flx$"], semua["stdout"])
+jumlah = shell.pipe("wc", ["-l"], hanya_flx2["stdout"])
+print("Jumlah file .flx:", jumlah["stdout"])

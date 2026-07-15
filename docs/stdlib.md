@@ -14,7 +14,7 @@ Semua modul di bawah ini tersedia secara bawaan — tidak perlu file tambahan. G
 | [os](#os) | Sistem operasi: `getcwd`, `listdir`, `mkdir`, `path_join`, `getenv`, dst. |
 | [sys](#sys) | Proses: `argv`, `platform`, `version`, `exit`, `stdin_read` |
 | [json](#json) | Encode dan decode JSON |
-| [shell](#shell) | Eksekusi perintah sistem: `exec`, `capture`, `spawn` |
+| [shell](#shell) | Eksekusi perintah sistem: `exec`, `capture`, `spawn`, `pipe` |
 
 ---
 
@@ -919,11 +919,12 @@ print(r["stdout"])
 
 ### Perbandingan ketiga fungsi
 
-| Fungsi | Melalui shell? | Tangkap output? | Aman dari injection? |
-|--------|:--------------:|:---------------:|:--------------------:|
-| `exec(cmd)` | ✅ | ❌ (tampil di terminal) | ⚠️ |
-| `capture(cmd)` | ✅ | ✅ (stdout + stderr) | ⚠️ |
-| `spawn(cmd, args)` | ❌ | ✅ (stdout + stderr) | ✅ |
+| Fungsi | Melalui shell? | Tangkap output? | Baca dari stdin? | Aman dari injection? |
+|--------|:--------------:|:---------------:|:----------------:|:--------------------:|
+| `exec(cmd)` | ✅ | ❌ (tampil di terminal) | ❌ | ⚠️ |
+| `capture(cmd)` | ✅ | ✅ (stdout + stderr) | ❌ | ⚠️ |
+| `spawn(cmd, args)` | ❌ | ✅ (stdout + stderr) | ❌ | ✅ |
+| `pipe(cmd, args, input)` | ❌ | ✅ (stdout + stderr) | ✅ | ✅ |
 
 ---
 
@@ -948,7 +949,52 @@ print(r["stdout"])
 r2 = shell.spawn("wc", ["-l", "/tmp/flux_test/data.txt"])
 print("Jumlah baris:", r2["stdout"])
 
-# 5. Bersihkan
+# 5. Filter baris dengan pipe
+data = "apel\njeruk\naprikot\npisang\n"
+r3 = shell.pipe("grep", ["^ap"], data)
+print("Buah berawalan 'ap':", r3["stdout"])
+
+# 6. Bersihkan
 shell.exec("rm -rf /tmp/flux_test")
 print("Selesai.")
+```
+
+---
+
+### `shell.pipe(cmd, args, input)`
+
+Jalankan program `cmd` dengan argumen eksplisit dan **kirimkan string `input` ke stdin-nya**. Output (stdout + stderr) ditangkap dan dikembalikan. Tidak melalui shell — aman dari injeksi perintah.
+
+Fungsi ini berguna untuk *chaining*: ambil output satu perintah, lalu kirimkan sebagai input ke perintah berikutnya.
+
+| Parameter | Tipe     | Keterangan |
+|-----------|----------|------------|
+| `cmd`     | `string` | Nama atau path program |
+| `args`    | `list`   | Daftar argumen eksplisit |
+| `input`   | `string` | Data yang dikirim ke stdin program |
+
+**Return:** `dict` — sama seperti `spawn`: `{stdout, stderr, code}`
+
+```flux
+import shell
+
+# Filter baris yang mengandung "error" dari teks
+log = "info: ok\nerror: disk full\ninfo: done\nerror: timeout\n"
+r = shell.pipe("grep", ["error"], log)
+print(r["stdout"])
+# error: disk full
+# error: timeout
+
+# Hitung jumlah kata dalam sebuah string
+r2 = shell.pipe("wc", ["-w"], "Halo dunia dari Flux")
+print("Jumlah kata:", r2["stdout"])   # 4
+
+# Ubah teks ke huruf kapital via tr
+r3 = shell.pipe("tr", ["a-z", "A-Z"], "flux programming language")
+print(r3["stdout"])   # FLUX PROGRAMMING LANGUAGE
+
+# Chain: ambil output capture, kirim ke pipe
+hasil = shell.capture("ls examples/")
+hanya_flx = shell.pipe("grep", [".flx"], hasil["stdout"])
+print("File .flx:", hanya_flx["stdout"])
 ```

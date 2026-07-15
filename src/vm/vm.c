@@ -12,6 +12,7 @@
 #include <uv.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <dlfcn.h>
@@ -248,7 +249,19 @@ static FluxCoroutine *vm_scheduler_dequeue(FluxVM *vm) {
 /* Forward declaration — vm_scheduler_run_step calls vm_run */
 static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result);
 
-/* Run one ready coroutine to completion / suspension. */
+/* Run one ready coroutine to completion / suspension.
+ *
+ * IMPORTANT: this function is called both from vm_scheduler_run() (after the
+ * main script has finished, so the VM stack/frames are empty) AND from the
+ * OP_AWAIT spin loop inside vm_run() (while the main script is still
+ * running).  In the second case, coro_restore() would overwrite the live
+ * main-context stack and frames, corrupting it.
+ *
+ * Fix: always snapshot the current stack/frames before handing the VM to the
+ * coroutine, and restore them unconditionally when we return.  When called
+ * from vm_scheduler_run() the snapshot is empty (frame_count==0, stack
+ * depth==0) so the restore is a no-op — no performance cost in that path.
+ */
 static VMResult vm_scheduler_run_step(FluxVM *vm) {
     FluxCoroutine *co = vm_scheduler_dequeue(vm);
     if (!co) return VM_OK;
@@ -257,6 +270,52 @@ static VMResult vm_scheduler_run_step(FluxVM *vm) {
     if (co->state == CORO_DEAD || co->state == CORO_RUNNING)
         return VM_OK;
 
+    /* ---- snapshot caller's VM state ------------------------------------ */
+    int    saved_fc         = vm->frame_count;
+    int    saved_stack_size = (int)(vm->stack_top - vm->stack);
+
+    /* Allocate save buffers only when there is something to save. */
+    CallFrame *saved_frames = NULL;
+    int       *saved_fso    = NULL;   /* frame slot offsets */
+    Value     *saved_stack  = NULL;
+
+    if (saved_fc > 0) {
+        saved_frames = (CallFrame *)malloc(sizeof(CallFrame) * (size_t)saved_fc);
+        saved_fso    = (int *)malloc(sizeof(int) * (size_t)saved_fc);
+        if (!saved_frames || !saved_fso) {
+            free(saved_frames); free(saved_fso);
+            vm_runtime_error(vm, "out of memory saving caller context for scheduler step");
+            return VM_RUNTIME_ERROR;
+        }
+        memcpy(saved_frames, vm->frames, sizeof(CallFrame) * (size_t)saved_fc);
+        for (int i = 0; i < saved_fc; i++)
+            saved_fso[i] = (int)(vm->frames[i].slots - vm->stack);
+    }
+    if (saved_stack_size > 0) {
+        saved_stack = (Value *)malloc(sizeof(Value) * (size_t)saved_stack_size);
+        if (!saved_stack) {
+            free(saved_frames); free(saved_fso);
+            vm_runtime_error(vm, "out of memory saving caller stack for scheduler step");
+            return VM_RUNTIME_ERROR;
+        }
+        memcpy(saved_stack, vm->stack, sizeof(Value) * (size_t)saved_stack_size);
+    }
+
+/* Restore the caller's VM state and free the save buffers. */
+#define RESTORE_CALLER_STATE() do {                                         \
+    vm->frame_count = saved_fc;                                             \
+    vm->stack_top   = vm->stack + saved_stack_size;                        \
+    if (saved_stack_size > 0)                                               \
+        memcpy(vm->stack, saved_stack, sizeof(Value) * (size_t)saved_stack_size); \
+    if (saved_fc > 0) {                                                     \
+        memcpy(vm->frames, saved_frames, sizeof(CallFrame) * (size_t)saved_fc); \
+        for (int _i = 0; _i < saved_fc; _i++)                              \
+            vm->frames[_i].slots = vm->stack + saved_fso[_i];              \
+    }                                                                       \
+    free(saved_frames); free(saved_fso); free(saved_stack);                \
+} while (0)
+
+    /* ---- run the coroutine -------------------------------------------- */
     coro_restore(vm, co);
     vm->current_coroutine = co;
     co->state = CORO_RUNNING;
@@ -265,16 +324,13 @@ static VMResult vm_scheduler_run_step(FluxVM *vm) {
 
     if (r == VM_RUNTIME_ERROR) {
         vm->current_coroutine = NULL;
-        vm->stack_top  = vm->stack;
-        vm->frame_count = 0;
+        RESTORE_CALLER_STATE();
         return VM_RUNTIME_ERROR;
     }
 
     if (r == VM_OK) {
         /* Coroutine finished: capture return value */
         Value result = (vm->stack_top > vm->stack) ? vm_pop(vm) : value_null();
-        vm->stack_top  = vm->stack;
-        vm->frame_count = 0;
         co->result = result;
         co->state  = CORO_DEAD;
 
@@ -297,9 +353,13 @@ static VMResult vm_scheduler_run_step(FluxVM *vm) {
             vm_scheduler_enqueue(vm, waiter);
         }
     }
-    /* r == VM_YIELD: coroutine suspended itself; state already saved. */
+    /* r == VM_YIELD: coroutine suspended itself; state already saved inside
+     * the coroutine via coro_save().  Nothing left to do here for the
+     * coroutine — we just restore the caller's context below. */
 
     vm->current_coroutine = NULL;
+    RESTORE_CALLER_STATE();
+#undef RESTORE_CALLER_STATE
     return VM_OK;
 }
 

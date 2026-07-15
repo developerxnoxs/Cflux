@@ -42,6 +42,14 @@ flux/
 └── Makefile      Build system (no cmake required)
 ```
 
+## How to Build
+
+```bash
+make -j$(nproc)          # build everything (binary + stdlib .so + extensions)
+make test                # run all C unit tests (25/25 passing)
+./build_make/flux <file> # run a .flx script
+```
+
 ## Bugs Fixed (vs. imported source)
 
 | Bug | File(s) | Description |

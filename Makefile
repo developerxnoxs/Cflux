@@ -40,9 +40,8 @@ all: $(BUILD)/flux $(BUILD)/libflux.a stdlib extensions
 # lazily the first time a script does `import <name>` (see vm.c).
 stdlib:
 	@for d in stdlib/*/; do \
-		if [ -f "$${d}Makefile" ]; then \
-			echo "==> building stdlib module: $$d"; \
-			$(MAKE) -C "$$d" FLUX_INCLUDE=$(CURDIR)/include || exit 1; \
+		if [ -f "$$d""Makefile" ]; then \
+			$(MAKE) -s --no-print-directory -C "$$d" FLUX_INCLUDE=$(CURDIR)/include || exit 1; \
 		fi; \
 	done
 
@@ -57,8 +56,7 @@ stdlib:
 extensions:
 	@for d in extension/*/; do \
 		if [ -f "$${d}Makefile" ]; then \
-			echo "==> building extension: $$d"; \
-			$(MAKE) -C "$$d" FLUX_INCLUDE=$(CURDIR)/include || exit 1; \
+			$(MAKE) -s --no-print-directory -C "$$d" FLUX_INCLUDE=$(CURDIR)/include || exit 1; \
 		fi; \
 	done
 

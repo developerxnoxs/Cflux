@@ -24,7 +24,7 @@ The **"Flux REPL"** workflow builds the project and drops into the interactive R
 
 - `make test` (C unit tests: lexer, VM, GC) — 33/33 passing.
 - All `.flx` scripts in `examples/` and `tests/` run correctly. `edge_cases.flx`, `test_list_edge.flx`, `test_divzero.flx`, `test_class_edge.flx`, `test_dict_edge.flx`, and `test_types.flx` intentionally end by triggering a runtime error (division by zero, out-of-range index, missing dict key, undefined attribute, bad conversion) to verify the interpreter reports a clean `Runtime error: ...` message and exits — that non-zero exit is expected, not a bug.
-- `examples/postgresql_extension.flx` fails with "Module 'postgresql' not found" unless the extension is built first (`make -C extension/postgresql`) — extensions are opt-in, not part of `make all`.
+- `examples/postgresql_extension.flx` runs end-to-end — `make`/`make all` now also builds every `extension/*/Makefile` (previously extensions were opt-in via `make extensions`; this env already has `libpq`/`postgresql` via `replit.nix`, so nothing extra to install).
 
 ## Project Structure
 
@@ -58,6 +58,7 @@ flux/
 | `bool` not coercible in arithmetic | `vm.c` | `true + true` now yields `2`; booleans are coerced to int (0/1) for arithmetic and comparison |
 | Nested for-loop stack corruption | `compiler.c` | Inner `for j in ...` inside an outer loop no longer pushes extra stack slots on each outer iteration |
 | Recursion depth limit too low | `vm.h` | `FLUX_FRAMES_MAX` raised from 256 → 2000 → 6000 — `tests/test_recursion.flx` calls `countdown(5000)`, which still overflowed at 2000 frames; the VM stack is heap-allocated and frames are pushed iteratively (no native C recursion per call), so raising the cap further is safe |
+| Native extensions (e.g. `postgresql`) weren't built by default | `Makefile` | `all` target now also runs `extensions` (previously extensions were opt-in via `make extensions`), so every `.so` under `stdlib/` and `extension/` that Flux code can `import` is compiled by a plain `make` |
 
 ## Language Features
 

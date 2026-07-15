@@ -30,7 +30,7 @@ LIB_OBJ := $(VM_OBJ) $(STDLIB_OBJ)
 
 .PHONY: all clean test extensions stdlib
 
-all: $(BUILD)/flux $(BUILD)/libflux.a stdlib
+all: $(BUILD)/flux $(BUILD)/libflux.a stdlib extensions
 
 # ----- stdlib modules (.so plugins, part of `all`) -----
 # Each subfolder under stdlib/ has its own Makefile that builds
@@ -46,11 +46,14 @@ stdlib:
 		fi; \
 	done
 
-# ----- native extensions (optional; not part of `all`) -----
+# ----- native extensions (part of `all`) -----
 # Each subfolder under extension/ has its own Makefile that builds
-# extension/<name>/lib<name>.so. They're kept out of `all` because they
-# depend on external system libraries (e.g. libpq for postgresql) that may
-# not be installed; run `make extensions` explicitly once those are ready.
+# extension/<name>/lib<name>.so, dlopen()'d lazily the first time a script
+# does `import <name>` (see try_load_native_extension() in vm.c). They depend
+# on external system libraries (e.g. libpq for postgresql, declared in
+# replit.nix); if one of those libraries isn't installed in a given
+# environment, that extension's build fails loudly here rather than at
+# `import` time. Run `make extensions` on its own to rebuild just these.
 extensions:
 	@for d in extension/*/; do \
 		if [ -f "$${d}Makefile" ]; then \

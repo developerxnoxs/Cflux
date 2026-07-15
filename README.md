@@ -98,13 +98,15 @@ Untuk mencopot: `sudo make uninstall` (atau dengan `PREFIX` yang sama seperti sa
 Tiga cara mendeklarasikan variabel:
 
 ```flux
-name = "Flux"        # assignment biasa (gaya lama)
-let age = 20         # deklarasi dengan let (bisa diubah nilainya)
-const PI_APPROX = 3.14  # konstanta
+name = "Flux"           # assignment biasa
+let age = 20            # deklarasi dengan let (bisa diubah nilainya)
+const PI_APPROX = 3.14  # deklarasi dengan const
 
 # Anotasi tipe opsional — hanya diparsing, tidak divalidasi saat runtime
 let score: int = 100
 ```
+
+> **Catatan**: `let` dan `const` saat ini hanya sebagai penanda gaya penulisan — keduanya tidak membedakan perilaku runtime. Nilai yang dideklarasikan dengan `const` masih bisa ditimpa; immutability belum di-enforce oleh compiler.
 
 ### 3.2 Tipe Data
 
@@ -124,10 +126,11 @@ Aturan "truthy/falsy" (seperti Python): `""` (string kosong) dan `[]` (list koso
 
 | Kategori | Operator |
 |---|---|
-| Aritmatika | `+` `-` `*` `/` (pembagian sebenarnya, hasil bisa desimal) `//` (pembagian bulat) `%` `**` (pangkat) |
-| Perbandingan | `==` `!=` `<` `>` `<=` `>=` (bisa untuk angka maupun string, lexicographic) |
+| Aritmatika | `+` `-` `*` `/` (hasil desimal) `//` (pembagian bulat) `%` `**` (pangkat) |
+| Perbandingan | `==` `!=` `<` `>` `<=` `>=` (angka maupun string, lexicographic) |
 | Logika | `and` `or` `not` |
-| Pipeline | `\|>` (lihat [4.5.4](#54-pipeline-operator)) |
+| Bitwise | `&` (AND) `\|` (OR) `^` (XOR) `~` (NOT/complement) |
+| Pipeline | `\|>` (lihat [5.4](#54-pipeline-operator)) |
 
 ### 3.4 String & F-string
 
@@ -632,28 +635,57 @@ print(map(nums, square))                # [1, 4, 9, 16, 25]
 ### Modul `math`
 
 ```flux
-print(math.sqrt(16))    # 4.0
-print(math.pow(2, 10))  # 1024
-print(math.pi)
-print(math.e)
+import math
+
+print(math.sqrt(16))      # 4.0
+print(math.pow(2, 10))    # 1024.0
+print(math.log2(8))       # 3.0
+print(math.hypot(3, 4))   # 5.0
+print(math.pi)            # 3.141592653589793
+print(math.e)             # 2.718281828459045
 ```
-Fungsi tersedia: `sin`, `cos`, `tan`, `sqrt`, `pow`, `floor`, `ceil`, `abs`, `log`, `round`, `min`, `max`. Konstanta: `pi`, `e`.
+
+**Fungsi trigonometri:** `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2(y, x)`
+
+**Fungsi pangkat/logaritma:** `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log2`, `log10`
+
+**Pembulatan:** `floor`, `ceil`, `round`, `trunc`
+
+**Lainnya:** `abs`, `min`, `max`, `hypot`
+
+**Konstanta:** `pi`, `e`
 
 ### Modul `time`
 
 ```flux
-print(time.now())     # unix timestamp
-time.sleep(1)          # tidur 1 detik
-print(time.clock())
+import time
+
+print(time.now())         # unix timestamp (detik sejak epoch)
+print(time.clock())       # waktu CPU proses (detik, presisi tinggi)
+print(time.monotonic())   # monotonic clock (tidak terpengaruh perubahan jam sistem)
+time.sleep(1)             # tidur N detik
+print(time.format(time.now(), "%Y-%m-%d"))  # format timestamp ke string
+ts = time.parse("2024-01-15", "%Y-%m-%d")  # parse string ke timestamp
 ```
+
+**Fungsi:** `now`, `clock`, `monotonic`, `sleep`, `format`, `parse`
 
 ### Modul `fs`
 
 ```flux
-isi = fs.read("file.txt")
-fs.write("out.txt", "hello")
-print(fs.exists("out.txt"))
+import fs
+
+isi = fs.read("file.txt")           # baca seluruh isi file → string
+fs.write("out.txt", "hello")        # tulis (overwrite) file
+fs.append("log.txt", "baris baru") # tambahkan ke akhir file
+print(fs.exists("out.txt"))         # true/false
+print(fs.size("out.txt"))           # ukuran file dalam byte
+fs.remove("tmp.txt")                # hapus file
+fs.rename("lama.txt", "baru.txt")  # ganti nama / pindahkan file
+fs.copy("src.txt", "dst.txt")      # salin file
 ```
+
+**Fungsi:** `read`, `write`, `append`, `exists`, `size`, `remove`, `rename`, `copy`
 
 ### Modul `io`
 
@@ -738,27 +770,77 @@ Detail lengkap ABI plugin ada di komentar `include/flux/extension.h`.
 
 ## 14. Embed libflux ke Program C
 
+Sertakan **satu** header publik saja — jangan include header internal seperti `vm.h` atau `compiler.h`:
+
+```c
+#include <flux/flux.h>
+```
+
+### Lifecycle VM
+
+```c
+FluxVM *vm = flux_vm_new();          /* buat VM baru */
+flux_load_stdlib(vm);                /* muat stdlib (math, io, fs, dst.) */
+flux_vm_destroy(vm);                 /* bebaskan semua memori */
+```
+
+### Menjalankan kode Flux
+
+```c
+/* Dari file */
+FluxResult r = flux_execute_file(vm, "main.flx");
+
+/* Dari string */
+FluxResult r = flux_eval(vm, "print('Hello!')", "<embed>");
+
+if (r != FLUX_OK)
+    fprintf(stderr, "Error: %s\n", flux_get_error(vm));
+```
+
+### Mendaftarkan fungsi C ke Flux
+
+Gunakan `flux_register_function` (bukan `vm_register_native` — itu fungsi internal):
+
 ```c
 #include <flux/flux.h>
 
-FluxVM *vm = flux_vm_new();
-flux_load_stdlib(vm);
-flux_execute_file(vm, "main.flx");
-flux_eval(vm, "print('Hello!')", "<embed>");
-
-static Value my_func(FluxVM *vm, int argc, Value *argv) {
-    printf("Called from Flux!\n");
-    return value_null();
+static FluxValue my_add(FluxVM *vm, int argc, FluxValue *argv) {
+    int64_t a = flux_to_int(argv[0]);
+    int64_t b = flux_to_int(argv[1]);
+    return flux_value_int(a + b);
 }
-vm_register_native(vm, "my_func", my_func, 0);
 
-flux_vm_destroy(vm);
+flux_register_function(vm, "my_add", my_add, 2);
+/* Sekarang bisa dipanggil dari Flux: result = my_add(3, 4) */
 ```
 
-Compile:
+### Memanggil fungsi Flux dari C
+
+```c
+FluxValue args[2] = { flux_value_int(10), flux_value_int(20) };
+FluxValue result;
+FluxResult r = flux_call(vm, "my_flux_func", 2, args, &result);
+if (r == FLUX_OK)
+    printf("Hasil: %lld\n", flux_to_int(result));
+```
+
+### Helper nilai (Value helpers)
+
+| Konstruksi | Akses | Cek tipe |
+|---|---|---|
+| `flux_value_int(n)` | `flux_to_int(v)` | `flux_is_int(v)` |
+| `flux_value_float(d)` | `flux_to_float(v)` | `flux_is_float(v)` |
+| `flux_value_bool(b)` | `flux_to_bool(v)` | `flux_is_bool(v)` |
+| `flux_value_null()` | — | `flux_is_null(v)` |
+| `flux_value_string(vm, s, len)` | `flux_to_string(v)` | `flux_is_string(v)` |
+
+### Compile
+
 ```bash
-gcc myapp.c -Iinclude -Lbuild_make -lflux -lm -o myapp
+gcc myapp.c -Iinclude -Lbuild_make -lflux -lm -ldl -luv -o myapp
 ```
+
+> **Catatan:** `flux_to_string()` mengembalikan pointer ke memori yang dikelola GC. Gunakan nilai tersebut sebelum memanggil kode Flux lagi (yang bisa memicu GC dan invalidate pointer-nya).
 
 ---
 

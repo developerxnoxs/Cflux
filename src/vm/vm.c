@@ -409,8 +409,17 @@ static Value value_add(FluxVM *vm, Value a, Value b) {
 
 /* Forward declaration: do_import (below) needs to re-enter the dispatch
  * loop to run an imported module's top-level code to completion before
- * OP_IMPORT can push its resulting namespace dict. */
-static VMResult vm_run(FluxVM *vm, int base_frame_count);
+ * OP_IMPORT can push its resulting namespace dict.
+ *
+ * `preserve_result`: when the dispatch loop unwinds all the way back to
+ * base_frame_count (i.e. the closure we were asked to run has returned),
+ * this controls what happens to its return value. do_import/vm_execute run
+ * a whole script/module purely for side effects and pass false, discarding
+ * it (and popping the closure itself) exactly as before. vm_invoke() (see
+ * below) passes true so a *value* call - e.g. a callback invoked from a
+ * native function like map()/filter()/reduce() - gets its result left on
+ * top of the stack for the caller to vm_pop(). */
+static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result);
 
 /* -------------------------------------------------------------------------
  * Native extension (.so) loading — see include/flux/extension.h
@@ -484,7 +493,35 @@ VMResult vm_execute(FluxVM *vm, FluxFunction *fn) {
     vm_push(vm, value_object((FluxObject *)main_closure));
     int base = vm->frame_count; /* 0 for a fresh VM */
     call_closure(vm, main_closure, 0);
-    return vm_run(vm, base);
+    return vm_run(vm, base, false);
+}
+
+/* -------------------------------------------------------------------------
+ * vm_invoke - call any Flux-callable Value from native C code and get its
+ * return value back, e.g. for map()/filter()/reduce() invoking a callback.
+ *
+ * `args` (argc entries) must NOT be positioned on the VM stack already -
+ * this function pushes callee and each arg itself. Caller must ensure
+ * `callee` and every element of `args` are otherwise GC-reachable up to
+ * this call (e.g. still referenced by an argv[] the VM itself passed in,
+ * or already pushed as a stack/GC root) since pushing them here is what
+ * protects them from this point on.
+ * ---------------------------------------------------------------------- */
+Value vm_invoke(FluxVM *vm, Value callee, Value *args, int argc) {
+    vm_push(vm, callee);
+    for (int i = 0; i < argc; i++) vm_push(vm, args[i]);
+
+    int base = vm->frame_count;
+    VMResult r = vm_call_value(vm, callee, argc);
+    if (vm->has_error) return value_null();
+
+    if (r == VM_OK && vm->frame_count > base) {
+        /* callee was a closure/bound-method/class-init: vm_call_value only
+         * pushed its frame, so drive it to completion here. */
+        r = vm_run(vm, base, true);
+    }
+    if (r != VM_OK || vm->has_error) return value_null();
+    return vm_pop(vm);
 }
 
 /* -------------------------------------------------------------------------
@@ -616,7 +653,7 @@ static bool do_import(FluxVM *vm, FluxString *module_name, Value *out) {
     vm_push(vm, value_object((FluxObject *)closure));
     int base = vm->frame_count;
     bool called = call_closure(vm, closure, 0);
-    VMResult r = called ? vm_run(vm, base) : VM_RUNTIME_ERROR;
+    VMResult r = called ? vm_run(vm, base, false) : VM_RUNTIME_ERROR;
 
     vm_pop_import_dir(vm);
 
@@ -668,7 +705,7 @@ static bool do_import(FluxVM *vm, FluxString *module_name, Value *out) {
     return true;
 }
 
-static VMResult vm_run(FluxVM *vm, int base_frame_count) {
+static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
     CallFrame *frame = &vm->frames[vm->frame_count - 1];
     register uint8_t *ip = frame->ip;
 
@@ -1107,7 +1144,12 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count) {
                 close_upvalues(vm, frame->slots);
                 vm->frame_count--;
                 if (vm->frame_count == base_frame_count) {
-                    vm_pop(vm); /* pop main script / module closure */
+                    if (preserve_result) {
+                        vm->stack_top = frame->slots;
+                        vm_push(vm, result);
+                    } else {
+                        vm_pop(vm); /* pop main script / module closure */
+                    }
                     return VM_OK;
                 }
                 vm->stack_top = frame->slots;

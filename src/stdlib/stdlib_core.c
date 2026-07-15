@@ -7,7 +7,8 @@
  *
  * Core globals registered here:
  *   print, println, write, input, type, len, range,
- *   int, float, str, bool, exit, sleep, assert, id
+ *   int, float, str, bool, exit, sleep, assert, id,
+ *   map, filter, reduce
  */
 #include "stdlib_internal.h"
 #include <inttypes.h>
@@ -285,6 +286,88 @@ static Value native_id(FluxVM *vm, int argc, Value *argv) {
 }
 
 /* =========================================================================
+ * Functional helpers: map, filter, reduce
+ *
+ * All three take a list and a Flux function/lambda and invoke it via
+ * vm_invoke() (src/vm/vm.c), which works for closures, lambdas, and other
+ * natives alike. The source list itself stays reachable as a GC root for
+ * the whole call because it's argv[0], still live on the VM stack (native
+ * arguments aren't popped until the native call returns) - only the
+ * *result* list needs an explicit vm_push/vm_pop around the loop.
+ * ====================================================================== */
+
+static Value native_map(FluxVM *vm, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_LIST(argv[0])) {
+        vm_runtime_error(vm, "map() expects a list as the first argument");
+        return value_null();
+    }
+    FluxList *src = AS_LIST(argv[0]);
+    Value fn = argv[1];
+
+    FluxList *result = object_list_new(vm);
+    vm_push(vm, value_object((FluxObject *)result));
+    for (int i = 0; i < src->elements.count; i++) {
+        Value call_args[1] = { src->elements.data[i] };
+        Value mapped = vm_invoke(vm, fn, call_args, 1);
+        if (vm->has_error) { vm_pop(vm); return value_null(); }
+        value_array_write(&result->elements, mapped);
+    }
+    vm_pop(vm);
+    return value_object((FluxObject *)result);
+}
+
+static Value native_filter(FluxVM *vm, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_LIST(argv[0])) {
+        vm_runtime_error(vm, "filter() expects a list as the first argument");
+        return value_null();
+    }
+    FluxList *src = AS_LIST(argv[0]);
+    Value fn = argv[1];
+
+    FluxList *result = object_list_new(vm);
+    vm_push(vm, value_object((FluxObject *)result));
+    for (int i = 0; i < src->elements.count; i++) {
+        Value item = src->elements.data[i];
+        Value call_args[1] = { item };
+        Value keep = vm_invoke(vm, fn, call_args, 1);
+        if (vm->has_error) { vm_pop(vm); return value_null(); }
+        if (value_is_truthy(keep)) value_array_write(&result->elements, item);
+    }
+    vm_pop(vm);
+    return value_object((FluxObject *)result);
+}
+
+static Value native_reduce(FluxVM *vm, int argc, Value *argv) {
+    if (!IS_LIST(argv[0])) {
+        vm_runtime_error(vm, "reduce() expects a list as the first argument");
+        return value_null();
+    }
+    FluxList *src = AS_LIST(argv[0]);
+    Value fn = argv[1];
+
+    int i = 0;
+    Value acc;
+    if (argc >= 3) {
+        acc = argv[2];
+    } else {
+        if (src->elements.count == 0) {
+            vm_runtime_error(vm, "reduce() of empty list with no initial value");
+            return value_null();
+        }
+        acc = src->elements.data[0];
+        i = 1;
+    }
+    for (; i < src->elements.count; i++) {
+        Value call_args[2] = { acc, src->elements.data[i] };
+        acc = vm_invoke(vm, fn, call_args, 2);
+        if (vm->has_error) return value_null();
+    }
+    return acc;
+}
+
+/* =========================================================================
  * flux_stdlib_load_core
  * ====================================================================== */
 
@@ -304,4 +387,7 @@ void flux_stdlib_load_core(FluxVM *vm) {
     vm_register_native(vm, "sleep",   native_sleep,             1);
     vm_register_native(vm, "assert",  native_assert,           -1);
     vm_register_native(vm, "id",      native_id,                1);
+    vm_register_native(vm, "map",     native_map,               2);
+    vm_register_native(vm, "filter",  native_filter,            2);
+    vm_register_native(vm, "reduce",  native_reduce,           -1);
 }

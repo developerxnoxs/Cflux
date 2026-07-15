@@ -458,6 +458,36 @@ Lihat contoh lengkap multi-file di [`examples/modules/`](examples/modules/).
 | `sleep(detik)` | Tunda eksekusi |
 | `assert(kondisi, ...)` | Gagal jika kondisi salah |
 | `exit(kode)` | Keluar dari program |
+| `map(list, fn)` | List baru berisi `fn(item)` untuk tiap elemen |
+| `filter(list, fn)` | List baru berisi elemen yang `fn(item)`-nya truthy |
+| `reduce(list, fn)` / `reduce(list, fn, initial)` | Akumulasi `fn(acc, item)` dari kiri ke kanan; tanpa `initial`, elemen pertama list dipakai sebagai nilai awal (list tidak boleh kosong) |
+
+`fn` pada ketiganya boleh berupa lambda (lihat [5.3](#53-lambda)) maupun fungsi biasa (`func`):
+
+```flux
+nums = [1, 2, 3, 4, 5]
+
+doubled = map(nums, |x| => x * 2)
+print(doubled)                          # [2, 4, 6, 8, 10]
+
+evens = filter(nums, |x| => x % 2 == 0)
+print(evens)                            # [2, 4]
+
+total = reduce(nums, |acc, x| => acc + x)
+print(total)                            # 15
+
+total_dari_100 = reduce(nums, |acc, x| => acc + x, 100)
+print(total_dari_100)                   # 115
+
+# bisa dirangkai
+hasil = filter(map(nums, |x| => x * 3), |x| => x > 6)
+print(hasil)                            # [9, 12, 15]
+
+# fungsi biasa juga bisa jadi callback, bukan cuma lambda
+func square(n):
+    return n * n
+print(map(nums, square))                # [1, 4, 9, 16, 25]
+```
 
 ### Modul `math`
 

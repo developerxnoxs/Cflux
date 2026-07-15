@@ -23,7 +23,7 @@ The **"Flux REPL"** workflow builds the project and drops into the interactive R
 ## Test Status
 
 - `make test` (C unit tests: lexer, VM, GC) — 33/33 passing.
-- All `.flx` scripts in `examples/` and `tests/` run correctly. `edge_cases.flx`, `test_list_edge.flx`, `test_divzero.flx`, `test_class_edge.flx`, `test_dict_edge.flx`, and `test_types.flx` intentionally end by triggering a runtime error (division by zero, out-of-range index, missing dict key, undefined attribute, bad conversion) to verify the interpreter reports a clean `Runtime error: ...` message and exits — that non-zero exit is expected, not a bug.
+- All `.flx` scripts in `examples/` and `tests/` run correctly, including the new `tests/test_functional.flx` (map/filter/reduce). `edge_cases.flx`, `test_list_edge.flx`, `test_divzero.flx`, `test_class_edge.flx`, `test_dict_edge.flx`, and `test_types.flx` intentionally end by triggering a runtime error (division by zero, out-of-range index, missing dict key, undefined attribute, bad conversion) to verify the interpreter reports a clean `Runtime error: ...` message and exits — that non-zero exit is expected, not a bug.
 - `examples/postgresql_extension.flx` runs end-to-end — `make`/`make all` now also builds every `extension/*/Makefile` (previously extensions were opt-in via `make extensions`; this env already has `libpq`/`postgresql` via `replit.nix`, so nothing extra to install).
 
 ## Project Structure
@@ -99,9 +99,22 @@ rows = postgresql.query(conn, "SELECT id, name FROM users")
 postgresql.close(conn)
 ```
 - When `import <name>` can't find `<name>.flx`, the VM falls back to looking for a native extension at `extension/<name>/lib<name>.so`, `dlopen()`s it, and calls its `flux_extension_init(FluxVM*, Value*)` entry point once (result cached like any other module). See `include/flux/extension.h` for the plugin ABI and `extension/postgresql/postgresql_ext.c` for a full worked example.
-- Extensions are NOT part of `make`/`make all` (they depend on external system libraries that may not be installed). Build them explicitly with `make extensions` (builds every `extension/*/Makefile`) or `make -C extension/<name>`.
+- Extensions ARE part of `make`/`make all` (it also runs `extensions`, building every `extension/*/Makefile`); build just that piece on its own with `make extensions` or `make -C extension/<name>`.
 - The `postgresql` extension wraps libpq (Nix packages `postgresql` + `libpq`, already installed) and exposes `connect(conninfo)`, `query(conn, sql)` / `exec` (alias), `escape_literal(conn, str)`, `status(conn)`, `close(conn)`. Connection handles are opaque dicts tagged `__flux_ext__`; don't read/write those keys directly.
 - Tested end-to-end against the project's Replit-managed Postgres database (`DATABASE_URL`): connect, DDL, parameterless insert/select via `escape_literal`, multi-row insert, select, and close all verified working, plus clean runtime-error messages for bad connection info and bad SQL.
+
+### Functional helpers: map / filter / reduce
+```flux
+nums = [1, 2, 3, 4, 5]
+doubled = map(nums, |x| => x * 2)          # [2, 4, 6, 8, 10]
+evens   = filter(nums, |x| => x % 2 == 0)  # [2, 4]
+total   = reduce(nums, |acc, x| => acc + x)          # 15 (no initial: uses first element)
+total2  = reduce(nums, |acc, x| => acc + x, 100)     # 115 (with initial)
+```
+- Global natives (no import needed), added in `src/stdlib/stdlib_core.c`. Callback can be a lambda or a regular `func`.
+- Implemented via a new `vm_invoke(vm, callee, args, argc)` helper in `src/vm/vm.c`/`include/flux/vm.h` that lets *any* native C function call back into Flux code and get the return value. This didn't exist before: the VM's only prior mechanism for a native-to-Flux nested call (`vm_run(vm, base_frame_count)`, used by `do_import`/`vm_execute`) discards the result on purpose (it's designed for running a whole script/module for side effects only). `vm_invoke` adds a `preserve_result` flag to `vm_run` so a value-returning nested call is possible without disturbing those two existing callers (which still pass `false`).
+- `reduce()` without an `initial` argument errors on an empty list (same as Python's `functools.reduce`).
+- See `tests/test_functional.flx` for coverage (including chaining `map`+`filter` and passing a named function as the callback).
 
 ### CLI subcommands
 ```bash

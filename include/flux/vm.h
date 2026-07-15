@@ -131,6 +131,12 @@ void     vm_reset_stack(FluxVM *vm);
 VMResult vm_execute(FluxVM *vm, FluxFunction *fn);
 VMResult vm_call_value(FluxVM *vm, Value callee, int argc);
 
+/* Call any Flux-callable Value (closure, native, bound method, class) from
+ * native C code and get its return value back - e.g. for a stdlib function
+ * like map()/filter()/reduce() invoking a user-supplied callback. `args`
+ * must not already be sitting on the VM stack; this pushes them itself. */
+Value vm_invoke(FluxVM *vm, Value callee, Value *args, int argc);
+
 /* -------------------------------------------------------------------------
  * Stack helpers
  * ---------------------------------------------------------------------- */

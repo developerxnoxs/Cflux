@@ -1,0 +1,42 @@
+# Test: map / filter / reduce
+#
+# Note: lists compare by identity (not deep equality) in this VM, so
+# assertions below compare via str() or check individual elements/length
+# instead of `list == [literal]`.
+print("=== Functional (map/filter/reduce) ===")
+
+nums = [1, 2, 3, 4, 5]
+
+doubled = map(nums, |x| => x * 2)
+print(doubled)
+assert(str(doubled) == "[2, 4, 6, 8, 10]", "map: double")
+
+evens = filter(nums, |x| => x % 2 == 0)
+print(evens)
+assert(str(evens) == "[2, 4]", "filter: evens")
+
+total = reduce(nums, |acc, x| => acc + x)
+print(total)
+assert(total == 15, "reduce: sum without initial")
+
+total_with_init = reduce(nums, |acc, x| => acc + x, 100)
+print(total_with_init)
+assert(total_with_init == 115, "reduce: sum with initial")
+
+# chaining map -> filter
+chained = filter(map(nums, |x| => x * 3), |x| => x > 6)
+print(chained)
+assert(str(chained) == "[9, 12, 15]", "map+filter chaining")
+
+# empty list edge cases
+assert(len(map([], |x| => x)) == 0, "map: empty list")
+assert(len(filter([], |x| => true)) == 0, "filter: empty list")
+
+# a named function works too, not just lambdas
+func square(n):
+    return n * n
+squared = map(nums, square)
+print(squared)
+assert(str(squared) == "[1, 4, 9, 16, 25]", "map: named function callback")
+
+print("functional: OK")

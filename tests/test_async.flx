@@ -1,0 +1,180 @@
+# test_async.flx — Comprehensive async/await test suite
+
+import aio
+
+# Use a list as a mutable counter so inner functions can modify it
+# (plain assignment in a Flux function creates a local, not a global write)
+let counts = [0, 0]   # [passed, failed]
+
+func ok(name):
+    print(f"  [PASS] {name}")
+    counts[0] = counts[0] + 1
+
+func fail(name, msg):
+    print(f"  [FAIL] {name}: {msg}")
+    counts[1] = counts[1] + 1
+
+print("=== Async Test Suite ===")
+
+# ── Test 1: basic sleep + return value ────────────────────────────────────────
+print("\n-- 1. Basic sleep & return value --")
+
+async func simple_task(val):
+    await aio.sleep(10)
+    return val * 2
+
+let t = spawn simple_task(21)
+let r = await t
+if r == 42:
+    ok("sleep + return value")
+else:
+    fail("sleep + return value", f"expected 42, got {r}")
+
+# ── Test 2: concurrency ordering (B < A) ──────────────────────────────────────
+print("\n-- 2. Concurrency ordering --")
+
+let order = []
+
+async func track(name, delay):
+    await aio.sleep(delay)
+    order.append(name)
+    return name
+
+let ta = spawn track("A", 120)
+let tb = spawn track("B", 30)
+let tc = spawn track("C", 70)
+
+let ra = await ta
+let rb = await tb
+let rc = await tc
+
+if order[0] == "B" and order[1] == "C" and order[2] == "A":
+    ok("concurrent ordering (B→C→A by delay)")
+else:
+    fail("concurrent ordering", f"got order {order}")
+
+if ra == "A" and rb == "B" and rc == "C":
+    ok("return values from concurrent tasks")
+else:
+    fail("return values from concurrent tasks", f"ra={ra} rb={rb} rc={rc}")
+
+# ── Test 3: many concurrent tasks ─────────────────────────────────────────────
+print("\n-- 3. Many concurrent tasks --")
+
+async func numbered(n):
+    await aio.sleep(5)
+    return n * n
+
+let futures = []
+let i = 0
+while i < 10:
+    futures.append(spawn numbered(i))
+    i = i + 1
+
+let sum = 0
+let j = 0
+while j < 10:
+    sum = sum + await futures[j]
+    j = j + 1
+
+# 0²+1²+…+9² = 285
+if sum == 285:
+    ok("10 concurrent tasks, sum of squares = 285")
+else:
+    fail("10 concurrent tasks", f"expected 285, got {sum}")
+
+# ── Test 4: async write_file + read_file ──────────────────────────────────────
+print("\n-- 4. Async file I/O --")
+
+let tmp_path = "/tmp/flux_async_test.txt"
+let content  = "Hello from Flux async I/O!\nLine 2\n"
+
+async func write_then_read(path, data):
+    await aio.write_file(path, data)
+    let back = await aio.read_file(path)
+    return back
+
+let io_fut = spawn write_then_read(tmp_path, content)
+let io_res = await io_fut
+
+if io_res == content:
+    ok("async write_file + read_file roundtrip")
+else:
+    fail("async write_file + read_file", f"got: {io_res}")
+
+# ── Test 5: sequential awaits inside async func ───────────────────────────────
+print("\n-- 5. Sequential awaits inside async func --")
+
+async func sequential():
+    await aio.sleep(10)
+    await aio.sleep(10)
+    await aio.sleep(10)
+    return "seq_done"
+
+let seq_fut = spawn sequential()
+let seq_res = await seq_fut
+
+if seq_res == "seq_done":
+    ok("sequential awaits inside async func")
+else:
+    fail("sequential awaits", f"got: {seq_res}")
+
+# ── Test 6: async func calling another async func (nested await) ──────────────
+print("\n-- 6. Nested async calls --")
+
+async func inner(x):
+    await aio.sleep(5)
+    return x + 10
+
+async func outer(x):
+    let v = await inner(x)
+    await aio.sleep(5)
+    return v * 2
+
+let nest_fut = spawn outer(5)
+let nest_res = await nest_fut
+
+if nest_res == 30:  # (5+10)*2
+    ok("nested async (outer awaits inner)")
+else:
+    fail("nested async", f"expected 30, got {nest_res}")
+
+# ── Test 7: spawn inside a loop, collect after ────────────────────────────────
+print("\n-- 7. Spawn in loop, collect after --")
+
+async func delayed_echo(v, delay):
+    await aio.sleep(delay)
+    return v
+
+let futs = []
+let k = 1
+while k <= 5:
+    futs.append(spawn delayed_echo(k, k * 10))
+    k = k + 1
+
+let total = 0
+let m = 0
+while m < 5:
+    total = total + await futs[m]
+    m = m + 1
+
+if total == 15:  # 1+2+3+4+5
+    ok("spawn in loop + collect after = 15")
+else:
+    fail("spawn in loop", f"expected 15, got {total}")
+
+# ── Test 8: zero-delay sleep (yield to scheduler) ────────────────────────────
+print("\n-- 8. Zero-delay sleep (yield) --")
+
+async func yielding():
+    await aio.sleep(0)
+    return "yielded"
+
+let y = await spawn yielding()
+if y == "yielded":
+    ok("zero-delay sleep / scheduler yield")
+else:
+    fail("zero-delay sleep", f"got: {y}")
+
+# ── Summary ───────────────────────────────────────────────────────────────────
+print(f"\n=== {counts[0]} passed, {counts[1]} failed ===")

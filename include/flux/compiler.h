@@ -57,6 +57,12 @@ typedef struct CompilerFrame {
     int        scope_depth;
 
     UpvalueDesc upvalues[FLUX_MAX_UPVALUES];
+
+    /* Names declared nonlocal in this frame — assignments to these names
+     * must resolve to an upvalue in the enclosing scope, never create a
+     * new local.                                                          */
+    char nonlocal_names[FLUX_MAX_LOCALS][256];
+    int  nonlocal_count;
 } CompilerFrame;
 
 /* -------------------------------------------------------------------------

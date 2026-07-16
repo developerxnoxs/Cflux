@@ -131,6 +131,14 @@ static int add_local_tok(Compiler *c, const char *start, int length, int line) {
     return add_local(c, buf, line);
 }
 
+/* Returns true if 'name' was declared nonlocal in the current frame */
+static bool frame_is_nonlocal(CompilerFrame *frame, const char *name) {
+    for (int i = 0; i < frame->nonlocal_count; i++) {
+        if (strcmp(frame->nonlocal_names[i], name) == 0) return true;
+    }
+    return false;
+}
+
 static bool compiler_has_global(Compiler *c, const char *name) {
     for (int i = 0; i < c->global_count; i++) {
         if (strcmp(c->global_names[i], name) == 0) return true;
@@ -189,11 +197,12 @@ static int resolve_upvalue(CompilerFrame *frame, const char *name, int line) {
 
 static void frame_init(Compiler *c, CompilerFrame *frame, FuncKind kind,
                        const char *name, int name_len) {
-    frame->enclosing   = c->frame;
-    frame->kind        = kind;
-    frame->local_count = 0;
-    frame->scope_depth = 0;
-    frame->function    = object_function_new(c->vm);
+    frame->enclosing      = c->frame;
+    frame->kind           = kind;
+    frame->local_count    = 0;
+    frame->scope_depth    = 0;
+    frame->nonlocal_count = 0;
+    frame->function       = object_function_new(c->vm);
     frame->function->is_async = (kind == FUNC_ASYNC);
 
     if (name && name_len > 0)
@@ -232,6 +241,7 @@ static FluxFunction *frame_end(Compiler *c, int line) {
 
 static void compile_node(Compiler *c, AstNode *node);
 static void compile_expr(Compiler *c, AstNode *node);
+static void predeclare_node_locals(Compiler *c, AstNode *node, int line);
 
 /* -------------------------------------------------------------------------
  * Variable access emission
@@ -458,7 +468,25 @@ static void compile_expr(Compiler *c, AstNode *node) {
                 const char *name = target->as.ident.name;
                 compile_expr(c, node->as.assign.value);
 
-                if (c->frame->enclosing == NULL &&
+                /* ---- nonlocal: resolve to upvalue or module-level global ---- */
+                if (frame_is_nonlocal(c->frame, name)) {
+                    int upv = resolve_upvalue(c->frame, name, line);
+                    if (upv != -1) {
+                        /* Found in an enclosing function frame — use upvalue. */
+                        emit_byte(c, OP_SET_UPVALUE, line);
+                        emit_byte(c, (uint8_t)upv,   line);
+                    } else if (compiler_has_global(c, name)) {
+                        /* Found at module (global) scope — use STORE_GLOBAL.
+                         * STORE_GLOBAL peeks (leaves value on stack). */
+                        emit_byte(c, OP_STORE_GLOBAL, line);
+                        emit_uint16(c, identifier_constant(c, name, (int)strlen(name), line), line);
+                    } else {
+                        compile_error(c, line,
+                            "nonlocal '%s': no binding found in any enclosing scope",
+                            name);
+                    }
+                    /* result already on stack (both instructions peek) */
+                } else if (c->frame->enclosing == NULL &&
                     resolve_local(c->frame, name) == -1 &&
                     resolve_upvalue(c->frame, name, line) == -1 &&
                     compiler_has_global(c, name)) {
@@ -691,6 +719,10 @@ static void compile_expr(Compiler *c, AstNode *node) {
                 add_local_tok(c, params->data[i].name.start,
                                  params->data[i].name.length, line);
 
+            /* Pre-declare function-body locals so nested closures can see them */
+            if (!node->as.lambda.is_expr_body)
+                predeclare_node_locals(c, node->as.lambda.body, line);
+
             if (node->as.lambda.is_expr_body) {
                 /* Expression body: compile and return */
                 compile_expr(c, node->as.lambda.body);
@@ -768,6 +800,7 @@ static void compile_expr(Compiler *c, AstNode *node) {
             for (int i = 0; i < params->count; i++)
                 add_local_tok(c, params->data[i].name.start,
                                  params->data[i].name.length, line);
+            predeclare_node_locals(c, node->as.func_def.body, line);
             compile_node(c, node->as.func_def.body);
             scope_end(c, line);
             FluxFunction *fn = frame_end(c, line);
@@ -825,7 +858,9 @@ static void predeclare_node_locals(Compiler *c, AstNode *node, int line) {
             if (node->as.assign.target &&
                 node->as.assign.target->kind == AST_IDENT) {
                 const char *name = node->as.assign.target->as.ident.name;
-                if (resolve_local(c->frame, name) == -1 &&
+                /* Skip names declared nonlocal — they must NOT become locals. */
+                if (!frame_is_nonlocal(c->frame, name) &&
+                    resolve_local(c->frame, name) == -1 &&
                     resolve_upvalue(c->frame, name, line) == -1 &&
                     !compiler_has_global(c, name)) {
                     /* Pre-declare at function scope (depth 1).
@@ -1176,6 +1211,13 @@ static void compile_node(Compiler *c, AstNode *node) {
             for (int i = 0; i < params->count; i++)
                 add_local_tok(c, params->data[i].name.start,
                                  params->data[i].name.length, line);
+            /* Pre-declare all variables assigned anywhere in the body as
+             * locals at function scope (depth 1) before compiling any
+             * nested function.  This ensures that inner functions calling
+             * resolve_upvalue() can always find outer locals, even when
+             * the outer assignment appears after the inner func definition
+             * (Python-style forward-visible function-scope locals). */
+            predeclare_node_locals(c, node->as.func_def.body, line);
             compile_node(c, node->as.func_def.body);
             scope_end(c, line);
             FluxFunction *fn = frame_end(c, line);
@@ -1573,6 +1615,43 @@ static void compile_node(Compiler *c, AstNode *node) {
                 compiler_declare_global(c, name);
             } else {
                 add_local(c, name, line);
+            }
+            break;
+        }
+
+        /* ----------------------------------------------------------------
+         * nonlocal name1, name2, ...
+         * Register each name in the current frame's nonlocal set and force
+         * upvalue capture so that both reads and writes go through the
+         * upvalue path rather than creating a new local.
+         * -------------------------------------------------------------- */
+        case AST_NONLOCAL: {
+            if (c->frame->enclosing == NULL) {
+                compile_error(c, line, "'nonlocal' at module scope has no effect");
+                break;
+            }
+            for (int i = 0; i < node->as.block.stmts.count; i++) {
+                AstNode    *id   = node->as.block.stmts.data[i];
+                const char *name = id->as.ident.name;
+
+                /* Register in the frame's nonlocal set */
+                if (c->frame->nonlocal_count < FLUX_MAX_LOCALS) {
+                    strncpy(c->frame->nonlocal_names[c->frame->nonlocal_count],
+                            name, 255);
+                    c->frame->nonlocal_names[c->frame->nonlocal_count][255] = '\0';
+                    c->frame->nonlocal_count++;
+                }
+
+                /* Force upvalue capture now (if in enclosing function frame) so
+                 * reads via emit_load_var resolve through GET_UPVALUE.
+                 * If not found as an upvalue, it may be a module-level global,
+                 * which is handled at assignment time via STORE_GLOBAL. */
+                int upv = resolve_upvalue(c->frame, name, line);
+                if (upv == -1 && !compiler_has_global(c, name)) {
+                    compile_error(c, line,
+                        "nonlocal '%s': no binding found in any enclosing scope",
+                        name);
+                }
             }
             break;
         }

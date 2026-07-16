@@ -1,0 +1,109 @@
+# test_nonlocal.flx — tests for the `nonlocal` keyword
+#
+# Bug fixed: assignment inside a function always created a new local binding,
+# making it impossible to modify an outer variable without a list workaround.
+# The `nonlocal` keyword explicitly declares that an assignment targets the
+# nearest enclosing binding (upvalue or module-level global).
+
+failed = 0
+
+func check(label, got, expected):
+    nonlocal failed
+    if got == expected:
+        print(f"  PASS  {label}")
+    else:
+        print(f"  FAIL  {label}: got {got}, expected {expected}")
+        failed = failed + 1
+
+# ── Test 1: nonlocal targeting a module-level global ──────────────────────
+counter = 0
+
+func increment():
+    nonlocal counter
+    counter = counter + 1
+
+increment()
+increment()
+increment()
+check("Test 1 - global counter", counter, 3)
+
+# ── Test 2: nonlocal targeting a closure upvalue ──────────────────────────
+func make_counter():
+    n = 0
+    func inc():
+        nonlocal n
+        n = n + 1
+        return n
+    return inc
+
+c = make_counter()
+check("Test 2a - closure call 1", c(), 1)
+check("Test 2b - closure call 2", c(), 2)
+check("Test 2c - closure call 3", c(), 3)
+
+# ── Test 3: accumulator using nonlocal ────────────────────────────────────
+func adder():
+    total = 0
+    func add(x):
+        nonlocal total
+        total = total + x
+        return total
+    return add
+
+a = adder()
+check("Test 3a - accumulator 5",  a(5),  5)
+check("Test 3b - accumulator 15", a(10), 15)
+
+# ── Test 4: multiple nonlocal names ───────────────────────────────────────
+x_result = 0
+y_result = 0
+
+func multi():
+    x = 1
+    y = 2
+    func inner():
+        nonlocal x
+        nonlocal y
+        x = x + 10
+        y = y + 20
+    inner()
+    nonlocal x_result
+    nonlocal y_result
+    x_result = x
+    y_result = y
+
+multi()
+check("Test 4a - multiple nonlocal x", x_result, 11)
+check("Test 4b - multiple nonlocal y", y_result, 22)
+
+# ── Test 5: nonlocal inside a loop body ───────────────────────────────────
+func sum_loop(items):
+    total = 0
+    func add_item(v):
+        nonlocal total
+        total = total + v
+    for item in items:
+        add_item(item)
+    return total
+
+check("Test 5 - nonlocal in loop", sum_loop([1, 2, 3, 4, 5]), 15)
+
+# ── Test 6: forward-declared outer local (inner func defined before outer assigns) ──
+# nonlocal must work even when the outer binding is assigned *after* the
+# inner function definition — the variable is still a local of the outer
+# function, just first-assigned later in its body.
+func outer_forward():
+    func inner_fwd():
+        nonlocal y
+        y = y + 1
+    y = 10       # y is assigned AFTER inner_fwd is defined
+    inner_fwd()
+    return y
+
+check("Test 6 - forward-declared outer local", outer_forward(), 11)
+
+# ── Summary ───────────────────────────────────────────────────────────────
+if failed == 0:
+    print("test_nonlocal: all tests passed")
+else:
+    print(f"test_nonlocal: {failed} test(s) FAILED")

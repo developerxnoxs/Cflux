@@ -141,6 +141,7 @@ static const Keyword keywords[] = {
     {"struct",   TOK_STRUCT},
     {"enum",     TOK_ENUM},
     {"spawn",    TOK_SPAWN},
+    {"nonlocal", TOK_NONLOCAL},
     {NULL, 0},
 };
 
@@ -496,6 +497,7 @@ const char *token_kind_name(TokenKind kind) {
         case TOK_STRUCT:     return "struct";
         case TOK_ENUM:       return "enum";
         case TOK_SPAWN:      return "spawn";
+        case TOK_NONLOCAL:   return "nonlocal";
         case TOK_PLUS:       return "+";
         case TOK_MINUS:      return "-";
         case TOK_STAR:       return "*";
@@ -533,5 +535,5 @@ const char *token_kind_name(TokenKind kind) {
 }
 
 bool token_is_keyword(TokenKind kind) {
-    return kind >= TOK_FUNC && kind <= TOK_SPAWN;
+    return kind >= TOK_FUNC && kind <= TOK_NONLOCAL;
 }

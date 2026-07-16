@@ -66,6 +66,9 @@ typedef enum {
     AST_IMPORT,
     AST_FROM_IMPORT,
 
+    /* Scope declarations */
+    AST_NONLOCAL,        /* nonlocal name1, name2, ... */
+
     /* Block (list of statements) */
     AST_BLOCK,
     AST_EXPR_STMT,       /* expression used as statement */

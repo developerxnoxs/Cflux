@@ -1219,6 +1219,20 @@ static AstNode *parse_stmt(Parser *p) {
         match(p, TOK_NEWLINE);
         return n;
     }
+    if (match(p, TOK_NONLOCAL)) {
+        /* nonlocal name1, name2, ...
+         * Reuse the block list to hold AST_IDENT nodes — one per name. */
+        AstNode *n = ast_node_alloc(p->arena, AST_NONLOCAL, line, col);
+        ast_list_init(&n->as.block.stmts);
+        do {
+            consume(p, TOK_IDENT, "Expected variable name after 'nonlocal'");
+            AstNode *id = ast_ident(p->arena, p->previous.line, p->previous.column,
+                                    p->previous.start, p->previous.length);
+            ast_list_push(&n->as.block.stmts, id);
+        } while (match(p, TOK_COMMA));
+        match(p, TOK_NEWLINE);
+        return n;
+    }
 
     /* Expression statement */
     AstNode *expr = parse_expr(p);

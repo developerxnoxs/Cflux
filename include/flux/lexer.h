@@ -53,7 +53,8 @@ typedef enum {
     TOK_MATCH,      /* match  */
     TOK_STRUCT,     /* struct */
     TOK_ENUM,       /* enum   */
-    TOK_SPAWN,      /* spawn  */
+    TOK_SPAWN,      /* spawn    */
+    TOK_NONLOCAL,   /* nonlocal */
 
     /* Operators */
     TOK_PLUS,       /* +  */

@@ -1853,31 +1853,19 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                     break;
                 }
 
-                /* Truly suspend: save state, hand value to whoever awaits us */
+                /* Cooperative yield: save state and re-enqueue self so the
+                 * scheduler can run other ready coroutines before resuming us.
+                 * The awaiter (if any) is NOT woken here — it waits until this
+                 * coroutine finishes (returns), at which point vm_scheduler_run_step
+                 * marks it DEAD and wakes whoever set awaited_by. */
                 SYNC_IP();
                 close_upvalues(vm, vm->stack);
                 coro_save(vm, cur_co);
                 cur_co->state  = CORO_SUSPENDED;
-                cur_co->result = result;
+                cur_co->result = result;   /* snapshot of yielded value, informational */
 
-                /* If someone is currently awaiting this coroutine, push value
-                 * onto their saved stack and re-queue them */
-                if (cur_co->awaited_by) {
-                    FluxCoroutine *waiter = cur_co->awaited_by;
-                    cur_co->awaited_by = NULL;
-                    int n = (int)(waiter->stack_top - waiter->stack);
-                    if (n >= waiter->stack_capacity) {
-                        int nc = waiter->stack_capacity * 2 + 4;
-                        waiter->stack = (Value *)flux_realloc(waiter->stack,
-                                            sizeof(Value) * (size_t)nc);
-                        waiter->stack_top      = waiter->stack + n;
-                        waiter->stack_capacity = nc;
-                    }
-                    waiter->stack[n] = result;
-                    waiter->stack_top = waiter->stack + n + 1;
-                    waiter->state = CORO_SUSPENDED;
-                    vm_scheduler_enqueue(vm, waiter);
-                }
+                /* Re-enqueue so the coroutine resumes after other ready tasks run */
+                vm_scheduler_enqueue(vm, cur_co);
 
                 vm->stack_top         = vm->stack;
                 vm->frame_count       = 0;

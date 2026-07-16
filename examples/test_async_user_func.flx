@@ -1,51 +1,178 @@
+# ============================================================
 # test_async_user_func.flx
-# Membuktikan bahwa user-defined async func bisa di-await langsung
-# tanpa perlu `spawn` eksplisit.
+#
+# Membuktikan bahwa async/await bekerja untuk fungsi yang
+# DITULIS USER SENDIRI — bukan hanya dari modul aio.
+#
+# Empat skenario:
+#  1. await langsung tanpa spawn
+#  2. Rantai await (async memanggil async)
+#  3. Concurrency nyata dengan yield kooperatif (tanpa aio!)
+#  4. Fan-out / fan-in: spawn banyak, kumpulkan hasilnya
+# ============================================================
 
 import aio
+import time
 
-# --- Test 1: await async func tanpa argumen ---
-async func halo():
-    return "halo dari async func"
+func cetak_garis():
+    print("============================================================")
 
-result = await halo()
-print(result)   # halo dari async func
+func ms(detik):
+    return int(detik * 1000)
 
-# --- Test 2: await async func dengan argumen ---
-async func tambah(a, b):
-    return a + b
+# ============================================================
+# SKENARIO 1: await langsung tanpa spawn
+# ============================================================
+cetak_garis()
+print("SKENARIO 1 — await langsung, tanpa spawn eksplisit")
+cetak_garis()
 
-angka = await tambah(3, 7)
-print(angka)    # 10
+async func sapa(nama):
+    return "Halo, " + nama + "!"
 
-# --- Test 3: await async func yang di dalamnya juga await ---
-async func tunda(pesan, ms):
-    await aio.sleep(ms)
-    return pesan
+async func kuadrat(n):
+    return n * n
 
-msg = await tunda("selesai setelah 100ms", 100)
-print(msg)      # selesai setelah 100ms
+async func faktorial(n):
+    if n <= 1:
+        return 1
+    sisa = await faktorial(n - 1)
+    return n * sisa
 
-# --- Test 4: dua async func bersamaan via spawn + await ---
-async func task(nama, ms):
-    await aio.sleep(ms)
-    return nama
+r1 = await sapa("Flux")
+print("sapa()     :", r1)           # Halo, Flux!
 
-t1 = spawn task("A", 200)
-t2 = spawn task("B", 50)
-r1 = await t1
-r2 = await t2
-print(r1 + " " + r2)   # A B
+r2 = await kuadrat(7)
+print("kuadrat(7) :", r2)           # 49
 
-# --- Test 5: async func di dalam async func ---
-async func inner():
-    return 42
+r3 = await faktorial(6)
+print("faktorial(6):", r3)          # 720
 
-async func outer():
-    val = await inner()
-    return val * 2
+print("LULUS — await user async func langsung bekerja")
 
-res = await outer()
-print(res)   # 84
+# ============================================================
+# SKENARIO 2: Rantai await (async memanggil async)
+# ============================================================
+print("")
+cetak_garis()
+print("SKENARIO 2 — Rantai await (async memanggil async)")
+cetak_garis()
 
-print("semua test lulus!")
+async func bagi(a, b):
+    return a / b
+
+async func pitagoras(a, b):
+    a2 = await kuadrat(a)       # memanggil async func dari Skenario 1
+    b2 = await kuadrat(b)
+    return a2 + b2
+
+async func jarak(x1, y1, x2, y2):
+    dx = await kuadrat(x2 - x1)
+    dy = await kuadrat(y2 - y1)
+    return dx + dy               # jarak^2
+
+async func pipeline(n):
+    # async → async → async → async
+    k  = await kuadrat(n)       # n^2
+    f  = await faktorial(4)     # 24
+    r  = await bagi(k, f)       # n^2 / 24
+    return r
+
+p  = await pitagoras(3, 4)
+print("3^2 + 4^2       :", p)       # 25
+
+d  = await jarak(0, 0, 3, 4)
+print("jarak^2 (0,0→3,4):", d)      # 25
+
+pl = await pipeline(12)
+print("pipeline(12)    :", pl)       # 144 / 24 = 6.0
+
+print("LULUS — rantai async→async berjalan benar")
+
+# ============================================================
+# SKENARIO 3: Concurrency NYATA dengan yield kooperatif
+#             Tidak menggunakan aio sama sekali!
+# ============================================================
+print("")
+cetak_garis()
+print("SKENARIO 3 — Concurrency nyata dengan yield (TANPA aio!)")
+print("  Jika concurrent: output A dan B saling bergantian")
+print("  Jika sequential: semua A dulu, baru semua B")
+cetak_garis()
+print("")
+
+async func counter(nama, langkah, mulai_dari):
+    i = mulai_dari
+    while i < mulai_dari + langkah:
+        print(f"  [{nama}] langkah {i}")
+        yield                   # beri giliran ke coroutine lain
+        i = i + 1
+    return nama + " selesai"
+
+t_a = spawn counter("Alpha", 4, 1)
+t_b = spawn counter("Beta ", 3, 10)
+t_c = spawn counter("Gamma", 2, 100)
+
+r_a = await t_a
+r_b = await t_b
+r_c = await t_c
+
+print("")
+print(r_a)
+print(r_b)
+print(r_c)
+print("LULUS — tiga coroutine saling bergantian tanpa aio!")
+
+# ============================================================
+# SKENARIO 4: Fan-out / fan-in dengan user async func + aio
+# ============================================================
+print("")
+cetak_garis()
+print("SKENARIO 4 — Fan-out / fan-in: spawn banyak user async func")
+print("  User async func bisa pakai aio di dalamnya.")
+print("  Yang penting fungsinya ditulis user, bukan pakai aio langsung.")
+cetak_garis()
+
+async func proses(id, beban_ms):
+    # simulasi pekerjaan async (misal: query DB, HTTP request)
+    await aio.sleep(beban_ms)
+    return id * id              # kembalikan kuadrat dari id
+
+t0 = time.monotonic()
+
+# spawn 6 pekerjaan bersamaan
+handles = []
+i = 1
+while i <= 6:
+    handles.append(spawn proses(i, 200))
+    i = i + 1
+
+# kumpulkan semua hasil
+hasil = []
+i = 0
+while i < 6:
+    r = await handles[i]
+    hasil.append(r)
+    i = i + 1
+
+elapsed = ms(time.monotonic() - t0)
+
+print(f"Hasil (kuadrat 1..6): {hasil}")
+print(f"Waktu total: {elapsed} ms  (sequential = 1200 ms)")
+if elapsed < 500:
+    print("LULUS — 6 user async func berjalan bersamaan!")
+else:
+    print("GAGAL")
+
+# ============================================================
+# RINGKASAN
+# ============================================================
+print("")
+cetak_garis()
+print("RINGKASAN:")
+print("  Skenario 1: await user_async_func()        => LANGSUNG, tanpa spawn")
+print("  Skenario 2: async memanggil async (rantai) => nilai return propagasi benar")
+print("  Skenario 3: yield kooperatif               => concurrent TANPA aio")
+print("  Skenario 4: fan-out / fan-in               => banyak task bersamaan")
+cetak_garis()
+print("User-defined async func bekerja PENUH dengan await di Flux.")

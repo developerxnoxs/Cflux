@@ -51,7 +51,8 @@ typedef enum {
     VM_OK,
     VM_RUNTIME_ERROR,
     VM_COMPILE_ERROR,
-    VM_YIELD,     /* coroutine suspended (await on unresolved future / yield) */
+    VM_YIELD,          /* coroutine suspended (await on unresolved future / yield) */
+    VM_ASYNC_SPAWNED,  /* async closure was auto-spawned; coroutine handle is on stack */
 } VMResult;
 
 /* -------------------------------------------------------------------------

@@ -575,12 +575,60 @@ static bool call_native(FluxVM *vm, FluxNative *nat, int argc) {
     return true;
 }
 
+/* -------------------------------------------------------------------------
+ * spawn_async_closure - shared helper: wrap an async closure + its already-
+ * stacked args into a coroutine, enqueue it in the scheduler, replace the
+ * callee+args window on the VM stack with the coroutine handle, and return
+ * VM_ASYNC_SPAWNED so callers know no new call-frame was pushed.
+ * ---------------------------------------------------------------------- */
+static VMResult spawn_async_closure(FluxVM *vm, FluxClosure *cl, int argc) {
+    if (argc != cl->function->arity) {
+        vm_runtime_error(vm, "Expected %d arguments but got %d",
+                         cl->function->arity, argc);
+        return VM_RUNTIME_ERROR;
+    }
+    /* Stack: ... | closure | arg0 | ... | arg(argc-1) | <- stack_top */
+    Value *base_slot = vm->stack_top - argc - 1;
+
+    FluxCoroutine *co = object_coroutine_new(vm, cl);
+    /* GC-protect the new coroutine while we copy args */
+    vm_push(vm, value_object((FluxObject *)co));
+
+    int needed = argc + 1;
+    if (needed > co->stack_capacity) {
+        int nc = needed * 2 + 8;
+        co->stack          = (Value *)flux_realloc(co->stack,
+                                 sizeof(Value) * (size_t)nc);
+        co->stack_capacity = nc;
+        co->stack_top      = co->stack;
+    }
+    memcpy(co->stack, base_slot, (size_t)(argc + 1) * sizeof(Value));
+    co->stack_top             = co->stack + argc + 1;
+    co->frames[0].closure     = cl;
+    co->frames[0].ip          = cl->function->chunk.code;
+    co->frames[0].slots       = co->stack;
+    co->frame_slot_offsets[0] = 0;
+    co->frame_count           = 1;
+    co->state                 = CORO_SUSPENDED;
+
+    vm_pop(vm);                          /* un-protect handle */
+    vm->stack_top = base_slot;           /* pop callee + args  */
+    vm_push(vm, value_object((FluxObject *)co));
+    vm_scheduler_enqueue(vm, co);
+    return VM_ASYNC_SPAWNED;
+}
+
 VMResult vm_call_value(FluxVM *vm, Value callee, int argc) {
     if (value_is_object(callee)) {
         switch (OBJ_TYPE(callee)) {
-            case OBJ_CLOSURE:
-                return call_closure(vm, AS_CLOSURE(callee), argc)
-                       ? VM_OK : VM_RUNTIME_ERROR;
+            case OBJ_CLOSURE: {
+                FluxClosure *cl = AS_CLOSURE(callee);
+                /* async func called directly → auto-spawn as coroutine so that
+                 * `await async_func(args)` works without requiring an explicit spawn. */
+                if (cl->function->is_async)
+                    return spawn_async_closure(vm, cl, argc);
+                return call_closure(vm, cl, argc) ? VM_OK : VM_RUNTIME_ERROR;
+            }
 
             case OBJ_NATIVE:
                 return call_native(vm, AS_NATIVE(callee), argc)
@@ -836,6 +884,24 @@ Value vm_invoke(FluxVM *vm, Value callee, Value *args, int argc) {
     int base = vm->frame_count;
     VMResult r = vm_call_value(vm, callee, argc);
     if (vm->has_error) return value_null();
+
+    if (r == VM_ASYNC_SPAWNED) {
+        /* callee was an async closure: a coroutine was spawned and its handle
+         * is now on the stack. Drive the scheduler until the coroutine finishes
+         * and return its result. */
+        FluxCoroutine *co = AS_COROUTINE(vm_peek(vm, 0));
+        while (co->state != CORO_DEAD && !vm->has_error) {
+            if (vm->ready_count > 0) {
+                VMResult sr = vm_scheduler_run_step(vm);
+                if (sr == VM_RUNTIME_ERROR) { vm_pop(vm); return value_null(); }
+            } else if (vm->pending_io_count > 0) {
+                uv_run(vm->uv_loop, UV_RUN_ONCE);
+            } else break;
+        }
+        vm_pop(vm);  /* pop coroutine handle */
+        if (vm->has_error) return value_null();
+        return co->result;
+    }
 
     if (r == VM_OK && vm->frame_count > base) {
         /* callee was a closure/bound-method/class-init: vm_call_value only
@@ -1550,6 +1616,7 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                 uint8_t argc = READ_BYTE();
                 SYNC_IP();
                 VMResult res = vm_call_value(vm, vm_peek(vm, argc), argc);
+                if (res == VM_ASYNC_SPAWNED) break; /* coroutine handle already on stack */
                 if (res != VM_OK) return res;
                 frame = &vm->frames[vm->frame_count - 1];
                 LOAD_IP();
@@ -1624,6 +1691,7 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                     if (dict_get(inst->fields, name, &field)) {
                         vm->stack_top[-argc - 1] = field;
                         VMResult r = vm_call_value(vm, field, argc);
+                        if (r == VM_ASYNC_SPAWNED) break;
                         if (r != VM_OK) return r;
                         frame = &vm->frames[vm->frame_count - 1];
                         LOAD_IP();
@@ -1644,6 +1712,7 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                     if (dict_get(AS_DICT(receiver), name, &dict_fn)) {
                         vm->stack_top[-argc - 1] = dict_fn;
                         VMResult r = vm_call_value(vm, dict_fn, argc);
+                        if (r == VM_ASYNC_SPAWNED) break;
                         if (r != VM_OK) return r;
                         frame = &vm->frames[vm->frame_count - 1];
                         LOAD_IP();
@@ -1892,10 +1961,19 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                         vm_push(vm, target->result);
                     }
 
-                /* ---- await Closure (call synchronously) ----------------- */
+                /* ---- await Closure (call synchronously, or spawn if async) */
                 } else if (IS_CLOSURE(val)) {
                     SYNC_IP();
                     VMResult r = vm_call_value(vm, val, 0);
+                    if (r == VM_ASYNC_SPAWNED) {
+                        /* val was a 0-arity async closure; a coroutine handle is
+                         * now on the stack — fall through to the OP_AWAIT dispatch
+                         * on the NEXT iteration so it is properly awaited. */
+                        LOAD_IP();
+                        /* Re-run OP_AWAIT by backing up IP by 1 (OP_AWAIT is 1 byte) */
+                        ip--;
+                        break;
+                    }
                     if (r != VM_OK) return r;
                     frame = &vm->frames[vm->frame_count - 1];
                     LOAD_IP();

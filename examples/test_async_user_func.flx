@@ -1,0 +1,51 @@
+# test_async_user_func.flx
+# Membuktikan bahwa user-defined async func bisa di-await langsung
+# tanpa perlu `spawn` eksplisit.
+
+import aio
+
+# --- Test 1: await async func tanpa argumen ---
+async func halo():
+    return "halo dari async func"
+
+result = await halo()
+print(result)   # halo dari async func
+
+# --- Test 2: await async func dengan argumen ---
+async func tambah(a, b):
+    return a + b
+
+angka = await tambah(3, 7)
+print(angka)    # 10
+
+# --- Test 3: await async func yang di dalamnya juga await ---
+async func tunda(pesan, ms):
+    await aio.sleep(ms)
+    return pesan
+
+msg = await tunda("selesai setelah 100ms", 100)
+print(msg)      # selesai setelah 100ms
+
+# --- Test 4: dua async func bersamaan via spawn + await ---
+async func task(nama, ms):
+    await aio.sleep(ms)
+    return nama
+
+t1 = spawn task("A", 200)
+t2 = spawn task("B", 50)
+r1 = await t1
+r2 = await t2
+print(r1 + " " + r2)   # A B
+
+# --- Test 5: async func di dalam async func ---
+async func inner():
+    return 42
+
+async func outer():
+    val = await inner()
+    return val * 2
+
+res = await outer()
+print(res)   # 84
+
+print("semua test lulus!")

@@ -31,10 +31,11 @@ Dokumen ini adalah panduan pemakaian bahasa Flux — dari instalasi/build sampai
 10. [Async / Await / Coroutine](#10-async--await--coroutine)
 11. [Sistem Import Modul](#11-sistem-import-modul)
 12. [Standard Library](#12-standard-library)
-13. [Ekstensi Native (.so Plugin)](#13-ekstensi-native-so-plugin)
-14. [Embed libflux ke Program C](#14-embed-libflux-ke-program-c)
-15. [Struktur Proyek](#15-struktur-proyek)
-16. [Arsitektur Internal](#16-arsitektur-internal)
+13. [FFI — Import dan Panggil Library C Native](#13-ffi--import-dan-panggil-library-c-native)
+14. [Ekstensi Native (.so Plugin)](#14-ekstensi-native-so-plugin)
+15. [Embed libflux ke Program C](#15-embed-libflux-ke-program-c)
+16. [Struktur Proyek](#16-struktur-proyek)
+17. [Arsitektur Internal](#17-arsitektur-internal)
 
 ---
 
@@ -812,7 +813,81 @@ baris = io.read_line()
 
 ---
 
-## 13. Ekstensi Native (.so Plugin)
+## 13. FFI — Import dan Panggil Library C Native
+
+Modul `native` memungkinkan script Flux memuat **sembarang shared library C** (`.so`) dan memanggil fungsi di dalamnya langsung, tanpa perlu menulis wrapper C atau ekstensi khusus.
+
+```flux
+from native import load, bind, invoke, sym, close
+```
+
+> **Catatan nama:** `func` dan `call` adalah keyword di Flux, sehingga padanannya di modul `native` bernama **`bind`** dan **`invoke`**.
+
+### Fungsi modul `native`
+
+| Fungsi | Deskripsi |
+|---|---|
+| `native.load(path)` | Buka shared library, kembalikan handle (int) |
+| `native.bind(lib, nama, ret, [args])` | Ikat fungsi C → kembalikan fungsi Flux yang bisa dipanggil langsung |
+| `native.invoke(lib, nama, ret, [args], [nilai])` | Panggil sekali tanpa pre-bind |
+| `native.sym(lib, nama)` | Ambil alamat simbol mentah sebagai int |
+| `native.close(lib)` | Tutup library (opsional) |
+
+### Tipe yang didukung
+
+| String tipe | Tipe C | Tipe Flux |
+|---|---|---|
+| `"f64"` / `"double"` / `"d"` | `double` | float |
+| `"f32"` / `"float"` / `"f"` | `float` | float |
+| `"i64"` / `"int"` / `"i"` | `int64_t` | int |
+| `"i32"` / `"I"` | `int32_t` | int |
+| `"str"` / `"char*"` / `"s"` | `const char*` | string |
+| `"bool"` / `"b"` | `int` (0/1) | bool |
+| `"void"` / `"v"` | `void` | null |
+
+### Contoh: libm (math)
+
+```flux
+from native import load, bind, invoke
+
+libm = load("libm.so.6")
+
+# Bind sekali, panggil berkali-kali
+sqrt_fn = bind(libm, "sqrt", "f64", ["f64"])
+pow_fn  = bind(libm, "pow",  "f64", ["f64", "f64"])
+sin_fn  = bind(libm, "sin",  "f64", ["f64"])
+
+print(sqrt_fn(16.0))        # 4.0
+print(pow_fn(2.0, 10.0))    # 1024.0
+print(sin_fn(3.14159 / 2))  # ≈ 1.0
+
+# Panggil sekali tanpa bind
+print(invoke(libm, "fabs", "f64", ["f64"], [-3.14]))  # 3.14
+```
+
+### Contoh: libc (string functions)
+
+```flux
+from native import load, bind
+
+libc = load("libc.so.6")
+
+strlen_fn = bind(libc, "strlen", "i64", ["str"])
+print(strlen_fn("hello"))   # 5
+print(strlen_fn("flux"))    # 4
+```
+
+### Batas dan catatan
+
+- Maksimum **64 fungsi terikat** (`bind`) per proses.
+- Argumen maksimal **4 parameter** per fungsi.
+- Tipe campuran (mis. `str` + `i64`) didukung untuk kombinasi paling umum.
+- Handle library dilacak VM dan tetap terbuka sepanjang proses berjalan.
+- `close()` opsional — dipakai jika ingin membebaskan library lebih awal.
+
+---
+
+## 14. Ekstensi Native (.so Plugin)
 
 Selain modul `.flx` dan modul stdlib bawaan (`math`, `io`, `fs`, dst — lihat [Bab 12](#12-standard-library)), Flux juga bisa memuat **ekstensi native**: shared library (`.so`) yang membungkus library C sistem (misalnya `libpq` untuk PostgreSQL) sebagai modul yang bisa di-`import` langsung dari script Flux.
 
@@ -1012,7 +1087,7 @@ Ringkasan tiap tahap:
 - [ ] `from module import name` (import sebagian, bukan seluruh modul)
 - [ ] Scoping per-modul yang sesungguhnya (saat ini nama modul juga jadi global)
 - [ ] JIT Compiler
-- [ ] FFI (Foreign Function Interface)
+- [x] FFI (Foreign Function Interface) — lihat modul `native`
 - [ ] Debugger / Profiler
 - [ ] REPL interaktif yang lebih lengkap
 - [ ] Package manager

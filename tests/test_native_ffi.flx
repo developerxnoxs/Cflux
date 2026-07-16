@@ -1,0 +1,51 @@
+# Test: native FFI module
+# Memuat shared library C dan memanggil fungsinya langsung dari Flux
+#
+# API:
+#   native.load(path)                             → int handle
+#   native.bind(lib, "sym", "ret", ["arg",...])   → callable fn
+#   native.invoke(lib, "sym", "ret", ["arg",...], [args...]) → Value
+#   native.sym(lib, "sym")                        → int (pointer)
+#   native.close(lib)                             → bool
+
+from native import load, bind, invoke, sym, close
+
+print("=== load + bind (libm) ===")
+libm = load("libm.so.6")
+print(libm != 0)   # true
+
+sqrt_fn  = bind(libm, "sqrt",  "f64", ["f64"])
+pow_fn   = bind(libm, "pow",   "f64", ["f64", "f64"])
+fabs_fn  = bind(libm, "fabs",  "f64", ["f64"])
+ceil_fn  = bind(libm, "ceil",  "f64", ["f64"])
+floor_fn = bind(libm, "floor", "f64", ["f64"])
+
+print(sqrt_fn(16.0))       # 4.0
+print(sqrt_fn(2.0))        # 1.4142135623730951
+print(pow_fn(2.0, 10.0))   # 1024.0
+print(fabs_fn(-3.14))      # 3.14
+print(ceil_fn(2.1))        # 3.0
+print(floor_fn(2.9))       # 2.0
+
+print("=== invoke (one-shot, no bind) ===")
+print(invoke(libm, "sqrt", "f64", ["f64"], [9.0]))           # 3.0
+print(invoke(libm, "pow",  "f64", ["f64","f64"], [3.0,3.0])) # 27.0
+
+print("=== libc string functions ===")
+libc = load("libc.so.6")
+strlen_fn = bind(libc, "strlen", "i64", ["str"])
+print(strlen_fn("hello"))   # 5
+print(strlen_fn("flux!!"))  # 6
+
+print("=== native.sym (raw pointer) ===")
+ptr = sym(libm, "sqrt")
+print(ptr != 0)   # true
+
+print("=== sin, cos via loop ===")
+sin_fn = bind(libm, "sin", "f64", ["f64"])
+cos_fn = bind(libm, "cos", "f64", ["f64"])
+angles = [0.0, 1.5707963267948966]
+for a in angles:
+    print(sin_fn(a), cos_fn(a))  # 0.0 1.0  |  1.0 ~0.0
+
+print("ALL NATIVE TESTS DONE")

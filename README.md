@@ -792,9 +792,15 @@ print(fs.size("out.txt"))           # ukuran file dalam byte
 fs.remove("tmp.txt")                # hapus file
 fs.rename("lama.txt", "baru.txt")  # ganti nama / pindahkan file
 fs.copy("src.txt", "dst.txt")      # salin file
+print(fs.is_file("README.md"))      # true  — path ada dan berupa file biasa
+print(fs.is_file("src"))            # false — direktori bukan file
+print(fs.is_dir("src"))             # true  — path ada dan berupa direktori
+print(fs.is_dir("README.md"))       # false — file bukan direktori
 ```
 
-**Fungsi:** `read`, `write`, `append`, `exists`, `size`, `remove`, `rename`, `copy`
+Kedua fungsi mengembalikan `false` (bukan error) jika path tidak ditemukan.
+
+**Fungsi:** `read`, `write`, `append`, `exists`, `size`, `remove`, `rename`, `copy`, `is_file`, `is_dir`
 
 ### Modul `io`
 

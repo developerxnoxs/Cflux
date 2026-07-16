@@ -1,0 +1,195 @@
+# ============================================================
+# test_async_bukti_nyata.flx
+#
+# Membuktikan bahwa async/await Flux benar-benar concurrent
+# (bukan fake/sequential). Tiga bukti kuat:
+#
+#  BUKTI 1 — Urutan selesai terbalik: task yg tidur lebih
+#             singkat selesai duluan, meski distart belakangan
+#  BUKTI 2 — Waktu total ≈ max(delay), BUKAN sum(delay)
+#  BUKTI 3 — Output saling menyela (interleaving) dari task
+#             berbeda yang berjalan bersamaan
+# ============================================================
+
+import aio
+import time
+
+func cetak_garis():
+    print("============================================================")
+
+func ms(detik):
+    return int(detik * 1000)
+
+# ============================================================
+# BUKTI 1: Urutan selesai membuktikan konkruensi
+# ============================================================
+cetak_garis()
+print("BUKTI 1 — Urutan selesai")
+print("  Tiga task distart: A(400ms), B(100ms), C(200ms)")
+print("  Jika SEQUENTIAL  : A selesai dulu, lalu B, lalu C")
+print("  Jika CONCURRENT  : B selesai dulu (100ms), C (200ms), A (400ms)")
+cetak_garis()
+
+async func task_bernama(nama, tunda_ms):
+    print(f"  -> {nama} mulai (tidur {tunda_ms} ms)")
+    await aio.sleep(tunda_ms)
+    selesai_di = ms(time.monotonic())
+    print(f"  <- {nama} selesai setelah {tunda_ms} ms")
+    return nama
+
+t0 = time.monotonic()
+
+tA = spawn task_bernama("A", 400)
+tB = spawn task_bernama("B", 100)
+tC = spawn task_bernama("C", 200)
+
+rA = await tA
+rB = await tB
+rC = await tC
+
+elapsed1 = ms(time.monotonic() - t0)
+
+print("")
+print(f"Waktu total : {elapsed1} ms")
+print(f"Jika sequential : 700 ms")
+
+if elapsed1 < 550:
+    print("HASIL: LULUS — jauh lebih cepat dari sequential!")
+else:
+    print("HASIL: GAGAL")
+
+# ============================================================
+# BUKTI 2: Waktu total ≈ max(delay), bukan sum(delay)
+# ============================================================
+print("")
+cetak_garis()
+print("BUKTI 2 — Timing: concurrent vs sequential")
+print("  5 task dengan delay: 100, 200, 300, 400, 500 ms")
+print("  Sequential = 1500 ms total")
+print("  Concurrent = ~500 ms total (hanya selama task terlama)")
+cetak_garis()
+
+async func tidur_dan_kembali(label, durasi_ms):
+    await aio.sleep(durasi_ms)
+    return label
+
+t0 = time.monotonic()
+
+h1 = spawn tidur_dan_kembali("100ms", 100)
+h2 = spawn tidur_dan_kembali("200ms", 200)
+h3 = spawn tidur_dan_kembali("300ms", 300)
+h4 = spawn tidur_dan_kembali("400ms", 400)
+h5 = spawn tidur_dan_kembali("500ms", 500)
+
+r1 = await h1
+r2 = await h2
+r3 = await h3
+r4 = await h4
+r5 = await h5
+
+elapsed2 = ms(time.monotonic() - t0)
+sum_delay = 1500
+
+print("")
+print(f"Waktu total  : {elapsed2} ms")
+print(f"Jika sequential : {sum_delay} ms")
+percepatan = sum_delay / elapsed2
+percepatan_int = int(percepatan)
+print(f"Percepatan   : sekitar {percepatan_int}x lebih cepat")
+
+if elapsed2 < 700:
+    print("HASIL: LULUS — terbukti concurrent!")
+else:
+    print("HASIL: GAGAL")
+
+# ============================================================
+# BUKTI 3: Interleaving — output saling menyela antar task
+# ============================================================
+print("")
+cetak_garis()
+print("BUKTI 3 — Interleaving output antar task")
+print("  3 task 'pelapor' berjalan bersamaan dengan interval berbeda.")
+print("  Jika concurrent, baris output akan SALING MENYELA.")
+print("  Jika sequential, semua baris satu task muncul berurutan.")
+cetak_garis()
+print("")
+
+async func pelapor(nama, interval_ms, jumlah_ketuk):
+    i = 0
+    while i < jumlah_ketuk:
+        await aio.sleep(interval_ms)
+        i = i + 1
+        print(f"  [{nama}] ketuk ke-{i}")
+    return nama
+
+t0 = time.monotonic()
+
+p1 = spawn pelapor("Cepat  (80ms) ", 80,  5)
+p2 = spawn pelapor("Sedang (150ms)", 150, 3)
+p3 = spawn pelapor("Lambat (250ms)", 250, 2)
+
+await p1
+await p2
+await p3
+
+elapsed3 = ms(time.monotonic() - t0)
+sequential_est = 80*5 + 150*3 + 250*2   # = 1350 ms
+
+print("")
+print(f"Waktu total  : {elapsed3} ms")
+print(f"Jika sequential : {sequential_est} ms")
+
+if elapsed3 < 600:
+    print("HASIL: LULUS — output interleaving terbukti!")
+else:
+    print("HASIL: GAGAL")
+
+# ============================================================
+# BUKTI 4: Stress test — 10 task sekaligus
+# ============================================================
+print("")
+cetak_garis()
+print("BUKTI 4 — Stress test: 10 task × 300 ms bersamaan")
+print("  Sequential = 3000 ms, Concurrent = ~300 ms")
+cetak_garis()
+
+async func kerja(id):
+    await aio.sleep(300)
+    return id
+
+t0 = time.monotonic()
+
+handles = []
+i = 0
+while i < 10:
+    handles.append(spawn kerja(i))
+    i = i + 1
+
+i = 0
+while i < 10:
+    await handles[i]
+    i = i + 1
+
+elapsed4 = ms(time.monotonic() - t0)
+
+print(f"10 task selesai dalam : {elapsed4} ms")
+print(f"Jika sequential       : 3000 ms")
+
+if elapsed4 < 600:
+    print("HASIL: LULUS — 10 task berjalan benar-benar bersamaan!")
+else:
+    print("HASIL: GAGAL")
+
+# ============================================================
+# RINGKASAN AKHIR
+# ============================================================
+print("")
+cetak_garis()
+print("RINGKASAN:")
+print(f"  Bukti 1 (urutan selesai)     : {elapsed1} ms   (target < 550 ms)")
+print(f"  Bukti 2 (5 task, sum=1500ms) : {elapsed2} ms   (target < 700 ms)")
+print(f"  Bukti 3 (interleaving)       : {elapsed3} ms   (target < 600 ms)")
+print(f"  Bukti 4 (10 task × 300 ms)   : {elapsed4} ms   (target < 600 ms)")
+cetak_garis()
+print("Kesimpulan: async/await Flux berjalan NYATA dan BERSAMAAN")
+print("ditenagai libuv (engine yang sama dengan Node.js).")

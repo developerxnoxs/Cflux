@@ -1,0 +1,11 @@
+import fs
+
+print(fs.is_file("README.md"))        # true
+print(fs.is_file("src"))              # false (direktori)
+print(fs.is_file("tidak_ada.txt"))    # false (tidak ada)
+
+print(fs.is_dir("src"))               # true
+print(fs.is_dir("README.md"))         # false (file)
+print(fs.is_dir("tidak_ada_dir"))     # false (tidak ada)
+
+print("DONE")

@@ -78,6 +78,22 @@ static Value fs_rename(FluxVM *vm, int argc, Value *argv) {
     return value_bool(rename(AS_STRING(argv[0])->chars, AS_STRING(argv[1])->chars) == 0);
 }
 
+static Value fs_is_file(FluxVM *vm, int argc, Value *argv) {
+    (void)vm; (void)argc;
+    if (!IS_STRING(argv[0])) return value_bool(false);
+    struct stat st;
+    if (stat(AS_STRING(argv[0])->chars, &st) != 0) return value_bool(false);
+    return value_bool(S_ISREG(st.st_mode));
+}
+
+static Value fs_is_dir(FluxVM *vm, int argc, Value *argv) {
+    (void)vm; (void)argc;
+    if (!IS_STRING(argv[0])) return value_bool(false);
+    struct stat st;
+    if (stat(AS_STRING(argv[0])->chars, &st) != 0) return value_bool(false);
+    return value_bool(S_ISDIR(st.st_mode));
+}
+
 static Value fs_copy(FluxVM *vm, int argc, Value *argv) {
     (void)argc;
     if (!IS_STRING(argv[0]) || !IS_STRING(argv[1])) {
@@ -98,12 +114,14 @@ static Value fs_copy(FluxVM *vm, int argc, Value *argv) {
 
 bool flux_extension_init(FluxVM *vm, Value *out_module) {
     static const char *names[] = {
-        "read","write","append","exists","size","remove","rename","copy"
+        "read","write","append","exists","size","remove","rename","copy",
+        "is_file","is_dir"
     };
     static NativeFn fns[] = {
-        fs_read, fs_write, fs_append, fs_exists, fs_size, fs_remove, fs_rename, fs_copy
+        fs_read, fs_write, fs_append, fs_exists, fs_size, fs_remove, fs_rename, fs_copy,
+        fs_is_file, fs_is_dir
     };
-    static int arities[] = { 1,2,2,1,1,1,2,2 };
+    static int arities[] = { 1,2,2,1,1,1,2,2,1,1 };
     int n = (int)(sizeof(names)/sizeof(names[0]));
 
     FluxDict *mod = object_dict_new(vm);

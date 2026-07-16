@@ -92,10 +92,10 @@ FluxString *value_to_string(FluxVM *vm, Value v) {
                         snprintf(buf, sizeof(buf), "<class %s>", AS_CLASS(v)->name->chars);
                         return object_string_copy(vm, buf, (int)strlen(buf));
                     case OBJ_INSTANCE: {
-                        /* Check for user-defined to_string() hook first */
+                        /* Check for user-defined to_str() hook first */
                         FluxInstance *inst_ = AS_INSTANCE(v);
                         Value ts_method;
-                        FluxString *ts_key = object_string_copy(vm, "to_string", 9);
+                        FluxString *ts_key = object_string_copy(vm, "to_str", 6);
                         if (!vm->has_error &&
                             dict_get(inst_->klass->methods, ts_key, &ts_method)) {
                             Value receiver = v;
@@ -104,7 +104,7 @@ FluxString *value_to_string(FluxVM *vm, Value v) {
                                 NULL, 0);
                             if (!vm->has_error && IS_STRING(result_))
                                 return AS_STRING(result_);
-                            vm->has_error = false; /* swallow to_string errors gracefully */
+                            vm->has_error = false; /* swallow to_str errors gracefully */
                         }
                         snprintf(buf, sizeof(buf), "<%s instance>",
                                  inst_->klass->name->chars);
@@ -203,11 +203,11 @@ static Value native_len(FluxVM *vm, int argc, Value *argv) {
     if (IS_STRING(v)) return value_int(AS_STRING(v)->length);
     if (IS_LIST(v))   return value_int(AS_LIST(v)->elements.count);
     if (IS_DICT(v))   return value_int(AS_DICT(v)->count);
-    /* Check for user-defined length() hook on instances */
+    /* Check for user-defined on_len() hook on instances */
     if (IS_INSTANCE(v)) {
         FluxInstance *inst = AS_INSTANCE(v);
         Value len_method;
-        FluxString *len_key = object_string_copy(vm, "length", 6);
+        FluxString *len_key = object_string_copy(vm, "on_len", 6);
         if (dict_get(inst->klass->methods, len_key, &len_method)) {
             Value result = vm_invoke(vm, value_object((FluxObject *)
                 object_bound_method_new(vm, v, AS_CLOSURE(len_method))),
@@ -215,8 +215,28 @@ static Value native_len(FluxVM *vm, int argc, Value *argv) {
             if (!vm->has_error) return result;
         }
     }
-    vm_runtime_error(vm, "len() requires string, list, dict, or an instance with length()");
+    vm_runtime_error(vm, "len() requires string, list, dict, or an instance with on_len()");
     return value_null();
+}
+
+static Value native_repr(FluxVM *vm, int argc, Value *argv) {
+    (void)argc;
+    Value v = argv[0];
+    /* For instances: call to_repr() if defined, else fall back to to_str(), else default */
+    if (IS_INSTANCE(v)) {
+        FluxInstance *inst = AS_INSTANCE(v);
+        Value repr_method;
+        FluxString *repr_key = object_string_copy(vm, "to_repr", 7);
+        if (!vm->has_error && dict_get(inst->klass->methods, repr_key, &repr_method)) {
+            Value result = vm_invoke(vm, value_object((FluxObject *)
+                object_bound_method_new(vm, v, AS_CLOSURE(repr_method))),
+                NULL, 0);
+            if (!vm->has_error) return result;
+            vm->has_error = false;
+        }
+    }
+    /* Fall back to value_to_string (which already calls to_str for instances) */
+    return value_object((FluxObject *)value_to_string(vm, v));
 }
 
 static Value native_range(FluxVM *vm, int argc, Value *argv) {
@@ -718,6 +738,7 @@ void flux_stdlib_load_core(FluxVM *vm) {
     vm_register_native(vm, "input",   native_input,            -1);
     vm_register_native(vm, "type",    native_type,              1);
     vm_register_native(vm, "len",     native_len,               1);
+    vm_register_native(vm, "repr",    native_repr,              1);
     vm_register_native(vm, "range",   native_range,            -1);
     vm_register_native(vm, "int",     native_int,               1);
     vm_register_native(vm, "float",   native_float,             1);

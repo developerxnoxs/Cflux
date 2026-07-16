@@ -221,6 +221,7 @@ int chunk_disassemble_instruction(const Chunk *chunk, int offset) {
         case OP_SET_ATTR:       return uint16_instr("SET_ATTR",      chunk, offset);
         case OP_GET_INDEX:      return simple_instr("GET_INDEX",     offset);
         case OP_SET_INDEX:      return simple_instr("SET_INDEX",     offset);
+        case OP_GET_ITER:       return simple_instr("GET_ITER",      offset);
         case OP_ADD:            return simple_instr("ADD",           offset);
         case OP_SUB:            return simple_instr("SUB",           offset);
         case OP_MUL:            return simple_instr("MUL",           offset);

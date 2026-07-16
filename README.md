@@ -26,6 +26,7 @@ Dokumen ini adalah panduan pemakaian bahasa Flux — dari instalasi/build sampai
    - [Decorator](#55-decorator)
 6. [List & Dictionary](#6-list--dictionary)
 7. [Class & Object](#7-class--object)
+   - [Metode Spesial (Magic Methods)](#metode-spesial-magic-methods)
 8. [Struct](#8-struct)
 9. [Enum](#9-enum)
 10. [Async / Await / Coroutine](#10-async--await--coroutine)
@@ -597,6 +598,7 @@ Lihat contoh lengkap multi-file di [`examples/modules/`](examples/modules/).
 | `len(x)` | Panjang string/list/dict |
 | `range(stop)` / `range(start, stop, step)` | Deret angka |
 | `int(x)` / `float(x)` / `str(x)` / `bool(x)` | Konversi tipe |
+| `repr(x)` | Representasi debug — memanggil `to_repr()` jika ada, fallback ke `to_str()` |
 | `type(x)` | Nama tipe suatu nilai |
 | `id(x)` | Identitas unik nilai |
 | `sleep(detik)` | Tunda eksekusi |
@@ -708,38 +710,137 @@ print(is_callable(42))            # false
 print(attrs(p))                   # [z, y, x, init]
 ```
 
-### Method hook pada class (mirip Python dunder methods)
+### Metode Spesial (Magic Methods)
 
-Flux mengenali method tertentu sebagai **hook** yang dipanggil otomatis oleh built-in:
+Flux mengenali method tertentu di dalam class sebagai **hook** yang dipanggil otomatis oleh VM dan built-in. Nama-namanya sengaja berbeda dari Python `__dunder__`:
 
 | Method di class | Dipicu oleh | Padanan Python |
 |---|---|---|
-| `func to_string():` | `print(obj)`, `str(obj)` | `__repr__` / `__str__` |
-| `func length():` | `len(obj)` | `__len__` |
-| `func equals(other):` | `obj1 == obj2`, `obj1 != obj2` | `__eq__` |
+| `func init(...):` | `MyClass(...)` — konstruktor | `__init__` |
+| `func to_str():` | `print(obj)`, `str(obj)` | `__str__` |
+| `func to_repr():` | `repr(obj)` | `__repr__` |
+| `func on_len():` | `len(obj)` | `__len__` |
+| `func on_iter():` | `for x in obj:` — kembalikan list | `__iter__` |
+| `func on_get(key):` | `obj[key]` | `__getitem__` |
+| `func on_set(key, val):` | `obj[key] = val` | `__setitem__` |
+| `func on_enter():` | masuk blok `with` | `__enter__` |
+| `func on_exit():` | keluar blok `with` | `__exit__` |
+| `func on_call(...):` | `obj(...)` — instance dipanggil seperti fungsi | `__call__` |
+
+> **Catatan:** `self` bukan parameter eksplisit — tulis `func to_str():` bukan `func to_str(self):`.
+> `on_len` + `on_get` bersama-sama juga memungkinkan iterasi `for` tanpa perlu `on_iter`.
+
+#### Contoh lengkap
 
 ```flux
 class Vec:
     func init(x, y):
         self.x = x
         self.y = y
-    func to_string():                   # hook: dipanggil saat print/str
+    func to_str():                      # print(v) / str(v)
         return "Vec(" + str(self.x) + ", " + str(self.y) + ")"
-    func length():                      # hook: dipanggil saat len()
+    func to_repr():                     # repr(v)
+        return "Vec(x=" + str(self.x) + ", y=" + str(self.y) + ")"
+    func on_len():                      # len(v)
         return 2
-    func equals(other):                 # hook: dipanggil saat == / !=
-        return self.x == other.x and self.y == other.y
 
-v1 = Vec(3, 4)
-v2 = Vec(3, 4)
-v3 = Vec(1, 2)
+v = Vec(3, 4)
+print(v)              # Vec(3, 4)
+print(str(v))         # Vec(3, 4)
+print(repr(v))        # Vec(x=3, y=4)
+print(len(v))         # 2
+```
 
-print(v1)             # Vec(3, 4)     ← memanggil to_string()
-print(str(v1))        # Vec(3, 4)
-print(len(v1))        # 2             ← memanggil length()
-print(v1 == v2)       # true          ← memanggil equals()
-print(v1 == v3)       # false
-print(v1 != v3)       # true
+```flux
+# Indexing kustom dengan on_get / on_set
+class SparseList:
+    func init():
+        self.data = {}
+    func on_get(i):
+        k = str(i)
+        if self.data.has_key(k):
+            return self.data[k]
+        return 0
+    func on_set(i, val):
+        self.data[str(i)] = val
+
+lst = SparseList()
+lst[5] = 42
+print(lst[5])         # 42
+print(lst[0])         # 0  (default)
+```
+
+```flux
+# Iterasi kustom dengan on_iter
+class Range2:
+    func init(start, stop):
+        self.start = start
+        self.stop  = stop
+    func on_iter():                     # kembalikan list untuk diiterasi
+        result = []
+        i = self.start
+        while i < self.stop:
+            result.append(i)
+            i = i + 1
+        return result
+
+for x in Range2(1, 4):
+    print(x)          # 1 2 3
+```
+
+```flux
+# Instance yang bisa dipanggil seperti fungsi: on_call
+class Multiplier:
+    func init(factor):
+        self.factor = factor
+    func on_call(x):
+        return x * self.factor
+
+double = Multiplier(2)
+print(double(7))      # 14
+```
+
+```flux
+# Context manager: with … as …
+class Timer:
+    func init(name):
+        self.name = name
+    func on_enter():
+        print("Mulai: " + self.name)
+        return self
+    func on_exit():
+        print("Selesai: " + self.name)
+
+with Timer("proses") as t:
+    print("Menjalankan " + t.name)
+# Output:
+# Mulai: proses
+# Menjalankan proses
+# Selesai: proses
+```
+
+> **Keterbatasan:** `on_exit()` tidak dijamin dipanggil jika blok `with` keluar lewat `return` atau `break`. Ini akan diperbaiki di versi mendatang ketika Flux mendapat mekanisme `try/finally`.
+
+#### equals (perbandingan `==`)
+
+Hook untuk `==` dan `!=` masih menggunakan nama `equals`:
+
+| Method | Dipicu oleh |
+|---|---|
+| `func equals(other):` | `obj1 == obj2`, `obj1 != obj2` |
+
+```flux
+class Color:
+    func init(r, g, b):
+        self.r = r
+        self.g = g
+        self.b = b
+    func equals(other):
+        return self.r == other.r and self.g == other.g and self.b == other.b
+
+c1 = Color(255, 0, 0)
+c2 = Color(255, 0, 0)
+print(c1 == c2)       # true
 ```
 
 ### Modul `math`

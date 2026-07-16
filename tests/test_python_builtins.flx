@@ -92,7 +92,7 @@ class Vec:
     func init(x, y):
         self.x = x
         self.y = y
-    func to_string():
+    func to_str():
         return "Vec(" + str(self.x) + ", " + str(self.y) + ")"
 
 v = Vec(3, 4)
@@ -105,7 +105,7 @@ class Stack:
         self.items = []
     func push(item):
         self.items.append(item)
-    func length():
+    func on_len():
         return len(self.items)
 
 s = Stack()

@@ -39,11 +39,11 @@ class Point:
     func init(x, y):
         self.x = x
         self.y = y
-    func to_string():
+    func to_str():
         return "(" + str(self.x) + ", " + str(self.y) + ")"
 
 p = Point(3, 4)
-print(p)   # calls to_string hook automatically
+print(p)   # calls to_str hook automatically
 
 # Lambdas
 double = |x| => x * 2
@@ -77,6 +77,27 @@ examples/             — Example .flx programs
 tests/                — Unit tests (.flx and .c)
 build_make/           — Build output (flux binary, libflux.a)
 ```
+
+## Magic Methods (Special Methods)
+
+Flux uses single-word or `on_`-prefixed names — deliberately distinct from Python's `__dunder__` style.
+
+| Method | Trigger |
+|--------|---------|
+| `init(...)` | Called on class instantiation (constructor) |
+| `to_str()` | Called by `print()` and `str()` for string conversion |
+| `to_repr()` | Called by `repr()` for debug representation |
+| `on_len()` | Called by `len(obj)` |
+| `on_iter()` | Called by `for x in obj:` — return a list to iterate |
+| `on_get(key)` | Called by `obj[key]` |
+| `on_set(key, val)` | Called by `obj[key] = val` |
+| `on_enter()` | Called when entering a `with` block; return value bound to `as` var |
+| `on_exit()` | Called when leaving a `with` block |
+| `on_call(...)` | Called when the instance is used as a function: `obj(args)` |
+
+**Note:** `on_len` + `on_get` together also enable `for` loops (no `on_iter` needed if both are defined).
+
+See `examples/test_magic_methods.flx` for working examples of every method.
 
 ## User Preferences
 

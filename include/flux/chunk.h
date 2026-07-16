@@ -95,6 +95,9 @@ typedef enum {
     OP_INHERIT,
     OP_GET_SUPER,        /* operand: uint16 constant (name)    */
 
+    /* Protocol helpers */
+    OP_GET_ITER,         /* replace TOS with on_iter() result if instance has it */
+
     /* Coroutines / async */
     OP_CREATE_TASK,      /* spawn f     — wraps closure; operand: none        */
     OP_SPAWN_CALL,       /* spawn f(…)  — closure+args on stack; operand: u8 argc */

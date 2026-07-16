@@ -1012,6 +1012,30 @@ static AstNode *parse_for(Parser *p) {
     return n;
 }
 
+static AstNode *parse_with(Parser *p) {
+    int line = p->previous.line, col = p->previous.column;
+    AstNode *manager = parse_expr(p);
+
+    char *var = NULL;
+    if (match(p, TOK_AS)) {
+        consume(p, TOK_IDENT, "Expected variable name after 'as'");
+        int   vlen = p->previous.length;
+        char *vbuf = FLUX_ALLOC(char, vlen + 1);
+        memcpy(vbuf, p->previous.start, (size_t)vlen);
+        vbuf[vlen] = '\0';
+        var = vbuf;
+    }
+
+    consume(p, TOK_COLON, "Expected ':' after 'with' expression");
+    AstNode *body = parse_block(p);
+
+    AstNode *n = ast_node_alloc(p->arena, AST_WITH, line, col);
+    n->as.with_stmt.var     = var;
+    n->as.with_stmt.manager = manager;
+    n->as.with_stmt.body    = body;
+    return n;
+}
+
 static AstNode *parse_return(Parser *p) {
     int line = p->previous.line, col = p->previous.column;
     AstNode *n = ast_node_alloc(p->arena, AST_RETURN, line, col);
@@ -1194,6 +1218,7 @@ static AstNode *parse_stmt(Parser *p) {
     if (match(p, TOK_IF))       { AstNode *n = parse_if(p);     match(p, TOK_NEWLINE); return n; }
     if (match(p, TOK_WHILE))    { AstNode *n = parse_while(p);  match(p, TOK_NEWLINE); return n; }
     if (match(p, TOK_FOR))      { AstNode *n = parse_for(p);    match(p, TOK_NEWLINE); return n; }
+    if (match(p, TOK_WITH))     { AstNode *n = parse_with(p);   match(p, TOK_NEWLINE); return n; }
     if (match(p, TOK_RETURN))   { AstNode *n = parse_return(p); match(p, TOK_NEWLINE); return n; }
     if (match(p, TOK_IMPORT))   { AstNode *n = parse_import(p);      match(p, TOK_NEWLINE); return n; }
     if (match(p, TOK_FROM))     { AstNode *n = parse_from_import(p); match(p, TOK_NEWLINE); return n; }

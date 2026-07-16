@@ -611,6 +611,19 @@ VMResult vm_call_value(FluxVM *vm, Value callee, int argc) {
                        ? VM_OK : VM_RUNTIME_ERROR;
             }
 
+            case OBJ_INSTANCE: {
+                /* Support callable instances via on_call() method */
+                FluxInstance *inst = AS_INSTANCE(callee);
+                Value call_method;
+                FluxString *call_key = object_string_copy(vm, "on_call", 7);
+                if (dict_get(inst->klass->methods, call_key, &call_method)) {
+                    /* callee slot already holds the instance; call on_call with user args */
+                    return call_closure(vm, AS_CLOSURE(call_method), argc)
+                           ? VM_OK : VM_RUNTIME_ERROR;
+                }
+                break;
+            }
+
             default: break;
         }
     }
@@ -1195,6 +1208,26 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                         RUNTIME_ERROR("String index out of range");
                     char ch[2] = { str->chars[idx], '\0' };
                     vm_push(vm, value_object((FluxObject *)object_string_copy(vm, ch, 1)));
+                } else if (IS_INSTANCE(obj_val)) {
+                    /* Instance indexing via on_get(key) method */
+                    /* Re-push for GC safety before allocating method-name string */
+                    vm_push(vm, obj_val);
+                    vm_push(vm, idx_val);
+                    FluxInstance *inst = AS_INSTANCE(obj_val);
+                    Value get_method;
+                    FluxString *get_key = object_string_copy(vm, "on_get", 6);
+                    bool has_get = dict_get(inst->klass->methods, get_key, &get_method);
+                    vm->stack_top -= 2; /* pop GC-protection copies */
+                    if (!has_get)
+                        RUNTIME_ERROR("'%s' instance does not support indexing (no on_get method)",
+                                      inst->klass->name->chars);
+                    /* Push receiver then key — correct layout for call_closure(argc=1) */
+                    vm_push(vm, obj_val);
+                    vm_push(vm, idx_val);
+                    SYNC_IP();
+                    if (!call_closure(vm, AS_CLOSURE(get_method), 1)) return VM_RUNTIME_ERROR;
+                    frame = &vm->frames[vm->frame_count - 1];
+                    LOAD_IP();
                 } else {
                     RUNTIME_ERROR("Invalid index operation");
                 }
@@ -1214,8 +1247,53 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                     list->elements.data[idx] = val;
                 } else if (IS_DICT(obj_val) && IS_STRING(idx_val)) {
                     dict_set(vm, AS_DICT(obj_val), AS_STRING(idx_val), val);
+                } else if (IS_INSTANCE(obj_val)) {
+                    /* Instance index assignment via on_set(key, val) method */
+                    /* Re-push all three for GC safety before allocating */
+                    vm_push(vm, obj_val);
+                    vm_push(vm, idx_val);
+                    vm_push(vm, val);
+                    FluxInstance *inst = AS_INSTANCE(obj_val);
+                    Value set_method;
+                    FluxString *set_key = object_string_copy(vm, "on_set", 6);
+                    bool has_set = dict_get(inst->klass->methods, set_key, &set_method);
+                    vm->stack_top -= 3; /* pop GC-protection copies */
+                    if (!has_set)
+                        RUNTIME_ERROR("'%s' instance does not support index assignment (no on_set method)",
+                                      inst->klass->name->chars);
+                    /* Use vm_invoke so the return value is consumed as a C value,
+                     * leaving the stack clean (compiler emits OP_PUSH_NULL after SET_INDEX). */
+                    SYNC_IP();
+                    Value args[2] = { idx_val, val };
+                    Value bm_val  = value_object((FluxObject *)
+                        object_bound_method_new(vm, obj_val, AS_CLOSURE(set_method)));
+                    vm_invoke(vm, bm_val, args, 2);
+                    if (vm->has_error) return VM_RUNTIME_ERROR;
+                    frame = &vm->frames[vm->frame_count - 1];
+                    LOAD_IP();
                 } else {
                     RUNTIME_ERROR("Invalid index assignment");
+                }
+                break;
+            }
+
+            case OP_GET_ITER: {
+                /* If TOS is an instance with on_iter(), call it and replace TOS
+                 * with the returned iterable.  Otherwise: no-op. */
+                Value obj_val = vm_peek(vm, 0); /* instance stays on stack → GC safe */
+                if (IS_INSTANCE(obj_val)) {
+                    FluxInstance *inst = AS_INSTANCE(obj_val);
+                    Value iter_method;
+                    FluxString *iter_key = object_string_copy(vm, "on_iter", 7);
+                    if (dict_get(inst->klass->methods, iter_key, &iter_method)) {
+                        /* Instance is at TOS; call_closure(argc=0):
+                         * frame->slots = stack_top - 1 → self = instance
+                         * OP_RETURN replaces instance slot with the returned iterable. */
+                        SYNC_IP();
+                        if (!call_closure(vm, AS_CLOSURE(iter_method), 0)) return VM_RUNTIME_ERROR;
+                        frame = &vm->frames[vm->frame_count - 1];
+                        LOAD_IP();
+                    }
                 }
                 break;
             }

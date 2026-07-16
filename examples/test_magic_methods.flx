@@ -1,0 +1,144 @@
+# Test all Flux magic methods
+
+print("=== Testing Magic Methods ===")
+print("")
+
+# ── init (constructor) ────────────────────────────────────────────────
+print("--- init ---")
+class Point:
+    func init(x, y):
+        self.x = x
+        self.y = y
+
+p = Point(3, 4)
+print(p.x)   # 3
+print(p.y)   # 4
+
+# ── to_str (print / str) ──────────────────────────────────────────────
+print("--- to_str ---")
+class Vec2:
+    func init(x, y):
+        self.x = x
+        self.y = y
+    func to_str():
+        return "Vec2(" + str(self.x) + ", " + str(self.y) + ")"
+
+v = Vec2(1, 2)
+print(v)         # Vec2(1, 2)
+print(str(v))    # Vec2(1, 2)
+
+# ── to_repr (debug representation) ────────────────────────────────────
+print("--- to_repr ---")
+class Color:
+    func init(r, g, b):
+        self.r = r
+        self.g = g
+        self.b = b
+    func to_repr():
+        return "Color(r=" + str(self.r) + ", g=" + str(self.g) + ", b=" + str(self.b) + ")"
+    func to_str():
+        return "rgb(" + str(self.r) + ", " + str(self.g) + ", " + str(self.b) + ")"
+
+c = Color(255, 128, 0)
+print(repr(c))   # Color(r=255, g=128, b=0)
+print(c)         # rgb(255, 128, 0)
+
+# ── on_len (len() support) ────────────────────────────────────────────
+print("--- on_len ---")
+class Stack:
+    func init():
+        self.items = []
+    func push(val):
+        self.items.append(val)
+    func on_len():
+        return len(self.items)
+
+s = Stack()
+s.push(10)
+s.push(20)
+s.push(30)
+print(len(s))   # 3
+
+# ── on_get / on_set (indexing) ────────────────────────────────────────
+print("--- on_get / on_set ---")
+class SparseArray:
+    func init():
+        self.data = {}
+    func on_get(key):
+        k = str(key)
+        if self.data.has_key(k):
+            return self.data[k]
+        return 0
+    func on_set(key, val):
+        self.data[str(key)] = val
+
+a = SparseArray()
+a[5] = 42
+a[10] = 99
+print(a[5])    # 42
+print(a[10])   # 99
+print(a[0])    # 0  (default)
+
+# ── on_iter (for-loop support) ────────────────────────────────────────
+print("--- on_iter ---")
+class Range2:
+    func init(start, stop):
+        self.start = start
+        self.stop  = stop
+    func on_iter():
+        result = []
+        i = self.start
+        while i < self.stop:
+            result.append(i)
+            i = i + 1
+        return result
+
+for x in Range2(3, 7):
+    print(x)   # 3 4 5 6
+
+# ── on_len + on_get for-loop (direct iteration via protocol) ──────────
+print("--- on_len + on_get for-loop ---")
+class NumberedList:
+    func init():
+        self.items = ["a", "b", "c"]
+    func on_len():
+        return len(self.items)
+    func on_get(i):
+        return self.items[i]
+
+nl = NumberedList()
+for item in nl:
+    print(item)   # a b c
+
+# ── on_call (callable instances) ─────────────────────────────────────
+print("--- on_call ---")
+class Multiplier:
+    func init(factor):
+        self.factor = factor
+    func on_call(x):
+        return x * self.factor
+
+double = Multiplier(2)
+triple = Multiplier(3)
+print(double(7))   # 14
+print(triple(5))   # 15
+
+# ── on_enter / on_exit (with statement) ──────────────────────────────
+print("--- on_enter / on_exit ---")
+class Timer:
+    func init(name):
+        self.name = name
+    func on_enter():
+        print("Entering: " + self.name)
+        return self
+    func on_exit():
+        print("Exiting: " + self.name)
+
+with Timer("block1"):
+    print("inside block")
+
+with Timer("block2") as t:
+    print("inside block with handle: " + t.name)
+
+print("")
+print("=== All tests passed ===")

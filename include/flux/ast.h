@@ -51,6 +51,7 @@ typedef enum {
     AST_RETURN,
     AST_YIELD,
     AST_MATCH,           /* match expr: cases */
+    AST_WITH,            /* with expr [as var]: body */
 
     /* Functions / classes / structs / enums */
     AST_FUNC_DEF,
@@ -236,6 +237,13 @@ struct AstNode {
 
         /* AST_EXPR_STMT */
         struct { AstNode *expr; } expr_stmt;
+
+        /* AST_WITH */
+        struct {
+            char    *var;     /* "as var" — NULL if absent */
+            AstNode *manager; /* the context-manager expression */
+            AstNode *body;
+        } with_stmt;
     } as;
 };
 

@@ -923,6 +923,9 @@ static void predeclare_node_locals(Compiler *c, AstNode *node, int line) {
             if (node->as.match_stmt.wildcard_body)
                 predeclare_node_locals(c, node->as.match_stmt.wildcard_body, line);
             break;
+        case AST_WITH:
+            predeclare_node_locals(c, node->as.with_stmt.body, line);
+            break;
         /* Never cross function/class boundaries – those introduce a new scope. */
         case AST_FUNC_DEF:
         case AST_ASYNC_FUNC_DEF:
@@ -1114,8 +1117,9 @@ static void compile_node(Compiler *c, AstNode *node) {
 
             /* ---- Allocate __iter and __idx inside the scope ---- */
 
-            /* __iter = iterable */
+            /* __iter = iterable (call on_iter() if the object provides it) */
             compile_expr(c, node->as.for_stmt.iterable);
+            emit_byte(c, OP_GET_ITER, line);  /* replace TOS with on_iter() result if available */
             int iter_slot = add_local(c, "__iter", line);
 
             /* __idx = 0 */
@@ -1411,6 +1415,55 @@ static void compile_node(Compiler *c, AstNode *node) {
                 add_local(c, name, line);
                 /* Value is already the local's stack slot — nothing more to emit. */
             }
+            break;
+        }
+
+        /* ----------------------------------------------------------------
+         * with manager [as var]: body
+         *
+         * Compiled as:
+         *   eval manager → __with_mgr (local, keeps manager alive)
+         *   manager.on_enter() → result (stored as 'var' if 'as' clause present)
+         *   [body]
+         *   manager.on_exit()  → result discarded
+         *   scope_end (pops __with_mgr and 'var' if any)
+         *
+         * Note: on_exit() is not guaranteed to run if the body contains a
+         * return or break that exits the enclosing function/loop.
+         * -------------------------------------------------------------- */
+        case AST_WITH: {
+            scope_begin(c);
+
+            /* 1. Evaluate the context manager and store it as a local */
+            compile_expr(c, node->as.with_stmt.manager);
+            int mgr_slot = add_local(c, "__with_mgr", line);
+
+            /* 2. Call manager.on_enter() → push result */
+            emit_byte(c, OP_LOAD_LOCAL, line);
+            emit_byte(c, (uint8_t)mgr_slot, line);
+            emit_byte(c, OP_INVOKE, line);
+            emit_uint16(c, identifier_constant(c, "on_enter", 8, line), line);
+            emit_byte(c, 0, line); /* argc = 0 */
+
+            /* 3. Store enter result: 'as var' → new local; else discard */
+            if (node->as.with_stmt.var) {
+                add_local(c, node->as.with_stmt.var, line);
+            } else {
+                emit_byte(c, OP_POP, line);
+            }
+
+            /* 4. Body */
+            compile_node(c, node->as.with_stmt.body);
+
+            /* 5. Call manager.on_exit() → discard result */
+            emit_byte(c, OP_LOAD_LOCAL, line);
+            emit_byte(c, (uint8_t)mgr_slot, line);
+            emit_byte(c, OP_INVOKE, line);
+            emit_uint16(c, identifier_constant(c, "on_exit", 7, line), line);
+            emit_byte(c, 0, line); /* argc = 0 */
+            emit_byte(c, OP_POP, line);
+
+            scope_end(c, line); /* pops __with_mgr (and 'var' if any) */
             break;
         }
 

@@ -412,30 +412,84 @@ print(dir)   # 2
 
 ## 10. Async / Await / Coroutine
 
-Flux mengimplementasikan async/await yang **nyata** — bukan fake/sequential. Di baliknya ditenagai oleh **libuv** (library I/O non-blocking yang sama dipakai Node.js). Ketika sebuah coroutine menunggu I/O, coroutine lain tetap berjalan secara bersamaan.
+Flux mengimplementasikan async/await yang **nyata** — bukan fake/sequential. Di baliknya ditenagai oleh **libuv** (library I/O non-blocking yang sama dipakai Node.js). Ketika sebuah coroutine menunggu I/O atau mengeksekusi `yield`, coroutine lain tetap berjalan secara bersamaan.
 
 ### Cara kerja singkat
 
 ```
-async func  →  mendefinisikan coroutine (fungsi yang bisa disuspend)
-spawn f()   →  membuat task baru dan langsung memasukkannya ke scheduler
-await expr  →  mensuspend coroutine saat ini sampai expr selesai
+async func f()  →  mendefinisikan coroutine (fungsi yang bisa disuspend)
+await f()       →  panggil async func dan tunggu hasilnya (auto-spawn)
+spawn f()       →  jalankan async func di latar belakang, kembalikan handle
+await handle    →  tunggu coroutine yang di-spawn selesai
+yield           →  serahkan giliran ke coroutine lain, lanjut nanti
 ```
 
 Scheduler Flux menjalankan semua coroutine yang siap, lalu memutar libuv event loop untuk menunggu I/O — persis seperti event loop Node.js.
 
 ---
 
-### Contoh: dua task berjalan bersamaan
+### `await` langsung pada user-defined async func
+
+Memanggil sebuah `async func` dengan `await` **tidak memerlukan `spawn` eksplisit**. Flux otomatis membungkus panggilannya menjadi coroutine di balik layar.
+
+```flux
+async func sapa(nama):
+    return "Halo, " + nama + "!"
+
+async func kuadrat(n):
+    return n * n
+
+async func faktorial(n):
+    if n <= 1:
+        return 1
+    sisa = await faktorial(n - 1)
+    return n * sisa
+
+print(await sapa("Flux"))      # Halo, Flux!
+print(await kuadrat(7))        # 49
+print(await faktorial(6))      # 720
+```
+
+Ini berlaku untuk fungsi rekursif maupun rantai panjang: setiap `await f()` menciptakan coroutine baru, menjalankannya, dan mengembalikan nilainya.
+
+---
+
+### Rantai await — async memanggil async
+
+`async func` bebas memanggil `async func` lain dengan `await`. Nilai return mengalir ke atas rantai dengan benar.
+
+```flux
+async func kuadrat(n):
+    return n * n
+
+async func pitagoras(a, b):
+    a2 = await kuadrat(a)
+    b2 = await kuadrat(b)
+    return a2 + b2
+
+async func pipeline(n):
+    k = await kuadrat(n)       # n^2
+    p = await pitagoras(3, 4)  # 25
+    return k + p
+
+print(await pitagoras(3, 4))   # 25
+print(await pipeline(5))       # 25 + 25 = 50
+```
+
+---
+
+### Contoh: dua task berjalan bersamaan (dengan I/O)
+
+Gunakan `spawn` untuk menjalankan beberapa async func **secara bersamaan**, lalu `await` masing-masing handle untuk mengumpulkan hasilnya.
 
 ```flux
 import aio
 
-async func task(name, delay):
-    print(f"Mulai {name} (tunggu {delay}ms)")
+async func task(nama, delay):
+    print(f"Mulai {nama} (tunggu {delay}ms)")
     await aio.sleep(delay)
-    print(f"{name} selesai setelah {delay}ms")
-    return name
+    print(f"{nama} selesai setelah {delay}ms")
+    return nama
 
 # Spawn dua task — keduanya langsung masuk ke scheduler
 t1 = spawn task("A", 200)
@@ -462,6 +516,73 @@ Keduanya selesai: A B
 
 ---
 
+### `yield` — cooperative multitasking tanpa I/O
+
+`yield` di dalam `async func` menyerahkan giliran CPU ke coroutine lain yang siap, lalu melanjutkan eksekusinya sendiri setelah coroutine lain mendapat kesempatan berjalan. Ini memungkinkan concurrency **tanpa menggunakan modul `aio` sama sekali** — murni dari fungsi yang ditulis user.
+
+```flux
+async func counter(nama, n):
+    i = 0
+    while i < n:
+        print(f"[{nama}] langkah {i}")
+        yield          # serahkan giliran, lanjut di iterasi berikutnya
+        i = i + 1
+    return nama + " selesai"
+
+tA = spawn counter("Alpha", 3)
+tB = spawn counter("Beta",  3)
+
+print(await tA)
+print(await tB)
+```
+
+Output (Alpha dan Beta bergantian — bukan blok per blok):
+
+```
+[Alpha] langkah 0
+[Beta]  langkah 0
+[Alpha] langkah 1
+[Beta]  langkah 1
+[Alpha] langkah 2
+[Beta]  langkah 2
+Alpha selesai
+Beta  selesai
+```
+
+`yield` tidak meneruskan nilai ke awaiter — nilai return coroutine tetap ditentukan oleh `return`. `yield` murni berfungsi sebagai titik suspensi kooperatif.
+
+---
+
+### Fan-out / fan-in — banyak task sekaligus
+
+Pola umum: spawn banyak task sekaligus, simpan handle-nya, lalu `await` satu per satu untuk mengumpulkan hasil.
+
+```flux
+import aio
+
+async func proses(id, ms):
+    await aio.sleep(ms)   # simulasi pekerjaan async (HTTP, DB, dsb.)
+    return id * id
+
+# Jalankan 6 task bersamaan
+handles = []
+i = 1
+while i <= 6:
+    handles.append(spawn proses(i, 200))
+    i = i + 1
+
+# Kumpulkan semua hasil — total waktu ~200ms, bukan 1200ms
+hasil = []
+i = 0
+while i < 6:
+    hasil.append(await handles[i])
+    i = i + 1
+
+print(hasil)   # [1, 4, 9, 16, 25, 36]
+```
+
+---
+
 ### Modul `aio` — I/O asinkron
 
 Import dengan `import aio`. Semua fungsi di bawah mengembalikan **Future** yang bisa di-`await`.
@@ -476,65 +597,11 @@ Import dengan `import aio`. Semua fungsi di bawah mengembalikan **Future** yang 
 import aio
 
 async func baca_tulis():
-    # Tulis file
     await aio.write_file("hasil.txt", "Halo dari Flux!")
-
-    # Baca file yang baru ditulis
     isi = await aio.read_file("hasil.txt")
     print(isi)   # → Halo dari Flux!
 
-t = spawn baca_tulis()
-await t
-```
-
----
-
-### `spawn` — membuat task konkuren
-
-`spawn` menerima sebuah pemanggilan fungsi async dan langsung mendaftarkannya ke scheduler. Hasilnya adalah handle **Coroutine** yang bisa di-`await` nanti.
-
-```flux
-import aio
-
-async func kerja(n):
-    await aio.sleep(n * 10)
-    return n * n
-
-# Tiga task berjalan bersamaan
-a = spawn kerja(1)
-b = spawn kerja(2)
-c = spawn kerja(3)
-
-print(await a)   # 1
-print(await b)   # 4
-print(await c)   # 9
-```
-
----
-
-### `await` dari dalam coroutine
-
-`await` di dalam `async func` mensuspend coroutine itu saja — coroutine lain tetap berjalan.
-
-```flux
-import aio
-
-async func langkah(nama):
-    print(f"{nama}: mulai")
-    await aio.sleep(100)
-    print(f"{nama}: selesai")
-    return nama
-
-async func pipeline():
-    # Kedua langkah berjalan paralel
-    x = spawn langkah("X")
-    y = spawn langkah("Y")
-    hx = await x
-    hy = await y
-    print(f"Pipeline selesai: {hx}, {hy}")
-
-t = spawn pipeline()
-await t
+await baca_tulis()
 ```
 
 ---
@@ -542,14 +609,25 @@ await t
 ### Arsitektur internal
 
 ```
-async func  ──compile──►  FluxClosure (ditandai is_async)
-spawn f()   ──────────►  FluxCoroutine (masuk ready_queue)
-await fut   ──────────►  suspend coroutine, pasang callback ke libuv
-libuv cb    ──────────►  future resolved → coroutine kembali ke ready_queue
-scheduler   ──────────►  jalankan semua coroutine ready, lalu uv_run(ONCE)
+async func f()  ──compile──►  FluxClosure (is_async = true)
+await f(args)   ──────────►  auto-spawn: bungkus jadi FluxCoroutine → ready_queue
+spawn f(args)   ──────────►  FluxCoroutine langsung → ready_queue
+yield           ──────────►  simpan state coroutine, re-enqueue diri sendiri
+await Future    ──────────►  suspend coroutine, pasang callback ke libuv
+libuv callback  ──────────►  future resolved → coroutine kembali ke ready_queue
+scheduler       ──────────►  jalankan semua coroutine ready, lalu uv_run(ONCE)
+return          ──────────►  coroutine DEAD → bangunkan awaiter dengan nilai return
 ```
 
 State tiap coroutine (stack + frame) disimpan secara terpisah sehingga ratusan coroutine bisa berjalan bersamaan tanpa konflik.
+
+Perbedaan `await f()` vs `spawn f()`:
+
+| | `await f()` | `spawn f()` |
+|---|---|---|
+| Menunggu selesai? | Ya, langsung | Tidak — berjalan di latar belakang |
+| Mengembalikan | Nilai return `f` | Handle coroutine |
+| Cocok untuk | Komposisi sequential | Concurrency paralel |
 
 ---
 

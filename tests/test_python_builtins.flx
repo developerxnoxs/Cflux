@@ -1,0 +1,133 @@
+# Test: Python-style builtins added to Flux
+# Syntax: func (no def), no explicit self in class methods, no let
+
+print("=== zip ===")
+a = [1, 2, 3]
+b = ["a", "b", "c"]
+for pair in zip(a, b):
+    print(pair)
+
+print("=== enumerate ===")
+fruits = ["apple", "banana", "cherry"]
+for item in enumerate(fruits):
+    print(item[0], item[1])
+
+print("=== any / all ===")
+print(any([false, false, true]))
+print(any([false, false, false]))
+print(all([true, true, true]))
+print(all([true, false, true]))
+
+print("=== min / max / sum ===")
+nums = [3, 1, 4, 1, 5, 9, 2, 6]
+print(min(nums))
+print(max(nums))
+print(sum(nums))
+print(min(10, 20, 5, 8))
+print(max(10, 20, 5, 8))
+
+print("=== abs / round ===")
+print(abs(-42))
+print(abs(-3.14))
+print(round(3.7))
+print(round(3.145, 2))
+
+print("=== sorted / reversed ===")
+unsorted = [5, 2, 8, 1, 9, 3]
+print(sorted(unsorted))
+print(reversed(unsorted))
+words = ["banana", "apple", "cherry"]
+print(sorted(words))
+
+print("=== sorted with key fn ===")
+pairs = [[3, "c"], [1, "a"], [2, "b"]]
+by_first = sorted(pairs, |a, b| => a[0] > b[0])
+for item in by_first:
+    print(item)
+
+print("=== has_attr / get_attr / set_attr ===")
+class Point:
+    func init(x, y):
+        self.x = x
+        self.y = y
+
+p = Point(10, 20)
+print(has_attr(p, "x"))
+print(has_attr(p, "z"))
+print(get_attr(p, "x"))
+print(get_attr(p, "z", 99))
+set_attr(p, "z", 42)
+print(get_attr(p, "z"))
+
+print("=== is_instance ===")
+class Animal:
+    func init(name):
+        self.name = name
+
+class Dog(Animal):
+    func init(name):
+        self.name = name
+    func speak():
+        return self.name + " says Woof"
+
+d = Dog("Rex")
+print(is_instance(d, Dog))
+print(is_instance(d, Animal))
+
+print("=== is_callable ===")
+func greet(name):
+    return "Hello " + name
+
+print(is_callable(greet))
+print(is_callable(42))
+print(is_callable(Point))
+
+print("=== attrs ===")
+p2 = Point(1, 2)
+names = attrs(p2)
+print(names)
+
+print("=== to_string hook ===")
+class Vec:
+    func init(x, y):
+        self.x = x
+        self.y = y
+    func to_string():
+        return "Vec(" + str(self.x) + ", " + str(self.y) + ")"
+
+v = Vec(3, 4)
+print(v)
+print(str(v))
+
+print("=== length hook ===")
+class Stack:
+    func init():
+        self.items = []
+    func push(item):
+        self.items.append(item)
+    func length():
+        return len(self.items)
+
+s = Stack()
+s.push(1)
+s.push(2)
+s.push(3)
+print(len(s))
+
+print("=== equals hook ===")
+class Color:
+    func init(r, g, b):
+        self.r = r
+        self.g = g
+        self.b = b
+    func equals(other):
+        return self.r == other.r and self.g == other.g and self.b == other.b
+
+red1 = Color(255, 0, 0)
+red2 = Color(255, 0, 0)
+blue = Color(0, 0, 255)
+print(red1 == red2)
+print(red1 == blue)
+print(red1 != blue)
+
+print("ALL TESTS DONE")

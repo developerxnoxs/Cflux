@@ -1338,11 +1338,41 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
             /* ---- Comparison --------------------------------------- */
             case OP_EQ: {
                 Value b = vm_pop(vm); Value a = vm_pop(vm);
+                /* Check for user-defined equals() hook on instances */
+                if (IS_INSTANCE(a)) {
+                    FluxInstance *inst_eq = AS_INSTANCE(a);
+                    Value eq_method;
+                    FluxString *eq_key = object_string_copy(vm, "equals", 6);
+                    if (dict_get(inst_eq->klass->methods, eq_key, &eq_method)) {
+                        Value eq_args[1] = { b };
+                        Value eq_result = vm_invoke(vm,
+                            value_object((FluxObject *)object_bound_method_new(vm, a, AS_CLOSURE(eq_method))),
+                            eq_args, 1);
+                        if (vm->has_error) return VM_RUNTIME_ERROR;
+                        vm_push(vm, value_bool(value_is_truthy(eq_result)));
+                        break;
+                    }
+                }
                 vm_push(vm, value_bool(value_equal(a, b)));
                 break;
             }
             case OP_NEQ: {
                 Value b = vm_pop(vm); Value a = vm_pop(vm);
+                /* Check for user-defined equals() hook on instances */
+                if (IS_INSTANCE(a)) {
+                    FluxInstance *inst_neq = AS_INSTANCE(a);
+                    Value neq_method;
+                    FluxString *neq_key = object_string_copy(vm, "equals", 6);
+                    if (dict_get(inst_neq->klass->methods, neq_key, &neq_method)) {
+                        Value neq_args[1] = { b };
+                        Value neq_result = vm_invoke(vm,
+                            value_object((FluxObject *)object_bound_method_new(vm, a, AS_CLOSURE(neq_method))),
+                            neq_args, 1);
+                        if (vm->has_error) return VM_RUNTIME_ERROR;
+                        vm_push(vm, value_bool(!value_is_truthy(neq_result)));
+                        break;
+                    }
+                }
                 vm_push(vm, value_bool(!value_equal(a, b)));
                 break;
             }

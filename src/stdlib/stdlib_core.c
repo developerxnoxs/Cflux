@@ -91,10 +91,25 @@ FluxString *value_to_string(FluxVM *vm, Value v) {
                     case OBJ_CLASS:
                         snprintf(buf, sizeof(buf), "<class %s>", AS_CLASS(v)->name->chars);
                         return object_string_copy(vm, buf, (int)strlen(buf));
-                    case OBJ_INSTANCE:
+                    case OBJ_INSTANCE: {
+                        /* Check for user-defined to_string() hook first */
+                        FluxInstance *inst_ = AS_INSTANCE(v);
+                        Value ts_method;
+                        FluxString *ts_key = object_string_copy(vm, "to_string", 9);
+                        if (!vm->has_error &&
+                            dict_get(inst_->klass->methods, ts_key, &ts_method)) {
+                            Value receiver = v;
+                            Value result_  = vm_invoke(vm, value_object((FluxObject *)
+                                object_bound_method_new(vm, receiver, AS_CLOSURE(ts_method))),
+                                NULL, 0);
+                            if (!vm->has_error && IS_STRING(result_))
+                                return AS_STRING(result_);
+                            vm->has_error = false; /* swallow to_string errors gracefully */
+                        }
                         snprintf(buf, sizeof(buf), "<%s instance>",
-                                 AS_INSTANCE(v)->klass->name->chars);
+                                 inst_->klass->name->chars);
                         return object_string_copy(vm, buf, (int)strlen(buf));
+                    }
                     default:
                         return object_string_copy(vm, "<object>", 8);
                 }
@@ -188,7 +203,19 @@ static Value native_len(FluxVM *vm, int argc, Value *argv) {
     if (IS_STRING(v)) return value_int(AS_STRING(v)->length);
     if (IS_LIST(v))   return value_int(AS_LIST(v)->elements.count);
     if (IS_DICT(v))   return value_int(AS_DICT(v)->count);
-    vm_runtime_error(vm, "len() requires string, list, or dict");
+    /* Check for user-defined length() hook on instances */
+    if (IS_INSTANCE(v)) {
+        FluxInstance *inst = AS_INSTANCE(v);
+        Value len_method;
+        FluxString *len_key = object_string_copy(vm, "length", 6);
+        if (dict_get(inst->klass->methods, len_key, &len_method)) {
+            Value result = vm_invoke(vm, value_object((FluxObject *)
+                object_bound_method_new(vm, v, AS_CLOSURE(len_method))),
+                NULL, 0);
+            if (!vm->has_error) return result;
+        }
+    }
+    vm_runtime_error(vm, "len() requires string, list, dict, or an instance with length()");
     return value_null();
 }
 
@@ -283,6 +310,319 @@ static Value native_id(FluxVM *vm, int argc, Value *argv) {
     if (value_is_object(argv[0]))
         return value_int((int64_t)(uintptr_t)value_as_object(argv[0]));
     return value_int(0);
+}
+
+/* =========================================================================
+ * Functional builtins: zip, enumerate, any, all, min, max, sum,
+ *                      sorted, reversed, abs, round
+ * ====================================================================== */
+
+static Value native_zip(FluxVM *vm, int argc, Value *argv) {
+    if (argc < 2 || !IS_LIST(argv[0]) || !IS_LIST(argv[1])) {
+        vm_runtime_error(vm, "zip() requires two lists");
+        return value_null();
+    }
+    FluxList *a = AS_LIST(argv[0]);
+    FluxList *b = AS_LIST(argv[1]);
+    int n = a->elements.count < b->elements.count
+            ? a->elements.count : b->elements.count;
+    FluxList *result = object_list_new(vm);
+    vm_push(vm, value_object((FluxObject *)result));
+    for (int i = 0; i < n; i++) {
+        FluxList *pair = object_list_new(vm);
+        vm_push(vm, value_object((FluxObject *)pair));
+        value_array_write(&pair->elements, a->elements.data[i]);
+        value_array_write(&pair->elements, b->elements.data[i]);
+        vm_pop(vm);
+        value_array_write(&result->elements, value_object((FluxObject *)pair));
+    }
+    vm_pop(vm);
+    return value_object((FluxObject *)result);
+}
+
+static Value native_enumerate(FluxVM *vm, int argc, Value *argv) {
+    if (argc < 1 || !IS_LIST(argv[0])) {
+        vm_runtime_error(vm, "enumerate() requires a list");
+        return value_null();
+    }
+    FluxList *src = AS_LIST(argv[0]);
+    int64_t start = (argc >= 2 && value_is_int(argv[1])) ? value_as_int(argv[1]) : 0;
+    FluxList *result = object_list_new(vm);
+    vm_push(vm, value_object((FluxObject *)result));
+    for (int i = 0; i < src->elements.count; i++) {
+        FluxList *pair = object_list_new(vm);
+        vm_push(vm, value_object((FluxObject *)pair));
+        value_array_write(&pair->elements, value_int(start + i));
+        value_array_write(&pair->elements, src->elements.data[i]);
+        vm_pop(vm);
+        value_array_write(&result->elements, value_object((FluxObject *)pair));
+    }
+    vm_pop(vm);
+    return value_object((FluxObject *)result);
+}
+
+static Value native_any(FluxVM *vm, int argc, Value *argv) {
+    (void)vm; (void)argc;
+    if (!IS_LIST(argv[0])) return value_bool(value_is_truthy(argv[0]));
+    FluxList *list = AS_LIST(argv[0]);
+    for (int i = 0; i < list->elements.count; i++)
+        if (value_is_truthy(list->elements.data[i])) return value_bool(true);
+    return value_bool(false);
+}
+
+static Value native_all(FluxVM *vm, int argc, Value *argv) {
+    (void)vm; (void)argc;
+    if (!IS_LIST(argv[0])) return value_bool(value_is_truthy(argv[0]));
+    FluxList *list = AS_LIST(argv[0]);
+    for (int i = 0; i < list->elements.count; i++)
+        if (!value_is_truthy(list->elements.data[i])) return value_bool(false);
+    return value_bool(true);
+}
+
+/* Natural ordering for min/max/sorted */
+static int value_compare_natural(Value a, Value b) {
+    if (value_is_int(a) && value_is_int(b)) {
+        int64_t ia = value_as_int(a), ib = value_as_int(b);
+        return ia < ib ? -1 : ia > ib ? 1 : 0;
+    }
+    double da = value_to_double(a), db = value_to_double(b);
+    if (da < db) return -1;
+    if (da > db) return  1;
+    if (IS_STRING(a) && IS_STRING(b))
+        return strcmp(AS_STRING(a)->chars, AS_STRING(b)->chars);
+    return 0;
+}
+
+static Value native_min(FluxVM *vm, int argc, Value *argv) {
+    if (argc == 0) {
+        vm_runtime_error(vm, "min() requires at least one argument");
+        return value_null();
+    }
+    if (argc == 1 && IS_LIST(argv[0])) {
+        FluxList *list = AS_LIST(argv[0]);
+        if (list->elements.count == 0) {
+            vm_runtime_error(vm, "min() of empty list");
+            return value_null();
+        }
+        Value m = list->elements.data[0];
+        for (int i = 1; i < list->elements.count; i++)
+            if (value_compare_natural(list->elements.data[i], m) < 0)
+                m = list->elements.data[i];
+        return m;
+    }
+    Value m = argv[0];
+    for (int i = 1; i < argc; i++)
+        if (value_compare_natural(argv[i], m) < 0) m = argv[i];
+    return m;
+}
+
+static Value native_max(FluxVM *vm, int argc, Value *argv) {
+    if (argc == 0) {
+        vm_runtime_error(vm, "max() requires at least one argument");
+        return value_null();
+    }
+    if (argc == 1 && IS_LIST(argv[0])) {
+        FluxList *list = AS_LIST(argv[0]);
+        if (list->elements.count == 0) {
+            vm_runtime_error(vm, "max() of empty list");
+            return value_null();
+        }
+        Value m = list->elements.data[0];
+        for (int i = 1; i < list->elements.count; i++)
+            if (value_compare_natural(list->elements.data[i], m) > 0)
+                m = list->elements.data[i];
+        return m;
+    }
+    Value m = argv[0];
+    for (int i = 1; i < argc; i++)
+        if (value_compare_natural(argv[i], m) > 0) m = argv[i];
+    return m;
+}
+
+static Value native_sum(FluxVM *vm, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_LIST(argv[0])) {
+        vm_runtime_error(vm, "sum() requires a list");
+        return value_null();
+    }
+    FluxList *list = AS_LIST(argv[0]);
+    bool has_float = false;
+    double total = 0.0;
+    for (int i = 0; i < list->elements.count; i++) {
+        Value v = list->elements.data[i];
+        if (v.type == VAL_FLOAT) has_float = true;
+        total += value_to_double(v);
+    }
+    return has_float ? value_float(total) : value_int((int64_t)total);
+}
+
+static Value native_abs(FluxVM *vm, int argc, Value *argv) {
+    (void)vm; (void)argc;
+    if (value_is_int(argv[0])) {
+        int64_t v = value_as_int(argv[0]);
+        return value_int(v < 0 ? -v : v);
+    }
+    return value_float(fabs(value_to_double(argv[0])));
+}
+
+static Value native_round(FluxVM *vm, int argc, Value *argv) {
+    (void)vm;
+    double v = value_to_double(argv[0]);
+    int digits = (argc >= 2 && value_is_int(argv[1])) ? (int)value_as_int(argv[1]) : 0;
+    double factor = pow(10.0, digits);
+    double rounded = round(v * factor) / factor;
+    return (digits == 0) ? value_int((int64_t)rounded) : value_float(rounded);
+}
+
+static Value native_reversed(FluxVM *vm, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_LIST(argv[0])) {
+        vm_runtime_error(vm, "reversed() requires a list");
+        return value_null();
+    }
+    FluxList *src = AS_LIST(argv[0]);
+    FluxList *result = object_list_new(vm);
+    vm_push(vm, value_object((FluxObject *)result));
+    for (int i = src->elements.count - 1; i >= 0; i--)
+        value_array_write(&result->elements, src->elements.data[i]);
+    vm_pop(vm);
+    return value_object((FluxObject *)result);
+}
+
+static Value native_sorted(FluxVM *vm, int argc, Value *argv) {
+    if (!IS_LIST(argv[0])) {
+        vm_runtime_error(vm, "sorted() requires a list");
+        return value_null();
+    }
+    FluxList *src = AS_LIST(argv[0]);
+    int n = src->elements.count;
+    bool has_fn = (argc >= 2 && !value_is_null(argv[1]));
+    Value fn = has_fn ? argv[1] : value_null();
+
+    FluxList *result = object_list_new(vm);
+    vm_push(vm, value_object((FluxObject *)result));
+    for (int i = 0; i < n; i++)
+        value_array_write(&result->elements, src->elements.data[i]);
+
+    /* Insertion sort (stable, good for small-medium lists) */
+    Value *data = result->elements.data;
+    for (int i = 1; i < n; i++) {
+        Value key = data[i];
+        int j = i - 1;
+        while (j >= 0) {
+            int cmp;
+            if (has_fn) {
+                Value args[2] = { data[j], key };
+                Value r = vm_invoke(vm, fn, args, 2);
+                if (vm->has_error) { vm_pop(vm); return value_null(); }
+                cmp = value_is_truthy(r) ? 1 : -1;
+            } else {
+                cmp = value_compare_natural(data[j], key);
+            }
+            if (cmp <= 0) break;
+            data[j + 1] = data[j];
+            j--;
+        }
+        data[j + 1] = key;
+    }
+    vm_pop(vm);
+    return value_object((FluxObject *)result);
+}
+
+/* =========================================================================
+ * Introspection builtins: has_attr, get_attr, set_attr,
+ *                         is_instance, is_callable, attrs
+ * ====================================================================== */
+
+static Value native_has_attr(FluxVM *vm, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_INSTANCE(argv[0]) || !IS_STRING(argv[1])) return value_bool(false);
+    FluxInstance *inst = AS_INSTANCE(argv[0]);
+    FluxString *name = AS_STRING(argv[1]);
+    Value dummy;
+    return value_bool(dict_get(inst->fields, name, &dummy) ||
+                      dict_get(inst->klass->methods, name, &dummy));
+}
+
+static Value native_get_attr(FluxVM *vm, int argc, Value *argv) {
+    if (!IS_INSTANCE(argv[0]) || !IS_STRING(argv[1])) {
+        if (argc >= 3) return argv[2];
+        vm_runtime_error(vm, "get_attr() requires an instance and a string name");
+        return value_null();
+    }
+    FluxInstance *inst = AS_INSTANCE(argv[0]);
+    FluxString *name = AS_STRING(argv[1]);
+    Value field;
+    if (dict_get(inst->fields, name, &field)) return field;
+    Value method;
+    if (dict_get(inst->klass->methods, name, &method)) {
+        FluxBoundMethod *bm = object_bound_method_new(vm, argv[0], AS_CLOSURE(method));
+        return value_object((FluxObject *)bm);
+    }
+    if (argc >= 3) return argv[2];
+    vm_runtime_error(vm, "get_attr(): attribute '%s' not found", name->chars);
+    return value_null();
+}
+
+static Value native_set_attr(FluxVM *vm, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_INSTANCE(argv[0]) || !IS_STRING(argv[1])) {
+        vm_runtime_error(vm, "set_attr() requires an instance and a string name");
+        return value_null();
+    }
+    dict_set(vm, AS_INSTANCE(argv[0])->fields, AS_STRING(argv[1]), argv[2]);
+    return value_null();
+}
+
+static Value native_is_instance(FluxVM *vm, int argc, Value *argv) {
+    (void)vm; (void)argc;
+    if (!IS_INSTANCE(argv[0]) || !IS_CLASS(argv[1])) return value_bool(false);
+    /* Direct class match (Flux flattens inheritance at class-definition time) */
+    return value_bool(AS_INSTANCE(argv[0])->klass == AS_CLASS(argv[1]));
+}
+
+static Value native_is_callable(FluxVM *vm, int argc, Value *argv) {
+    (void)vm; (void)argc;
+    Value v = argv[0];
+    if (!value_is_object(v)) return value_bool(false);
+    ObjectType t = OBJ_TYPE(v);
+    return value_bool(t == OBJ_CLOSURE || t == OBJ_NATIVE ||
+                      t == OBJ_BOUND_METHOD || t == OBJ_CLASS);
+}
+
+static Value native_attrs(FluxVM *vm, int argc, Value *argv) {
+    (void)argc;
+    FluxList *result = object_list_new(vm);
+    vm_push(vm, value_object((FluxObject *)result));
+    if (IS_INSTANCE(argv[0])) {
+        FluxInstance *inst = AS_INSTANCE(argv[0]);
+        for (int i = 0; i < inst->fields->capacity; i++) {
+            DictEntry *e = &inst->fields->entries[i];
+            if (!e->key) continue;
+            value_array_write(&result->elements, value_object((FluxObject *)e->key));
+        }
+        for (int i = 0; i < inst->klass->methods->capacity; i++) {
+            DictEntry *e = &inst->klass->methods->entries[i];
+            if (!e->key) continue;
+            value_array_write(&result->elements, value_object((FluxObject *)e->key));
+        }
+    } else if (IS_CLASS(argv[0])) {
+        FluxClass *klass = AS_CLASS(argv[0]);
+        for (int i = 0; i < klass->methods->capacity; i++) {
+            DictEntry *e = &klass->methods->entries[i];
+            if (!e->key) continue;
+            value_array_write(&result->elements, value_object((FluxObject *)e->key));
+        }
+    } else if (IS_DICT(argv[0])) {
+        FluxDict *dict = AS_DICT(argv[0]);
+        for (int i = 0; i < dict->capacity; i++) {
+            DictEntry *e = &dict->entries[i];
+            if (!e->key) continue;
+            value_array_write(&result->elements, value_object((FluxObject *)e->key));
+        }
+    }
+    vm_pop(vm);
+    return value_object((FluxObject *)result);
 }
 
 /* =========================================================================
@@ -387,7 +727,28 @@ void flux_stdlib_load_core(FluxVM *vm) {
     vm_register_native(vm, "sleep",   native_sleep,             1);
     vm_register_native(vm, "assert",  native_assert,           -1);
     vm_register_native(vm, "id",      native_id,                1);
-    vm_register_native(vm, "map",     native_map,               2);
-    vm_register_native(vm, "filter",  native_filter,            2);
-    vm_register_native(vm, "reduce",  native_reduce,           -1);
+    vm_register_native(vm, "map",         native_map,               2);
+    vm_register_native(vm, "filter",      native_filter,            2);
+    vm_register_native(vm, "reduce",      native_reduce,           -1);
+
+    /* Functional additions */
+    vm_register_native(vm, "zip",         native_zip,              -1);
+    vm_register_native(vm, "enumerate",   native_enumerate,        -1);
+    vm_register_native(vm, "any",         native_any,               1);
+    vm_register_native(vm, "all",         native_all,               1);
+    vm_register_native(vm, "min",         native_min,              -1);
+    vm_register_native(vm, "max",         native_max,              -1);
+    vm_register_native(vm, "sum",         native_sum,               1);
+    vm_register_native(vm, "sorted",      native_sorted,           -1);
+    vm_register_native(vm, "reversed",    native_reversed,          1);
+    vm_register_native(vm, "abs",         native_abs,               1);
+    vm_register_native(vm, "round",       native_round,            -1);
+
+    /* Introspection */
+    vm_register_native(vm, "has_attr",    native_has_attr,          2);
+    vm_register_native(vm, "get_attr",    native_get_attr,         -1);
+    vm_register_native(vm, "set_attr",    native_set_attr,          3);
+    vm_register_native(vm, "is_instance", native_is_instance,       2);
+    vm_register_native(vm, "is_callable", native_is_callable,       1);
+    vm_register_native(vm, "attrs",       native_attrs,             1);
 }

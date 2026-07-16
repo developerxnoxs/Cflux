@@ -632,6 +632,115 @@ func square(n):
 print(map(nums, square))                # [1, 4, 9, 16, 25]
 ```
 
+### Fungsi fungsional tambahan
+
+| Fungsi | Deskripsi |
+|---|---|
+| `zip(list_a, list_b)` | Gabungkan dua list menjadi list pasangan `[a, b]` |
+| `enumerate(list)` | List pasangan `[indeks, elemen]` |
+| `any(list)` | `true` jika ada satu elemen yang truthy |
+| `all(list)` | `true` jika semua elemen truthy |
+| `min(list)` / `min(a, b, ...)` | Nilai terkecil |
+| `max(list)` / `max(a, b, ...)` | Nilai terbesar |
+| `sum(list)` | Jumlah semua elemen numerik |
+| `sorted(list)` / `sorted(list, fn)` | Salinan list yang diurutkan; `fn(a, b)` → truthy jika `a > b` |
+| `reversed(list)` | Salinan list yang dibalik urutannya |
+| `abs(x)` | Nilai absolut |
+| `round(x)` / `round(x, n)` | Pembulatan ke `n` desimal (default 0) |
+
+```flux
+nums = [3, 1, 4, 1, 5, 9]
+
+print(min(nums))          # 1
+print(max(nums))          # 9
+print(sum(nums))          # 23
+print(sorted(nums))       # [1, 1, 3, 4, 5, 9]
+print(reversed(nums))     # [9, 5, 1, 4, 1, 3]
+
+for pair in zip([1,2,3], ["a","b","c"]):
+    print(pair)           # [1, a]  [2, b]  [3, c]
+
+for item in enumerate(["x","y","z"]):
+    print(item[0], item[1])  # 0 x  / 1 y  / 2 z
+
+print(any([false, true, false]))   # true
+print(all([true, true, true]))     # true
+print(abs(-7))                     # 7
+print(round(3.145, 2))             # 3.15
+
+# sorted dengan comparator kustom
+pairs = [[3,"c"],[1,"a"],[2,"b"]]
+by_first = sorted(pairs, |a, b| => a[0] > b[0])
+# → [[1, a], [2, b], [3, c]]
+```
+
+### Fungsi introspeksi (mirip Python: `isinstance`, `hasattr`, `getattr`, `setattr`, `callable`, `dir`)
+
+| Fungsi Flux | Padanan Python | Deskripsi |
+|---|---|---|
+| `has_attr(obj, "nama")` | `hasattr(obj, "nama")` | `true` jika instance punya field/method bernama `"nama"` |
+| `get_attr(obj, "nama")` | `getattr(obj, "nama")` | Ambil field/method by nama; error jika tidak ada |
+| `get_attr(obj, "nama", default)` | `getattr(obj, "nama", default)` | Ambil field/method by nama; kembalikan `default` jika tidak ada |
+| `set_attr(obj, "nama", nilai)` | `setattr(obj, "nama", nilai)` | Set field instance by nama |
+| `is_instance(obj, Kelas)` | `isinstance(obj, Kelas)` | `true` jika obj adalah instance dari Kelas |
+| `is_callable(obj)` | `callable(obj)` | `true` jika obj bisa dipanggil (fungsi, class, method) |
+| `attrs(obj)` | `dir(obj)` | List semua nama field dan method dari instance/class/dict |
+
+```flux
+class Point:
+    func init(x, y):
+        self.x = x
+        self.y = y
+
+p = Point(10, 20)
+
+print(has_attr(p, "x"))           # true
+print(has_attr(p, "z"))           # false
+print(get_attr(p, "x"))           # 10
+print(get_attr(p, "z", 99))       # 99  (nilai default)
+set_attr(p, "z", 42)
+print(get_attr(p, "z"))           # 42
+
+print(is_instance(p, Point))      # true
+print(is_callable(Point))         # true
+print(is_callable(42))            # false
+print(attrs(p))                   # [z, y, x, init]
+```
+
+### Method hook pada class (mirip Python dunder methods)
+
+Flux mengenali method tertentu sebagai **hook** yang dipanggil otomatis oleh built-in:
+
+| Method di class | Dipicu oleh | Padanan Python |
+|---|---|---|
+| `func to_string():` | `print(obj)`, `str(obj)` | `__repr__` / `__str__` |
+| `func length():` | `len(obj)` | `__len__` |
+| `func equals(other):` | `obj1 == obj2`, `obj1 != obj2` | `__eq__` |
+
+```flux
+class Vec:
+    func init(x, y):
+        self.x = x
+        self.y = y
+    func to_string():                   # hook: dipanggil saat print/str
+        return "Vec(" + str(self.x) + ", " + str(self.y) + ")"
+    func length():                      # hook: dipanggil saat len()
+        return 2
+    func equals(other):                 # hook: dipanggil saat == / !=
+        return self.x == other.x and self.y == other.y
+
+v1 = Vec(3, 4)
+v2 = Vec(3, 4)
+v3 = Vec(1, 2)
+
+print(v1)             # Vec(3, 4)     ← memanggil to_string()
+print(str(v1))        # Vec(3, 4)
+print(len(v1))        # 2             ← memanggil length()
+print(v1 == v2)       # true          ← memanggil equals()
+print(v1 == v3)       # false
+print(v1 != v3)       # true
+```
+
 ### Modul `math`
 
 ```flux

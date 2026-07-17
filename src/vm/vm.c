@@ -357,6 +357,27 @@ static VMResult vm_scheduler_run_step(FluxVM *vm) {
             waiter->state = CORO_SUSPENDED;
             vm_scheduler_enqueue(vm, waiter);
         }
+
+        /* Notify gather future if this coroutine is part of an aio.gather() */
+        if (co->gather_future) {
+            FluxFuture *gf = co->gather_future;
+            co->gather_future = NULL;
+            gf->gather_results[co->gather_slot] = result;
+            gf->gather_remaining--;
+            if (gf->gather_remaining == 0) {
+                /* All gathered coroutines finished — build result list */
+                FluxList *lst = object_list_new(vm);
+                /* GC-protect the list while we populate it */
+                vm_push(vm, value_object((FluxObject *)lst));
+                for (int _gi = 0; _gi < gf->gather_count; _gi++)
+                    gc_value_array_write(vm, &lst->elements,
+                                        gf->gather_results[_gi]);
+                vm_pop(vm);
+                free(gf->gather_results);
+                gf->gather_results = NULL;
+                vm_io_future_complete(vm, gf, value_object((FluxObject *)lst));
+            }
+        }
     }
     /* r == VM_YIELD: coroutine suspended itself; state already saved inside
      * the coroutine via coro_save().  Nothing left to do here for the
@@ -366,6 +387,75 @@ static VMResult vm_scheduler_run_step(FluxVM *vm) {
     RESTORE_CALLER_STATE();
 #undef RESTORE_CALLER_STATE
     return VM_OK;
+}
+
+/* -------------------------------------------------------------------------
+ * vm_gather_create – create a gather future for aio.gather().
+ *
+ * Accepts an array of Values (expected to be Coroutine handles produced by
+ * calling async funcs).  Returns a FluxFuture that resolves to a FluxList
+ * of results once every coroutine has completed.
+ *
+ * Coroutines that are already DEAD have their result recorded immediately.
+ * Non-coroutine values are stored as-is in the corresponding result slot.
+ * ---------------------------------------------------------------------- */
+FluxFuture *vm_gather_create(FluxVM *vm, Value *items, int count) {
+    FluxFuture *gf = object_future_new(vm);
+    /* GC-root immediately before any allocation that might trigger a GC */
+    vm_io_future_register(vm, gf);
+
+    if (count == 0) {
+        /* Empty gather — resolve at once with an empty list */
+        FluxList *lst = object_list_new(vm);
+        vm_io_future_complete(vm, gf, value_object((FluxObject *)lst));
+        return gf;
+    }
+
+    gf->gather_results = (Value *)malloc(sizeof(Value) * (size_t)count);
+    if (!gf->gather_results) {
+        vm_runtime_error(vm, "aio.gather: out of memory");
+        /* Remove from io_futures to keep counts consistent */
+        vm_io_future_complete(vm, gf, value_null());
+        return NULL;
+    }
+    for (int i = 0; i < count; i++)
+        gf->gather_results[i] = value_null();
+    gf->gather_count     = count;
+    gf->gather_remaining = 0;
+
+    int remaining = 0;
+    for (int i = 0; i < count; i++) {
+        if (IS_COROUTINE(items[i])) {
+            FluxCoroutine *co = AS_COROUTINE(items[i]);
+            if (co->state == CORO_DEAD) {
+                /* Already finished — capture result now */
+                gf->gather_results[i] = co->result;
+            } else {
+                co->gather_future = gf;
+                co->gather_slot   = i;
+                remaining++;
+            }
+        } else {
+            /* Non-coroutine (literal value, already-resolved future, etc.) —
+             * store as-is so gather still works in mixed scenarios. */
+            gf->gather_results[i] = items[i];
+        }
+    }
+    gf->gather_remaining = remaining;
+
+    if (remaining == 0) {
+        /* Every coroutine was already dead — resolve synchronously */
+        FluxList *lst = object_list_new(vm);
+        vm_push(vm, value_object((FluxObject *)lst));  /* GC-protect */
+        for (int i = 0; i < count; i++)
+            gc_value_array_write(vm, &lst->elements, gf->gather_results[i]);
+        vm_pop(vm);
+        free(gf->gather_results);
+        gf->gather_results = NULL;
+        vm_io_future_complete(vm, gf, value_object((FluxObject *)lst));
+    }
+
+    return gf;
 }
 
 VMResult vm_scheduler_run(FluxVM *vm) {

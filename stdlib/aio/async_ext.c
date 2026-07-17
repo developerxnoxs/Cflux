@@ -28,10 +28,11 @@
 
 /* Locate the global FluxString constructor — we call object_string_copy() which
  * is part of the main binary (exported via -rdynamic). */
-extern FluxString *object_string_copy(FluxVM *vm, const char *chars, int length);
-extern FluxFuture *object_future_new(FluxVM *vm);
-extern void        vm_io_future_register(FluxVM *vm, FluxFuture *fut);
-extern void        vm_io_future_complete(FluxVM *vm, FluxFuture *fut, Value result);
+extern FluxString  *object_string_copy(FluxVM *vm, const char *chars, int length);
+extern FluxFuture  *object_future_new(FluxVM *vm);
+extern void         vm_io_future_register(FluxVM *vm, FluxFuture *fut);
+extern void         vm_io_future_complete(FluxVM *vm, FluxFuture *fut, Value result);
+extern FluxFuture  *vm_gather_create(FluxVM *vm, Value *items, int count);
 
 /* =========================================================================
  * async.sleep(ms)
@@ -325,6 +326,60 @@ static Value flux_async_write_file(FluxVM *vm, int argc, Value *argv) {
 }
 
 /* =========================================================================
+ * aio.gather(list_of_coroutines)
+ *
+ * Runs all coroutines concurrently (they are already in the scheduler once
+ * called as async funcs) and returns a Future that resolves to a list of
+ * their results in the original order — identical semantics to Python's
+ * asyncio.gather().
+ *
+ * Usage:
+ *   results = await aio.gather([coro1(), coro2(), coro3()])
+ * ====================================================================== */
+
+static Value flux_aio_gather(FluxVM *vm, int argc, Value *argv) {
+    if (argc < 1 || !IS_LIST(argv[0])) {
+        vm_runtime_error(vm, "aio.gather(list) expects a list of coroutines");
+        return value_null();
+    }
+    FluxList *lst  = AS_LIST(argv[0]);
+    int       count = lst->elements.count;
+
+    FluxFuture *gf = vm_gather_create(vm, lst->elements.data, count);
+    if (!gf) return value_null();  /* error already set */
+    return value_object((FluxObject *)gf);
+}
+
+/* =========================================================================
+ * aio.create_task(coroutine_handle)
+ *
+ * Mirrors Python's asyncio.create_task(): receives a coroutine handle
+ * (already auto-spawned when the async func was called) and returns it
+ * unchanged.  Useful as explicit documentation that a task is running in
+ * the background.
+ *
+ * Usage:
+ *   task = aio.create_task(my_async_func(args))
+ *   result = await task
+ * ====================================================================== */
+
+static Value flux_aio_create_task(FluxVM *vm, int argc, Value *argv) {
+    if (argc < 1) {
+        vm_runtime_error(vm, "aio.create_task(coroutine) expects 1 argument");
+        return value_null();
+    }
+    if (!IS_COROUTINE(argv[0])) {
+        vm_runtime_error(vm,
+            "aio.create_task expects a coroutine "
+            "(call an async func without await)");
+        return value_null();
+    }
+    /* The coroutine is already enqueued by the auto-spawn mechanism; just
+     * return the handle so the caller can await it later. */
+    return argv[0];
+}
+
+/* =========================================================================
  * Extension entry point
  * ====================================================================== */
 
@@ -337,9 +392,11 @@ bool flux_extension_init(FluxVM *vm, Value *out) {
     dict_set(vm, mod, k, value_object((FluxObject *)n));                 \
 } while (0)
 
-    REG("sleep",      flux_async_sleep,      1);
-    REG("read_file",  flux_async_read_file,  1);
-    REG("write_file", flux_async_write_file, 2);
+    REG("sleep",       flux_async_sleep,      1);
+    REG("read_file",   flux_async_read_file,  1);
+    REG("write_file",  flux_async_write_file, 2);
+    REG("gather",      flux_aio_gather,       1);
+    REG("create_task", flux_aio_create_task,  1);
 
 #undef REG
 

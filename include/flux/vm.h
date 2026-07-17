@@ -210,6 +210,10 @@ VMResult vm_scheduler_run(FluxVM *vm);
 void vm_io_future_register(FluxVM *vm, struct FluxFuture *fut);
 void vm_io_future_complete(FluxVM *vm, struct FluxFuture *fut, Value result);
 
+/* vm_gather_create – create a gather future that resolves to a list once all
+ * coroutines in `items[0..count-1]` have completed.  Used by aio.gather(). */
+struct FluxFuture *vm_gather_create(FluxVM *vm, Value *items, int count);
+
 /* -------------------------------------------------------------------------
  * Module import directory stack
  *

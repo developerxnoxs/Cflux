@@ -206,6 +206,10 @@ typedef struct FluxCoroutine {
     struct FluxCoroutine *awaited_by;
     /* Pending future this coroutine is suspended on (set by OP_AWAIT) */
     FluxFuture     *pending_future;
+    /* If this coroutine is part of an aio.gather(), points to the gather
+     * future and records which slot its result should land in. */
+    FluxFuture     *gather_future;
+    int             gather_slot;
 } FluxCoroutine;
 
 /* -------------------------------------------------------------------------
@@ -224,6 +228,10 @@ struct FluxFuture {
     /* GC-protection slot: the libuv handle is raw C memory; we store its
      * native pointer here so the GC can ignore it (not a heap object). */
     void           *uv_handle; /* uv_timer_t* / uv_fs_t* etc, or NULL  */
+    /* gather future fields: non-NULL only for futures created by aio.gather() */
+    Value          *gather_results;  /* malloc'd array of per-slot results  */
+    int             gather_count;    /* total slots                          */
+    int             gather_remaining;/* coroutines still running             */
 };
 
 /* -------------------------------------------------------------------------

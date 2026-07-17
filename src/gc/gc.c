@@ -193,6 +193,7 @@ static void blacken_object(FluxVM *vm, FluxObject *obj) {
             gc_mark_value(vm, co->result);
             gc_mark_object(vm, (FluxObject *)co->awaited_by);
             gc_mark_object(vm, (FluxObject *)co->pending_future);
+            gc_mark_object(vm, (FluxObject *)co->gather_future);
             break;
         }
 
@@ -200,6 +201,9 @@ static void blacken_object(FluxVM *vm, FluxObject *obj) {
             FluxFuture *fut = (FluxFuture *)obj;
             gc_mark_value(vm, fut->result);
             gc_mark_object(vm, (FluxObject *)fut->waiting);
+            /* Mark accumulated gather results so they aren't swept mid-gather */
+            for (int i = 0; i < fut->gather_count; i++)
+                gc_mark_value(vm, fut->gather_results[i]);
             break;
         }
     }

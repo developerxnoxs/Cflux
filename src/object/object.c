@@ -519,6 +519,8 @@ FluxCoroutine *object_coroutine_new(FluxVM *vm, FluxClosure *closure) {
     co->result              = value_null();
     co->awaited_by          = NULL;
     co->pending_future      = NULL;
+    co->gather_future       = NULL;
+    co->gather_slot         = 0;
     vm->bytes_allocated    += sizeof(Value)     * CORO_STACK_INITIAL
                             + sizeof(CallFrame) * CORO_FRAMES_INITIAL
                             + sizeof(int)       * CORO_FRAMES_INITIAL;
@@ -531,10 +533,13 @@ FluxCoroutine *object_coroutine_new(FluxVM *vm, FluxClosure *closure) {
 
 FluxFuture *object_future_new(FluxVM *vm) {
     FluxFuture *fut = ALLOC_OBJ(vm, FluxFuture, OBJ_FUTURE);
-    fut->resolved   = false;
-    fut->result     = value_null();
-    fut->waiting    = NULL;
-    fut->uv_handle  = NULL;
+    fut->resolved        = false;
+    fut->result          = value_null();
+    fut->waiting         = NULL;
+    fut->uv_handle       = NULL;
+    fut->gather_results  = NULL;
+    fut->gather_count    = 0;
+    fut->gather_remaining = 0;
     return fut;
 }
 
@@ -619,7 +624,12 @@ void object_free(FluxVM *vm, FluxObject *obj) {
             /* The libuv handle (uv_handle) is managed externally by the async
              * module and will be closed/freed via uv_close() before or after
              * the GC collects this object.  Nothing to free here. */
-            FLUX_FREE(obj);
+            FluxFuture *fut = (FluxFuture *)obj;
+            if (fut->gather_results) {
+                free(fut->gather_results);
+                fut->gather_results = NULL;
+            }
+            FLUX_FREE(fut);
             break;
         }
     }

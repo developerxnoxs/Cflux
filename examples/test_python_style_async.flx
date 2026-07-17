@@ -1,0 +1,127 @@
+import aio
+
+print("============================================================")
+print("TEST: Async/await gaya Python di Flux")
+print("============================================================")
+
+# ─────────────────────────────────────────────────────────────
+# Skenario 1: aio.gather([]) — mirip asyncio.gather()
+# ─────────────────────────────────────────────────────────────
+print("")
+print("Skenario 1: aio.gather([coro1(), coro2(), coro3()])")
+
+async func kerja(id):
+    await aio.sleep(10)
+    return id * id
+
+t1 = kerja(1)
+t2 = kerja(2)
+t3 = kerja(3)
+t4 = kerja(4)
+
+hasil = await aio.gather([t1, t2, t3, t4])
+print(f"  Hasil: {hasil}")
+assert hasil[0] == 1
+assert hasil[1] == 4
+assert hasil[2] == 9
+assert hasil[3] == 16
+print("  LULUS — urutan hasil sesuai input meskipun berjalan bersamaan")
+
+# ─────────────────────────────────────────────────────────────
+# Skenario 2: aio.gather() dengan waktu berbeda-beda
+# ─────────────────────────────────────────────────────────────
+print("")
+print("Skenario 2: gather task dengan delay berbeda (total waktu = max, bukan sum)")
+
+async func tugas(nama, ms):
+    await aio.sleep(ms)
+    return nama
+
+t_a = tugas("A", 150)
+t_b = tugas("B", 50)
+t_c = tugas("C", 100)
+
+hasil2 = await aio.gather([t_a, t_b, t_c])
+print(f"  Hasil: {hasil2}")
+assert hasil2[0] == "A"
+assert hasil2[1] == "B"
+assert hasil2[2] == "C"
+print("  LULUS — urutan hasil [A,B,C] meski B selesai duluan")
+
+# ─────────────────────────────────────────────────────────────
+# Skenario 3: aio.create_task() — eksplisit seperti asyncio.create_task()
+# ─────────────────────────────────────────────────────────────
+print("")
+print("Skenario 3: aio.create_task(coro()) — task eksplisit")
+
+async func hitung(n):
+    await aio.sleep(30)
+    return n * 10
+
+task_a = aio.create_task(hitung(3))
+task_b = aio.create_task(hitung(7))
+
+ra = await task_a
+rb = await task_b
+print(f"  task_a = {ra}, task_b = {rb}")
+assert ra == 30
+assert rb == 70
+print("  LULUS — aio.create_task() bekerja")
+
+# ─────────────────────────────────────────────────────────────
+# Skenario 4: gather besar — 10 task sekaligus (stress test)
+# ─────────────────────────────────────────────────────────────
+print("")
+print("Skenario 4: gather 10 task sekaligus")
+
+async func kuadrat(n):
+    await aio.sleep(50)
+    return n * n
+
+handles = []
+i = 1
+while i <= 10:
+    handles.append(kuadrat(i))
+    i = i + 1
+
+semua = await aio.gather(handles)
+print(f"  Hasil: {semua}")
+
+expected = [1, 4, 9, 16, 25, 36, 49, 64, 81, 100]
+i = 0
+while i < 10:
+    assert semua[i] == expected[i]
+    i = i + 1
+print("  LULUS — 10 task berhasil di-gather dengan benar")
+
+# ─────────────────────────────────────────────────────────────
+# Skenario 5: gather + pola Python asyncio idiom lengkap
+# ─────────────────────────────────────────────────────────────
+print("")
+print("Skenario 5: pola main() gaya Python")
+
+async func fetch(url, ms):
+    await aio.sleep(ms)
+    return "data:" + url
+
+async func main():
+    # Spawn tasks terlebih dahulu, lalu gather — persis pola asyncio Python
+    fu = fetch("api/users", 100)
+    fp = fetch("api/posts", 60)
+    fc = fetch("api/comments", 80)
+    results = await aio.gather([fu, fp, fc])
+    return results
+
+hasil5 = await main()
+print(f"  Hasil: {hasil5}")
+assert hasil5[0] == "data:api/users"
+assert hasil5[1] == "data:api/posts"
+assert hasil5[2] == "data:api/comments"
+print("  LULUS — pola main() dengan gather berjalan sempurna")
+
+print("")
+print("============================================================")
+print("SEMUA SKENARIO LULUS!")
+print("  aio.gather([...])    — seperti asyncio.gather()")
+print("  aio.create_task(...) — seperti asyncio.create_task()")
+print("============================================================")

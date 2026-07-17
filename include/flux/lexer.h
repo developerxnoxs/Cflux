@@ -56,6 +56,10 @@ typedef enum {
     TOK_SPAWN,      /* spawn    */
     TOK_NONLOCAL,   /* nonlocal */
     TOK_WITH,       /* with     */
+    TOK_TRY,        /* try      */
+    TOK_CATCH,      /* catch    */
+    TOK_FINALLY,    /* finally  */
+    TOK_RAISE,      /* raise    */
 
     /* Operators */
     TOK_PLUS,       /* +  */

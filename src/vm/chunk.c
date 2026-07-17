@@ -276,6 +276,18 @@ int chunk_disassemble_instruction(const Chunk *chunk, int offset) {
         case OP_BIT_NOT:        return simple_instr("BIT_NOT",       offset);
         case OP_SHL:            return simple_instr("SHL",           offset);
         case OP_SHR:            return simple_instr("SHR",           offset);
+        case OP_PUSH_EXCEPTION_HANDLER: {
+            int16_t off = (int16_t)(chunk->code[offset+1] | (chunk->code[offset+2] << 8));
+            uint8_t slot = chunk->code[offset+3];
+            int target = offset + 4 + off; /* handler_ip = (offset+4) + off */
+            if (slot == 0xFF)
+                printf("%-20s catch_slot=none  -> %d\n", "PUSH_EXC_HANDLER", target);
+            else
+                printf("%-20s catch_slot=%d  -> %d\n", "PUSH_EXC_HANDLER", slot, target);
+            return offset + 4;
+        }
+        case OP_POP_EXCEPTION_HANDLER: return simple_instr("POP_EXC_HANDLER", offset);
+        case OP_RAISE:          return simple_instr("RAISE",         offset);
         case OP_IMPORT:         return uint16_instr("IMPORT",        chunk, offset);
         case OP_IMPORT_STAR:    return simple_instr("IMPORT_STAR",   offset);
         case OP_HALT:           return simple_instr("HALT",          offset);

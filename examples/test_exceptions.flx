@@ -1,0 +1,82 @@
+# Test 1: Basic try/catch
+print("--- Test 1: Basic try/catch ---")
+try:
+    raise "Something went wrong"
+catch e:
+    print("Caught:", e)
+
+# Test 2: try/catch without variable
+print("\n--- Test 2: catch without variable ---")
+try:
+    raise "ignored error"
+catch:
+    print("Caught an error (no var)")
+
+# Test 3: try/finally (no exception)
+print("\n--- Test 3: try/finally — no exception ---")
+try:
+    x = 10
+finally:
+    print("Finally ran (no exception)")
+
+# Test 4: try/finally (with exception propagated)
+print("\n--- Test 4: try/finally — exception propagated ---")
+try:
+    try:
+        raise "inner error"
+    finally:
+        print("Inner finally ran")
+catch e:
+    print("Outer caught:", e)
+
+# Test 5: try/catch/finally
+print("\n--- Test 5: try/catch/finally ---")
+try:
+    raise "combo error"
+catch e:
+    print("Caught:", e)
+finally:
+    print("Finally ran after catch")
+
+# Test 6: Error class
+print("\n--- Test 6: Error class ---")
+try:
+    raise Error("custom error message")
+catch e:
+    print("Caught Error instance, message:", e.message)
+
+# Test 7: TypeError subclass
+print("\n--- Test 7: TypeError subclass ---")
+try:
+    raise TypeError("wrong type")
+catch e:
+    print("Caught TypeError, message:", e.message)
+
+# Test 8: Nested try/catch
+print("\n--- Test 8: Nested try/catch ---")
+try:
+    try:
+        raise "level 2"
+    catch e:
+        print("Inner caught:", e)
+        raise "level 1 re-raise"
+catch e:
+    print("Outer caught:", e)
+
+# Test 9: Normal execution (no exception) is unaffected
+print("\n--- Test 9: No exception — normal flow ---")
+result = 0
+try:
+    result = 42
+catch e:
+    result = -1
+print("Result (should be 42):", result)
+
+# Test 10: Exception from built-in operation caught
+print("\n--- Test 10: Runtime error caught ---")
+try:
+    x = 1 + "hello"
+catch e:
+    print("Caught runtime error:", e)
+
+print("\n=== All tests passed ===")

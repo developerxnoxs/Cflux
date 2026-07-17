@@ -30,13 +30,14 @@ Dokumen ini adalah panduan pemakaian bahasa Flux — dari instalasi/build sampai
 8. [Struct](#8-struct)
 9. [Enum](#9-enum)
 10. [Async / Await / Coroutine](#10-async--await--coroutine)
-11. [Sistem Import Modul](#11-sistem-import-modul)
-12. [Standard Library](#12-standard-library)
-13. [FFI — Import dan Panggil Library C Native](#13-ffi--import-dan-panggil-library-c-native)
-14. [Ekstensi Native (.so Plugin)](#14-ekstensi-native-so-plugin)
-15. [Embed libflux ke Program C](#15-embed-libflux-ke-program-c)
-16. [Struktur Proyek](#16-struktur-proyek)
-17. [Arsitektur Internal](#17-arsitektur-internal)
+11. [Penanganan Error (try / catch / finally / raise)](#11-penanganan-error-try--catch--finally--raise)
+12. [Sistem Import Modul](#12-sistem-import-modul)
+13. [Standard Library](#13-standard-library)
+14. [FFI — Import dan Panggil Library C Native](#14-ffi--import-dan-panggil-library-c-native)
+15. [Ekstensi Native (.so Plugin)](#15-ekstensi-native-so-plugin)
+16. [Embed libflux ke Program C](#16-embed-libflux-ke-program-c)
+17. [Struktur Proyek](#17-struktur-proyek)
+18. [Arsitektur Internal](#18-arsitektur-internal)
 
 ---
 
@@ -679,7 +680,138 @@ State tiap coroutine (call frames + stack) disimpan secara terpisah sehingga rat
 
 ---
 
-## 11. Sistem Import Modul
+## 11. Penanganan Error (try / catch / finally / raise)
+
+Flux mendukung penanganan exception secara penuh dengan sintaks `try`, `catch`, `finally`, dan `raise`. Setiap nilai bisa di-`raise` (string, integer, instance Error, dsb.).
+
+### Sintaks Dasar
+
+```flux
+try:
+    # kode yang mungkin melempar error
+    raise "Terjadi kesalahan"
+catch e:
+    # e berisi nilai yang di-raise
+    print("Error:", e)
+```
+
+### catch Tanpa Variabel
+
+Jika tidak perlu menginspeksi nilai error, variabel bisa dihilangkan:
+
+```flux
+try:
+    raise 42
+catch:
+    print("Ada error, diabaikan")
+```
+
+### finally
+
+Blok `finally` **selalu** dieksekusi, baik terjadi error maupun tidak:
+
+```flux
+try:
+    x = berpotensi_gagal()
+finally:
+    bersihkan_resource()
+```
+
+`finally` juga bisa dikombinasikan dengan `catch`:
+
+```flux
+try:
+    proses()
+catch e:
+    print("Error:", e)
+finally:
+    print("Selalu jalan")
+```
+
+### raise
+
+`raise` bisa melempar nilai apa saja — string, angka, atau instance kelas Error:
+
+```flux
+raise "pesan sederhana"
+raise 404
+raise ValueError("nilai tidak valid")
+```
+
+`raise` tanpa argumen (di dalam `catch`) melempar ulang error saat ini:
+
+```flux
+try:
+    sesuatu()
+catch e:
+    log(e)
+    raise   # lempar ulang ke caller
+```
+
+### Kelas Error Bawaan
+
+Flux menyediakan hierarki kelas Error yang bisa dipakai langsung tanpa import:
+
+| Kelas | Kegunaan |
+|-------|----------|
+| `Error` | Base class untuk semua error |
+| `TypeError` | Tipe data salah |
+| `ValueError` | Nilai tidak valid |
+| `RuntimeError` | Error saat runtime |
+| `IndexError` | Index di luar batas |
+| `KeyError` | Key tidak ditemukan di dict |
+| `IOError` | Error I/O (file, network, dsb.) |
+| `StopIteration` | Iterator habis |
+
+Semua kelas ini punya field `.message` yang bisa diakses dari blok `catch`:
+
+```flux
+try:
+    raise TypeError("harus integer")
+catch e:
+    print(e.message)   # "harus integer"
+```
+
+### Contoh Lengkap
+
+```flux
+func bagi(a, b):
+    if b == 0:
+        raise ValueError("pembagi tidak boleh nol")
+    return a / b
+
+try:
+    hasil = bagi(10, 0)
+catch e:
+    print("Gagal:", e.message)
+finally:
+    print("Selesai")
+
+# Output:
+# Gagal: pembagi tidak boleh nol
+# Selesai
+```
+
+### Error dari Operasi Bawaan
+
+Runtime errors (misalnya operasi pada tipe yang salah, index out of range) juga bisa ditangkap dengan `try/catch`:
+
+```flux
+try:
+    x = 1 + "hello"    # error: operand tidak kompatibel
+catch e:
+    print("Runtime error tertangkap:", e)
+
+try:
+    daftar = [1, 2, 3]
+    _ = daftar[99]      # error: index out of range
+catch e:
+    print("Index error:", e)
+```
+
+---
+
+## 12. Sistem Import Modul
 
 Flux bisa memecah kode ke beberapa file `.flx` dan saling mengimpornya sebagai modul. Ada tiga bentuk sintaks import.
 
@@ -779,7 +911,7 @@ Lihat contoh lengkap multi-file di [`examples/modules/`](examples/modules/).
 
 ---
 
-## 12. Standard Library
+## 13. Standard Library
 
 ### Fungsi global (tanpa perlu import)
 
@@ -1108,7 +1240,7 @@ baris = io.read_line()
 
 ---
 
-## 13. FFI — Import dan Panggil Library C Native
+## 14. FFI — Import dan Panggil Library C Native
 
 Modul `native` memungkinkan script Flux memuat **sembarang shared library C** (`.so`) dan memanggil fungsi di dalamnya langsung, tanpa perlu menulis wrapper C atau ekstensi khusus.
 
@@ -1182,7 +1314,7 @@ print(strlen_fn("flux"))    # 4
 
 ---
 
-## 14. Ekstensi Native (.so Plugin)
+## 15. Ekstensi Native (.so Plugin)
 
 Selain modul `.flx` dan modul stdlib bawaan (`math`, `io`, `fs`, dst — lihat [Bab 12](#12-standard-library)), Flux juga bisa memuat **ekstensi native**: shared library (`.so`) yang membungkus library C sistem (misalnya `libpq` untuk PostgreSQL) sebagai modul yang bisa di-`import` langsung dari script Flux.
 
@@ -1253,7 +1385,7 @@ Detail lengkap ABI plugin ada di komentar `include/flux/extension.h`.
 
 ---
 
-## 14. Embed libflux ke Program C
+## 16. Embed libflux ke Program C
 
 Sertakan **satu** header publik saja — jangan include header internal seperti `vm.h` atau `compiler.h`:
 
@@ -1329,7 +1461,7 @@ gcc myapp.c -Iinclude -Lbuild_make -lflux -lm -ldl -luv -o myapp
 
 ---
 
-## 15. Struktur Proyek
+## 17. Struktur Proyek
 
 ```
 .
@@ -1358,7 +1490,7 @@ gcc myapp.c -Iinclude -Lbuild_make -lflux -lm -ldl -luv -o myapp
 
 ---
 
-## 16. Arsitektur Internal
+## 18. Arsitektur Internal
 
 Diagram berikut menggambarkan alur lengkap dari kode sumber `.flx` sampai program dieksekusi oleh Virtual Machine:
 

@@ -100,6 +100,11 @@ typedef struct {
      * local that gets discarded when the block's compiler scope ends. */
     char  global_names[1024][256];
     int   global_count;
+
+    /* Bare `raise` support: slot of the current in-flight exception inside
+     * a catch body.  -1 when not inside a catch block.  Saved/restored on
+     * nesting so inner try/catch don't clobber outer context. */
+    int   current_exc_slot;
 } Compiler;
 
 /* -------------------------------------------------------------------------

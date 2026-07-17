@@ -68,6 +68,11 @@ FluxVM *vm_new(void) {
     vm->has_error = false;
     vm->error_msg[0] = '\0';
 
+    /* Exception handling state */
+    vm->exception_handler_count = 0;
+    vm->has_exception = false;
+    vm->current_exception = value_null();
+
     return vm;
 }
 
@@ -790,11 +795,30 @@ VMResult vm_call_value(FluxVM *vm, Value callee, int argc) {
 #define READ_CONSTANT(idx) (frame->closure->function->chunk.constants.data[(idx)])
 #define READ_STRING(idx)   ((FluxString *)value_as_object(READ_CONSTANT(idx)))
 
+/* RUNTIME_ERROR: create an exception and jump to the handler or surface as fatal */
 #define RUNTIME_ERROR(fmt, ...) \
     do { \
-        frame->ip = ip; \
-        vm_runtime_error(vm, fmt, ##__VA_ARGS__); \
-        return VM_RUNTIME_ERROR; \
+        { \
+            char _emsg_[512]; \
+            snprintf(_emsg_, sizeof(_emsg_), fmt, ##__VA_ARGS__); \
+            FluxString *_estr_ = object_string_copy(vm, _emsg_, (int)strlen(_emsg_)); \
+            vm->current_exception = value_object((FluxObject *)_estr_); \
+            vm->has_exception = true; \
+        } \
+        goto flux_handle_exception; \
+    } while (0)
+
+/* HANDLE_NESTED_ERROR: convert has_error from a nested vm_run into an exception
+ * and jump to the handler.  Must only be called from inside vm_run's for(;;). */
+#define HANDLE_NESTED_ERROR() \
+    do { \
+        if (vm->has_error && !vm->has_exception) { \
+            FluxString *_s_ = object_string_copy(vm, vm->error_msg, (int)strlen(vm->error_msg)); \
+            vm->current_exception = value_object((FluxObject *)_s_); \
+            vm->has_exception = true; \
+            vm->has_error = false; \
+        } \
+        if (vm->has_exception) goto flux_handle_exception; \
     } while (0)
 
 /* -------------------------------------------------------------------------
@@ -1381,7 +1405,7 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                     vm_push(vm, obj_val);
                     vm_push(vm, idx_val);
                     SYNC_IP();
-                    if (!call_closure(vm, AS_CLOSURE(get_method), 1)) return VM_RUNTIME_ERROR;
+                    if (!call_closure(vm, AS_CLOSURE(get_method), 1)) { HANDLE_NESTED_ERROR(); return VM_RUNTIME_ERROR; }
                     frame = &vm->frames[vm->frame_count - 1];
                     LOAD_IP();
                 } else {
@@ -1424,7 +1448,7 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                     Value bm_val  = value_object((FluxObject *)
                         object_bound_method_new(vm, obj_val, AS_CLOSURE(set_method)));
                     vm_invoke(vm, bm_val, args, 2);
-                    if (vm->has_error) return VM_RUNTIME_ERROR;
+                    HANDLE_NESTED_ERROR();
                     frame = &vm->frames[vm->frame_count - 1];
                     LOAD_IP();
                 } else {
@@ -1446,7 +1470,7 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                          * frame->slots = stack_top - 1 → self = instance
                          * OP_RETURN replaces instance slot with the returned iterable. */
                         SYNC_IP();
-                        if (!call_closure(vm, AS_CLOSURE(iter_method), 0)) return VM_RUNTIME_ERROR;
+                        if (!call_closure(vm, AS_CLOSURE(iter_method), 0)) { HANDLE_NESTED_ERROR(); return VM_RUNTIME_ERROR; }
                         frame = &vm->frames[vm->frame_count - 1];
                         LOAD_IP();
                     }
@@ -1707,7 +1731,7 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                 SYNC_IP();
                 VMResult res = vm_call_value(vm, vm_peek(vm, argc), argc);
                 if (res == VM_ASYNC_SPAWNED) break; /* coroutine handle already on stack */
-                if (res != VM_OK) return res;
+                if (res != VM_OK) { HANDLE_NESTED_ERROR(); return res; }
                 frame = &vm->frames[vm->frame_count - 1];
                 LOAD_IP();
                 break;
@@ -1782,7 +1806,7 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                         vm->stack_top[-argc - 1] = field;
                         VMResult r = vm_call_value(vm, field, argc);
                         if (r == VM_ASYNC_SPAWNED) break;
-                        if (r != VM_OK) return r;
+                        if (r != VM_OK) { HANDLE_NESTED_ERROR(); return r; }
                         frame = &vm->frames[vm->frame_count - 1];
                         LOAD_IP();
                         break;
@@ -1791,7 +1815,7 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                     if (!dict_get(inst->klass->methods, name, &method))
                         RUNTIME_ERROR("Undefined method '%s'", name->chars);
                     vm->stack_top[-argc - 1] = receiver;
-                    if (!call_closure(vm, AS_CLOSURE(method), argc)) return VM_RUNTIME_ERROR;
+                    if (!call_closure(vm, AS_CLOSURE(method), argc)) { HANDLE_NESTED_ERROR(); return VM_RUNTIME_ERROR; }
                     frame = &vm->frames[vm->frame_count - 1];
                     LOAD_IP();
                 } else if (IS_DICT(receiver)) {
@@ -1803,7 +1827,7 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                         vm->stack_top[-argc - 1] = dict_fn;
                         VMResult r = vm_call_value(vm, dict_fn, argc);
                         if (r == VM_ASYNC_SPAWNED) break;
-                        if (r != VM_OK) return r;
+                        if (r != VM_OK) { HANDLE_NESTED_ERROR(); return r; }
                         frame = &vm->frames[vm->frame_count - 1];
                         LOAD_IP();
                     } else {
@@ -1811,7 +1835,7 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                         if (!runtime_invoke_builtin(vm, receiver, name, argc, argv))
                             RUNTIME_ERROR("'%s' has no method '%s'",
                                           value_type_name(receiver), name->chars);
-                        if (vm->has_error) return VM_RUNTIME_ERROR;
+                        HANDLE_NESTED_ERROR();
                     }
                 } else if (IS_STRING(receiver) || IS_LIST(receiver)) {
                     /* Built-in type method call: delegate to runtime */
@@ -1819,7 +1843,7 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                     if (!runtime_invoke_builtin(vm, receiver, name, argc, argv))
                         RUNTIME_ERROR("'%s' has no method '%s'",
                                       value_type_name(receiver), name->chars);
-                    if (vm->has_error) return VM_RUNTIME_ERROR;
+                    HANDLE_NESTED_ERROR();
                     /* runtime_invoke_builtin pops receiver+args and pushes result */
                 } else {
                     RUNTIME_ERROR("'%s' has no methods", value_type_name(receiver));
@@ -1993,7 +2017,7 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                         while (!fut->resolved && !vm->has_error) {
                             if (vm->ready_count > 0) {
                                 VMResult sr = vm_scheduler_run_step(vm);
-                                if (sr == VM_RUNTIME_ERROR) { vm_pop(vm); return sr; }
+                                if (sr == VM_RUNTIME_ERROR) { vm_pop(vm); HANDLE_NESTED_ERROR(); return sr; }
                                 continue;
                             }
                             if (vm->pending_io_count > 0) {
@@ -2001,7 +2025,7 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                             } else break;
                         }
                         vm_pop(vm);  /* un-protect */
-                        if (vm->has_error) return VM_RUNTIME_ERROR;
+                        HANDLE_NESTED_ERROR();
                         vm_push(vm, fut->resolved ? fut->result : value_null());
                     }
 
@@ -2030,12 +2054,12 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                         while (target->state != CORO_DEAD && !vm->has_error) {
                             if (vm->ready_count > 0) {
                                 VMResult sr = vm_scheduler_run_step(vm);
-                                if (sr == VM_RUNTIME_ERROR) return sr;
+                                if (sr == VM_RUNTIME_ERROR) { HANDLE_NESTED_ERROR(); return sr; }
                             } else if (vm->pending_io_count > 0) {
                                 uv_run(vm->uv_loop, UV_RUN_ONCE);
                             } else break;
                         }
-                        if (vm->has_error) return VM_RUNTIME_ERROR;
+                        HANDLE_NESTED_ERROR();
                         vm_push(vm, target->result);
                     }
 
@@ -2052,7 +2076,7 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                         ip--;
                         break;
                     }
-                    if (r != VM_OK) return r;
+                    if (r != VM_OK) { HANDLE_NESTED_ERROR(); return r; }
                     frame = &vm->frames[vm->frame_count - 1];
                     LOAD_IP();
 
@@ -2062,13 +2086,43 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                 break;
             }
 
+            /* ---- Exception handling opcodes ----------------------- */
+            case OP_PUSH_EXCEPTION_HANDLER: {
+                /* Operands: int16 offset (handler IP relative to post-operands)
+                 *           uint8  catch_slot (0xFF = no catch variable)         */
+                int16_t  offset     = READ_INT16();
+                uint8_t  catch_slot = READ_BYTE();
+                if (vm->exception_handler_count >= FLUX_EXCEPTION_HANDLER_MAX) {
+                    RUNTIME_ERROR("Exception handler stack overflow");
+                }
+                ExceptionHandler *h    = &vm->exception_handlers[vm->exception_handler_count++];
+                h->handler_ip          = ip + offset;
+                h->frame_index         = vm->frame_count - 1;
+                h->base_frame_count    = base_frame_count;
+                h->stack_depth         = (int)(vm->stack_top - vm->stack);
+                h->catch_slot          = (catch_slot == 0xFF) ? -1 : (int)catch_slot;
+                break;
+            }
+
+            case OP_POP_EXCEPTION_HANDLER: {
+                if (vm->exception_handler_count > 0)
+                    vm->exception_handler_count--;
+                break;
+            }
+
+            case OP_RAISE: {
+                vm->current_exception = vm_pop(vm);
+                vm->has_exception     = true;
+                goto flux_handle_exception;
+            }
+
             /* ---- Import ------------------------------------------- */
             case OP_IMPORT: {
                 uint16_t idx = READ_UINT16();
                 FluxString *name = READ_STRING(idx);
                 SYNC_IP();
                 Value mod_val;
-                if (!do_import(vm, name, &mod_val)) return VM_RUNTIME_ERROR;
+                if (!do_import(vm, name, &mod_val)) { HANDLE_NESTED_ERROR(); return VM_RUNTIME_ERROR; }
                 frame = &vm->frames[vm->frame_count - 1];
                 LOAD_IP();
                 vm_push(vm, mod_val);
@@ -2097,7 +2151,75 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
             default:
                 RUNTIME_ERROR("Unknown opcode %d", op);
         }
+
+        /* Normal path: skip the exception handler code and loop back to dispatch */
+        goto flux_after_exception_handler;
+
+    flux_handle_exception: {
+        /* An exception is in flight (vm->current_exception is set).
+         * Find the innermost handler that was pushed by THIS vm_run invocation. */
+        while (vm->exception_handler_count > 0) {
+            ExceptionHandler *h = &vm->exception_handlers[vm->exception_handler_count - 1];
+            if (h->base_frame_count < base_frame_count) {
+                /* Handler belongs to an outer vm_run invocation — stop searching */
+                break;
+            }
+            if (h->base_frame_count > base_frame_count) {
+                /* Stale handler left by an inner vm_run — discard and keep searching */
+                vm->exception_handler_count--;
+                continue;
+            }
+            /* Found a matching handler (base_frame_count == ours) — activate it */
+            vm->exception_handler_count--;
+
+            /* Unwind call frames down to where the handler was installed */
+            while (vm->frame_count - 1 > h->frame_index) {
+                close_upvalues(vm, vm->frames[vm->frame_count - 1].slots);
+                vm->frame_count--;
+            }
+            frame = &vm->frames[vm->frame_count - 1];
+
+            /* Restore operand stack (close any upvalues captured in the try body) */
+            close_upvalues(vm, vm->stack + h->stack_depth);
+            vm->stack_top = vm->stack + h->stack_depth;
+
+            /* Push the exception value so the handler can inspect/store it */
+            vm_push(vm, vm->current_exception);
+            vm->has_exception = false;
+
+            /* Jump to the handler bytecode */
+            ip = h->handler_ip;
+            goto flux_after_exception_handler; /* resume dispatch loop */
+        }
+
+        /* ---- No applicable handler in this vm_run invocation ---- */
+        /* Print the error (unless a nested call already printed it) */
+        if (!vm->has_error) {
+            frame->ip = ip;
+            if (IS_STRING(vm->current_exception)) {
+                vm_runtime_error(vm, "%s", AS_STRING(vm->current_exception)->chars);
+            } else if (IS_INSTANCE(vm->current_exception)) {
+                FluxInstance *exc_inst = AS_INSTANCE(vm->current_exception);
+                Value exc_msg;
+                FluxString *msg_key = object_string_copy(vm, "message", 7);
+                if (dict_get(exc_inst->fields, msg_key, &exc_msg) && IS_STRING(exc_msg)) {
+                    vm_runtime_error(vm, "%s: %s",
+                        exc_inst->klass->name->chars,
+                        AS_STRING(exc_msg)->chars);
+                } else {
+                    vm_runtime_error(vm, "%s", exc_inst->klass->name->chars);
+                }
+            } else {
+                /* Fallback: convert exception to string representation */
+                frame->ip = ip;
+                vm_runtime_error(vm, "Unhandled exception");
+            }
+        }
+        return VM_RUNTIME_ERROR;
     }
+
+    flux_after_exception_handler:; /* empty statement — end of for(;;) body */
+    } /* end for(;;) */
 }
 
 void vm_collect_garbage(FluxVM *vm) {

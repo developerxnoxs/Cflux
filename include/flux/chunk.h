@@ -104,6 +104,11 @@ typedef enum {
     OP_AWAIT,
     OP_YIELD,
 
+    /* Exception handling */
+    OP_PUSH_EXCEPTION_HANDLER, /* operand: int16 offset to handler + uint8 catch_slot (0xFF=none) */
+    OP_POP_EXCEPTION_HANDLER,  /* no operand: remove top exception handler                         */
+    OP_RAISE,                  /* TOS = exception value; pops it and raises                        */
+
     /* Misc */
     OP_IMPORT,           /* operand: uint16 constant (module)  */
     OP_IMPORT_STAR,      /* no operand: pops module dict, defines all its entries as globals */

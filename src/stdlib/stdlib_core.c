@@ -11,6 +11,11 @@
  *   map, filter, reduce
  */
 #include "stdlib_internal.h"
+#include "flux/lexer.h"
+#include "flux/ast.h"
+#include "flux/parser.h"
+#include "flux/compiler.h"
+#include "flux/chunk.h"
 #include <inttypes.h>
 
 /* =========================================================================
@@ -731,6 +736,90 @@ static Value native_reduce(FluxVM *vm, int argc, Value *argv) {
  * flux_stdlib_load_core
  * ====================================================================== */
 
+/* =========================================================================
+ * Built-in Error class hierarchy
+ *
+ * Compiled from a Flux snippet at VM start so the Error classes are
+ * accessible as globals without any `import`.
+ * ====================================================================== */
+
+/* Forward declarations (internal API, same translation unit as vm.c) */
+void flux_register_error_classes(FluxVM *vm);
+
+static const char k_error_classes_src[] =
+    "class Error:\n"
+    "    func init(message):\n"
+    "        self.message = str(message)\n"
+    "    func to_str():\n"
+    "        return \"Error: \" + self.message\n"
+    "\n"
+    "class TypeError(Error):\n"
+    "    func init(message):\n"
+    "        self.message = str(message)\n"
+    "    func to_str():\n"
+    "        return \"TypeError: \" + self.message\n"
+    "\n"
+    "class ValueError(Error):\n"
+    "    func init(message):\n"
+    "        self.message = str(message)\n"
+    "    func to_str():\n"
+    "        return \"ValueError: \" + self.message\n"
+    "\n"
+    "class RuntimeError(Error):\n"
+    "    func init(message):\n"
+    "        self.message = str(message)\n"
+    "    func to_str():\n"
+    "        return \"RuntimeError: \" + self.message\n"
+    "\n"
+    "class IndexError(Error):\n"
+    "    func init(message):\n"
+    "        self.message = str(message)\n"
+    "    func to_str():\n"
+    "        return \"IndexError: \" + self.message\n"
+    "\n"
+    "class KeyError(Error):\n"
+    "    func init(message):\n"
+    "        self.message = str(message)\n"
+    "    func to_str():\n"
+    "        return \"KeyError: \" + self.message\n"
+    "\n"
+    "class IOError(Error):\n"
+    "    func init(message):\n"
+    "        self.message = str(message)\n"
+    "    func to_str():\n"
+    "        return \"IOError: \" + self.message\n"
+    "\n"
+    "class StopIteration(Error):\n"
+    "    func init(message):\n"
+    "        self.message = str(message)\n"
+    "    func to_str():\n"
+    "        return \"StopIteration: \" + self.message\n";
+
+/* Compile and execute the built-in Error class hierarchy snippet */
+static void register_error_classes(FluxVM *vm) {
+    AstArena *arena = ast_arena_new();
+    Lexer lex;
+    lexer_init(&lex, k_error_classes_src);
+    Parser p;
+    parser_init(&p, &lex, arena, "<builtins>");
+    AstNode *module = parser_parse(&p);
+    if (p.had_error) {
+        parser_print_errors(&p, k_error_classes_src);
+        ast_arena_free(arena);
+        return;
+    }
+    FluxFunction *fn = compiler_compile(vm, module, "<builtins>");
+    ast_arena_free(arena);
+    if (!fn) return;
+    FluxClosure *cl = object_closure_new(vm, fn);
+    vm_push(vm, value_object((FluxObject *)cl));
+    extern VMResult vm_execute(FluxVM *vm, FluxFunction *fn);
+    vm_execute(vm, fn);
+    /* Clear any error flag set during bootstrapping */
+    vm->has_error = false;
+    vm->has_exception = false;
+}
+
 void flux_stdlib_load_core(FluxVM *vm) {
     vm_register_native(vm, "print",   native_print,            -1);
     vm_register_native(vm, "println", native_println,          -1);
@@ -772,4 +861,7 @@ void flux_stdlib_load_core(FluxVM *vm) {
     vm_register_native(vm, "is_instance", native_is_instance,       2);
     vm_register_native(vm, "is_callable", native_is_callable,       1);
     vm_register_native(vm, "attrs",       native_attrs,             1);
+
+    /* Built-in Error class hierarchy: Error, TypeError, ValueError, … */
+    register_error_classes(vm);
 }

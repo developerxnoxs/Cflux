@@ -88,6 +88,8 @@ static void synchronize(Parser *p) {
             case TOK_MATCH:
             case TOK_STRUCT:
             case TOK_ENUM:
+            case TOK_TRY:
+            case TOK_RAISE:
                 return;
             default: break;
         }
@@ -1046,6 +1048,72 @@ static AstNode *parse_return(Parser *p) {
     return n;
 }
 
+/* Parse: raise [expr] */
+static AstNode *parse_raise(Parser *p) {
+    int line = p->previous.line, col = p->previous.column;
+    AstNode *n = ast_node_alloc(p->arena, AST_RAISE, line, col);
+    if (!check(p, TOK_NEWLINE) && !check(p, TOK_EOF) && !check(p, TOK_DEDENT))
+        n->as.raise_stmt.value = parse_expr(p);
+    else
+        n->as.raise_stmt.value = NULL;
+    return n;
+}
+
+/* Parse:
+ *   try:
+ *       body
+ *   catch [ident]:        (optional)
+ *       handler
+ *   finally:              (optional, at least one of catch/finally required)
+ *       cleanup
+ */
+static AstNode *parse_try(Parser *p) {
+    int line = p->previous.line, col = p->previous.column;
+
+    consume(p, TOK_COLON, "Expected ':' after 'try'");
+    AstNode *try_body = parse_block(p);
+
+    while (check(p, TOK_NEWLINE)) advance(p);
+
+    AstNode *n = ast_node_alloc(p->arena, AST_TRY, line, col);
+    n->as.try_stmt.try_body     = try_body;
+    n->as.try_stmt.catch_var    = NULL;
+    n->as.try_stmt.catch_body   = NULL;
+    n->as.try_stmt.finally_body = NULL;
+
+    /* Optional catch clause */
+    if (check(p, TOK_CATCH)) {
+        advance(p); /* consume 'catch' */
+
+        /* Optional: catch e: */
+        if (check(p, TOK_IDENT)) {
+            int   vlen = p->current.length;
+            char *vbuf = FLUX_ALLOC(char, vlen + 1);
+            memcpy(vbuf, p->current.start, (size_t)vlen);
+            vbuf[vlen] = '\0';
+            n->as.try_stmt.catch_var = vbuf;
+            advance(p); /* consume ident */
+        }
+
+        consume(p, TOK_COLON, "Expected ':' after 'catch'");
+        n->as.try_stmt.catch_body = parse_block(p);
+        while (check(p, TOK_NEWLINE)) advance(p);
+    }
+
+    /* Optional finally clause */
+    if (check(p, TOK_FINALLY)) {
+        advance(p); /* consume 'finally' */
+        consume(p, TOK_COLON, "Expected ':' after 'finally'");
+        n->as.try_stmt.finally_body = parse_block(p);
+    }
+
+    if (!n->as.try_stmt.catch_body && !n->as.try_stmt.finally_body) {
+        parser_error(p, "try statement requires at least 'catch' or 'finally'");
+    }
+
+    return n;
+}
+
 static AstNode *parse_from_import(Parser *p) {
     int line = p->previous.line, col = p->previous.column;
 
@@ -1244,6 +1312,8 @@ static AstNode *parse_stmt(Parser *p) {
         match(p, TOK_NEWLINE);
         return n;
     }
+    if (match(p, TOK_TRY))      { AstNode *n = parse_try(p);   match(p, TOK_NEWLINE); return n; }
+    if (match(p, TOK_RAISE))    { AstNode *n = parse_raise(p); match(p, TOK_NEWLINE); return n; }
     if (match(p, TOK_NONLOCAL)) {
         /* nonlocal name1, name2, ...
          * Reuse the block list to hold AST_IDENT nodes — one per name. */

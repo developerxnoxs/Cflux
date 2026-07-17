@@ -99,6 +99,23 @@ Flux uses single-word or `on_`-prefixed names — deliberately distinct from Pyt
 
 See `examples/test_magic_methods.flx` for working examples of every method.
 
+## Error Handling
+
+Flux has full `try / catch / finally / raise` exception handling as of July 2026.
+
+```flux
+try:
+    raise ValueError("bad input")
+catch e:
+    print(e.message)   # ValueError instance
+finally:
+    print("always runs")
+```
+
+Built-in error classes (no import needed): `Error`, `TypeError`, `ValueError`, `RuntimeError`, `IndexError`, `KeyError`, `IOError`, `StopIteration`.
+
+Any value can be raised (string, int, Error instance). Runtime errors from the VM are also catchable with `try/catch`.
+
 ## User Preferences
 
 - Documentation and README are in Indonesian (Bahasa Indonesia) — keep that convention when editing README.md

@@ -61,6 +61,30 @@ static void patch_jump(Compiler *c, int offset) {
     chunk_patch_int16(current_chunk(c), offset, (int16_t)jump);
 }
 
+/* Emit OP_PUSH_EXCEPTION_HANDLER; returns offset of the int16 operand for patching.
+ * catch_slot < 0 means no catch variable (emits 0xFF sentinel). */
+static int emit_exception_handler(Compiler *c, int catch_slot, int line) {
+    emit_byte(c, OP_PUSH_EXCEPTION_HANDLER, line);
+    int offset_pos = current_chunk(c)->count;
+    emit_uint16(c, 0xFFFF, line);   /* placeholder handler offset */
+    emit_byte(c, (uint8_t)(catch_slot < 0 ? 0xFF : (uint8_t)catch_slot), line);
+    return offset_pos;
+}
+
+/* Patch the OP_PUSH_EXCEPTION_HANDLER emitted at offset_pos.
+ * The handler_ip = (ip_after_all_operands) + jump.
+ * ip_after_all_operands = offset_pos + 3  (2 for int16 + 1 for catch_slot byte).
+ * So jump = current_count - offset_pos - 3. */
+static void patch_exception_handler(Compiler *c, int offset_pos) {
+    int jump = current_chunk(c)->count - offset_pos - 3;
+    if (jump > 0x7FFF || jump < -0x8000) {
+        fprintf(stderr, "Exception handler target too far\n");
+        c->had_error = true;
+        return;
+    }
+    chunk_patch_int16(current_chunk(c), offset_pos, (int16_t)jump);
+}
+
 static void emit_loop(Compiler *c, int loop_start, int line) {
     emit_byte(c, OP_LOOP, line);
     int offset = current_chunk(c)->count - loop_start + 2;
@@ -978,6 +1002,128 @@ static void compile_node(Compiler *c, AstNode *node) {
             /* nothing */
             break;
 
+        case AST_RAISE: {
+            if (node->as.raise_stmt.value) {
+                compile_expr(c, node->as.raise_stmt.value);
+            } else if (c->current_exc_slot >= 0) {
+                /* Bare raise inside a catch block: re-raise the caught exception */
+                emit_byte(c, OP_LOAD_LOCAL, line);
+                emit_byte(c, (uint8_t)c->current_exc_slot, line);
+            } else {
+                /* Bare raise outside any catch — nothing to re-raise; raise null
+                 * (will surface as "Unhandled exception") */
+                emit_byte(c, OP_PUSH_NULL, line);
+            }
+            emit_byte(c, OP_RAISE, line);
+            break;
+        }
+
+        case AST_TRY: {
+            AstNode *try_body     = node->as.try_stmt.try_body;
+            char    *catch_var    = node->as.try_stmt.catch_var;
+            AstNode *catch_body   = node->as.try_stmt.catch_body;
+            AstNode *finally_body = node->as.try_stmt.finally_body;
+
+            int catch_slot = -1;   /* slot of named catch variable (if any)  */
+            int exc_slot   = -1;   /* slot of hidden __flux_exc__ (if any)    */
+
+            /* Outer scope: holds the catch variable or temp __flux_exc__ slot */
+            scope_begin(c);
+
+            if (catch_body) {
+                if (catch_var) {
+                    /* Pre-declare catch variable (starts as null) */
+                    emit_byte(c, OP_PUSH_NULL, line);
+                    catch_slot = add_local(c, catch_var, line);
+                } else {
+                    /* catch: without a variable — pre-declare a hidden slot so
+                     * bare `raise` inside the catch body can re-raise the exception */
+                    emit_byte(c, OP_PUSH_NULL, line);
+                    exc_slot = add_local(c, "__flux_catch_exc__", line);
+                }
+            } else if (finally_body) {
+                /* try+finally only: need a temp slot for re-raise after finally */
+                emit_byte(c, OP_PUSH_NULL, line);
+                exc_slot = add_local(c, "__flux_exc__", line);
+            }
+
+            /* The slot that OP_PUSH_EXCEPTION_HANDLER will STORE the exception into.
+             * 0xFF means "no slot" (handler just pushes to TOS only). */
+            int slot_for_handler;
+            if (catch_slot >= 0)
+                slot_for_handler = catch_slot;
+            else if (exc_slot >= 0)
+                slot_for_handler = exc_slot;
+            else
+                slot_for_handler = -1;
+
+            int handler_offset = emit_exception_handler(c, slot_for_handler, line);
+
+            /* Compile the try body in its own inner scope */
+            scope_begin(c);
+            compile_node(c, try_body);
+            scope_end(c, line);
+
+            /* Normal exit: pop handler */
+            emit_byte(c, OP_POP_EXCEPTION_HANDLER, line);
+
+            if (catch_body) {
+                /* Normal path: emit finally first (if any), then jump past catch */
+                if (finally_body) compile_node(c, finally_body);
+                int jump_past = emit_jump(c, OP_JUMP, line);
+
+                /* ---- Exception handler entry ---- */
+                patch_exception_handler(c, handler_offset);
+                /* Exception value is at TOS.
+                 * STORE_LOCAL saves it into the named or hidden slot; POP removes TOS. */
+                int store_slot = (catch_slot >= 0) ? catch_slot : exc_slot;
+                emit_byte(c, OP_STORE_LOCAL, line);
+                emit_byte(c, (uint8_t)store_slot, line);
+                emit_byte(c, OP_POP, line);
+
+                /* Compile catch body with current_exc_slot pointing to the saved exception,
+                 * so bare `raise` inside the body re-raises it correctly.
+                 * Save and restore to handle nested try/catch. */
+                int saved_exc_slot = c->current_exc_slot;
+                c->current_exc_slot = store_slot;
+
+                scope_begin(c);
+                compile_node(c, catch_body);
+                scope_end(c, line);
+
+                c->current_exc_slot = saved_exc_slot;
+
+                /* Exception path finally */
+                if (finally_body) compile_node(c, finally_body);
+
+                patch_jump(c, jump_past);
+            } else {
+                /* try+finally only */
+                compile_node(c, finally_body);     /* normal path finally */
+                int jump_past = emit_jump(c, OP_JUMP, line);
+
+                /* ---- Exception handler entry ---- */
+                patch_exception_handler(c, handler_offset);
+                /* Exception value is at TOS; STORE_LOCAL + POP saves it, cleans TOS */
+                emit_byte(c, OP_STORE_LOCAL, line);
+                emit_byte(c, (uint8_t)exc_slot, line);
+                emit_byte(c, OP_POP, line);
+
+                compile_node(c, finally_body);     /* exception path finally */
+
+                /* Re-raise the saved exception */
+                emit_byte(c, OP_LOAD_LOCAL, line);
+                emit_byte(c, (uint8_t)exc_slot, line);
+                emit_byte(c, OP_RAISE, line);
+
+                patch_jump(c, jump_past);
+            }
+
+            /* Close outer scope: pops catch_var / exc_slot (if pre-declared) */
+            scope_end(c, line);
+            break;
+        }
+
         case AST_BREAK:
             if (c->loop_depth == 0) {
                 compile_error(c, line, "'break' outside loop");
@@ -1736,10 +1882,11 @@ void compiler_init(Compiler *c, FluxVM *vm, const char *source_name) {
     c->class_ctx   = NULL;
     c->had_error   = false;
     c->source_name = source_name;
-    c->loop_start    = 0;
-    c->loop_depth    = 0;
-    c->break_count   = 0;
-    c->global_count  = 0;
+    c->loop_start        = 0;
+    c->loop_depth        = 0;
+    c->break_count       = 0;
+    c->global_count      = 0;
+    c->current_exc_slot  = -1;
 }
 
 void compiler_free(Compiler *c) {

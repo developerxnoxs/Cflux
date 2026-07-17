@@ -70,6 +70,10 @@ typedef enum {
     /* Scope declarations */
     AST_NONLOCAL,        /* nonlocal name1, name2, ... */
 
+    /* Error handling */
+    AST_TRY,             /* try/catch/finally           */
+    AST_RAISE,           /* raise expr                  */
+
     /* Block (list of statements) */
     AST_BLOCK,
     AST_EXPR_STMT,       /* expression used as statement */
@@ -244,6 +248,19 @@ struct AstNode {
             AstNode *manager; /* the context-manager expression */
             AstNode *body;
         } with_stmt;
+
+        /* AST_TRY */
+        struct {
+            AstNode *try_body;      /* try body                           */
+            char    *catch_var;     /* name of catch variable, NULL if none */
+            AstNode *catch_body;    /* catch handler body, NULL if absent  */
+            AstNode *finally_body;  /* finally body, NULL if absent        */
+        } try_stmt;
+
+        /* AST_RAISE */
+        struct {
+            AstNode *value; /* expression to raise, NULL for bare raise */
+        } raise_stmt;
     } as;
 };
 

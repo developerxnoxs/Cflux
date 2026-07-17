@@ -19,12 +19,24 @@
 /* -------------------------------------------------------------------------
  * Limits
  * ---------------------------------------------------------------------- */
-#define FLUX_STACK_MAX       (256 * 64)
-#define FLUX_FRAMES_MAX      6000
-#define FLUX_GLOBALS_INITIAL 64
-#define FLUX_GC_HEAP_GROW_FACTOR 2
-#define FLUX_IMPORT_DIR_MAX  64
-#define FLUX_IMPORT_PATH_MAX 900
+#define FLUX_STACK_MAX               (256 * 64)
+#define FLUX_FRAMES_MAX              6000
+#define FLUX_GLOBALS_INITIAL         64
+#define FLUX_GC_HEAP_GROW_FACTOR     2
+#define FLUX_IMPORT_DIR_MAX          64
+#define FLUX_IMPORT_PATH_MAX         900
+#define FLUX_EXCEPTION_HANDLER_MAX   64
+
+/* -------------------------------------------------------------------------
+ * Exception handler entry (for try/catch/finally)
+ * ---------------------------------------------------------------------- */
+typedef struct {
+    uint8_t *handler_ip;        /* IP to jump to when exception is raised       */
+    int      frame_index;       /* vm->frame_count-1 when handler was pushed     */
+    int      base_frame_count;  /* base_frame_count of the vm_run that pushed it */
+    int      stack_depth;       /* vm->stack_top - vm->stack when handler pushed */
+    int      catch_slot;        /* local slot for catch variable (-1 = none)     */
+} ExceptionHandler;
 
 /* -------------------------------------------------------------------------
  * Call frame
@@ -120,6 +132,12 @@ struct FluxVM {
     /* Runtime error state */
     char error_msg[512];
     bool has_error;
+
+    /* Exception handling state (try/catch/finally) */
+    ExceptionHandler exception_handlers[FLUX_EXCEPTION_HANDLER_MAX];
+    int              exception_handler_count;
+    Value            current_exception; /* the in-flight exception value */
+    bool             has_exception;     /* true while an exception is propagating */
 
     /* Native extension (.so) handles — kept open for the process lifetime
      * since a loaded extension's FluxNative function pointers may still be

@@ -143,6 +143,10 @@ static const Keyword keywords[] = {
     {"spawn",    TOK_SPAWN},
     {"nonlocal", TOK_NONLOCAL},
     {"with",     TOK_WITH},
+    {"try",      TOK_TRY},
+    {"catch",    TOK_CATCH},
+    {"finally",  TOK_FINALLY},
+    {"raise",    TOK_RAISE},
     {NULL, 0},
 };
 

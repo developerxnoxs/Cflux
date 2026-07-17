@@ -268,6 +268,60 @@ static void compile_expr(Compiler *c, AstNode *node);
 static void predeclare_node_locals(Compiler *c, AstNode *node, int line);
 
 /* -------------------------------------------------------------------------
+ * Try/finally early-exit unwind
+ *
+ * Emits the cleanup sequence for all try contexts from (c->try_depth - 1)
+ * down to stop_depth (inclusive).  For each level:
+ *   - if the handler is still live (!in_catch), emit OP_POP_EXCEPTION_HANDLER
+ *   - if a finally clause exists, compile it inline (stack-neutral duplication)
+ *   - if pop_outer_locals is true, emit OP_POPs for the try's outer-scope
+ *     locals (catch var / exc slot), keeping the VM stack balanced for
+ *     break and continue paths.
+ *
+ * pop_outer_locals should be:
+ *   true  — for break / continue: the stack must be clean so the loop can
+ *            re-enter the try block on the next iteration without accumulating
+ *            extra values from the pre-declared outer-scope locals.
+ *   false — for return: OP_RETURN discards the whole frame, so no cleanup
+ *            is needed and skipping the pops avoids touching the TOS return value.
+ *
+ * Two invariants that must hold simultaneously:
+ *
+ * 1. RECURSION GUARD — before compiling a finally body at level i, c->try_depth
+ *    is temporarily set to i so any early exit INSIDE that finally only sees
+ *    outer contexts (0..i-1) and cannot re-trigger unwinding of context i.
+ *
+ * 2. NO PERMANENT STATE MUTATION — c->try_depth is restored to its original
+ *    value after each compile_node call.  Early exits appear inside branches;
+ *    sibling branches must still see the correct enclosing try-context count.
+ * ---------------------------------------------------------------------- */
+static void emit_try_unwind(Compiler *c, int stop_depth, int line,
+                            bool pop_outer_locals) {
+    int original_depth = c->try_depth;
+    for (int i = original_depth - 1; i >= stop_depth; i--) {
+        if (!c->try_stack[i].in_catch)
+            emit_byte(c, OP_POP_EXCEPTION_HANDLER, line);
+        if (c->try_stack[i].finally_body) {
+            /* Recursion guard: hide context i (and inner levels) while
+             * compiling the finally body so an early exit inside it cannot
+             * re-trigger unwinding of the same context. */
+            c->try_depth = i;
+            compile_node(c, c->try_stack[i].finally_body);
+            /* Restore so sibling statements see the correct depth. */
+            c->try_depth = original_depth;
+        }
+        if (pop_outer_locals) {
+            /* Pop the try's outer-scope locals (catch_var / exc_slot) to
+             * keep the VM stack balanced on break / continue paths that
+             * loop back without executing the try block's normal scope_end. */
+            for (int k = 0; k < c->try_stack[i].outer_locals_to_pop; k++)
+                emit_byte(c, OP_POP, line);
+        }
+    }
+    /* Do NOT permanently mutate c->try_depth — see invariant 2 above. */
+}
+
+/* -------------------------------------------------------------------------
  * Variable access emission
  * ---------------------------------------------------------------------- */
 
@@ -987,6 +1041,16 @@ static void compile_node(Compiler *c, AstNode *node) {
                 compile_expr(c, node->as.ret.value);
             else
                 emit_byte(c, OP_PUSH_NULL, line);
+            /* Unwind all active try contexts so OP_POP_EXCEPTION_HANDLER is
+             * always paired and finally always runs.
+             *
+             * The return value sits at TOS.  Finally bodies are pure statement
+             * blocks that are stack-neutral (each statement ends with OP_POP),
+             * so TOS is preserved across them.  We therefore do NOT need a
+             * hidden save-slot — pass pop_outer_locals=false because OP_RETURN
+             * discards the entire frame anyway. */
+            if (c->try_depth > 0)
+                emit_try_unwind(c, 0, line, false);
             emit_byte(c, OP_RETURN, line);
             break;
 
@@ -1010,9 +1074,31 @@ static void compile_node(Compiler *c, AstNode *node) {
                 emit_byte(c, OP_LOAD_LOCAL, line);
                 emit_byte(c, (uint8_t)c->current_exc_slot, line);
             } else {
-                /* Bare raise outside any catch — nothing to re-raise; raise null
-                 * (will surface as "Unhandled exception") */
-                emit_byte(c, OP_PUSH_NULL, line);
+                /* Bare raise outside any catch — raise a descriptive error string
+                 * instead of null so the user gets a meaningful message. */
+                static const char *msg =
+                    "RuntimeError: no active exception to re-raise";
+                emit_byte(c, OP_PUSH_STRING, line);
+                emit_uint16(c, identifier_constant(c, msg, (int)strlen(msg), line), line);
+            }
+            /* If we are inside a catch body and the enclosing try had a finally,
+             * run the finally inline before the raise propagates out.  This
+             * guarantees "finally always runs" even when raise is used inside
+             * a catch block to re-throw the exception.
+             *
+             * The exception value sits at TOS.  Finally bodies are stack-neutral
+             * (pure statement blocks where each statement ends with OP_POP), so
+             * TOS is preserved across the finally code.  No save-slot is needed.
+             *
+             * Recursion guard: temporarily hide the current catch context
+             * (c->try_depth = ctx_idx) while compiling the finally body so an
+             * early exit inside the finally doesn't re-trigger this same path. */
+            if (c->try_depth > 0 && c->try_stack[c->try_depth - 1].in_catch &&
+                c->try_stack[c->try_depth - 1].finally_body != NULL) {
+                int ctx_idx = c->try_depth - 1;
+                c->try_depth = ctx_idx;
+                compile_node(c, c->try_stack[ctx_idx].finally_body);
+                c->try_depth = ctx_idx + 1;  /* restore for the OP_RAISE path */
             }
             emit_byte(c, OP_RAISE, line);
             break;
@@ -1026,6 +1112,10 @@ static void compile_node(Compiler *c, AstNode *node) {
 
             int catch_slot = -1;   /* slot of named catch variable (if any)  */
             int exc_slot   = -1;   /* slot of hidden __flux_exc__ (if any)    */
+
+            /* Record local_count before the outer scope so we can compute
+             * how many slots break/continue must pop to keep the stack clean. */
+            int local_count_before_try = c->frame->local_count;
 
             /* Outer scope: holds the catch variable or temp __flux_exc__ slot */
             scope_begin(c);
@@ -1059,10 +1149,29 @@ static void compile_node(Compiler *c, AstNode *node) {
 
             int handler_offset = emit_exception_handler(c, slot_for_handler, line);
 
+            /* Push try context so return/break/continue/raise inside the try
+             * body can emit the handler pop and inline finally before exiting. */
+            if (c->try_depth >= FLUX_TRY_DEPTH_MAX) {
+                compile_error(c, line, "try nesting too deep (max %d)", FLUX_TRY_DEPTH_MAX);
+                break;
+            }
+            int ctx_idx = c->try_depth++;
+            c->try_stack[ctx_idx].finally_body        = finally_body;
+            c->try_stack[ctx_idx].in_catch             = false;
+            /* Number of outer-scope locals that break/continue must pop to
+             * keep the VM stack balanced when looping back without executing
+             * the try block's normal scope_end cleanup. */
+            c->try_stack[ctx_idx].outer_locals_to_pop =
+                c->frame->local_count - local_count_before_try;
+
             /* Compile the try body in its own inner scope */
             scope_begin(c);
             compile_node(c, try_body);
             scope_end(c, line);
+
+            /* Pop the try context — from this point on, the handler is being
+             * torn down on the normal path; early exits below handle it themselves. */
+            c->try_depth = ctx_idx;
 
             /* Normal exit: pop handler */
             emit_byte(c, OP_POP_EXCEPTION_HANDLER, line);
@@ -1087,10 +1196,16 @@ static void compile_node(Compiler *c, AstNode *node) {
                 int saved_exc_slot = c->current_exc_slot;
                 c->current_exc_slot = store_slot;
 
+                /* Mark context as in_catch so raise/return inside catch body know
+                 * the handler is already popped and should not emit another POP. */
+                c->try_stack[ctx_idx].in_catch = true;
+                c->try_depth = ctx_idx + 1;  /* re-push context for catch body */
+
                 scope_begin(c);
                 compile_node(c, catch_body);
                 scope_end(c, line);
 
+                c->try_depth = ctx_idx;  /* pop context after catch body */
                 c->current_exc_slot = saved_exc_slot;
 
                 /* Exception path finally */
@@ -1109,6 +1224,9 @@ static void compile_node(Compiler *c, AstNode *node) {
                 emit_byte(c, (uint8_t)exc_slot, line);
                 emit_byte(c, OP_POP, line);
 
+                /* No catch body — exception path has no re-throwable user code,
+                 * so no special raise-inside-catch context needed here. */
+
                 compile_node(c, finally_body);     /* exception path finally */
 
                 /* Re-raise the saved exception */
@@ -1119,7 +1237,7 @@ static void compile_node(Compiler *c, AstNode *node) {
                 patch_jump(c, jump_past);
             }
 
-            /* Close outer scope: pops catch_var / exc_slot (if pre-declared) */
+            /* Close outer scope: pops retval_slot / catch_var / exc_slot */
             scope_end(c, line);
             break;
         }
@@ -1129,6 +1247,10 @@ static void compile_node(Compiler *c, AstNode *node) {
                 compile_error(c, line, "'break' outside loop");
                 break;
             }
+            /* Unwind try contexts inside the current loop: pop handler, run
+             * finally, and pop outer-scope locals (pop_outer_locals=true) so
+             * the VM stack is clean when the jump leaves the protected region. */
+            emit_try_unwind(c, c->try_depth_at_loop, line, true);
             if (c->break_count < 64) {
                 c->break_jumps[c->break_count++] = emit_jump(c, OP_JUMP, line);
             }
@@ -1139,6 +1261,9 @@ static void compile_node(Compiler *c, AstNode *node) {
                 compile_error(c, line, "'continue' outside loop");
                 break;
             }
+            /* Same as break: unwind and pop outer-scope locals so the stack
+             * is balanced when control loops back to the condition. */
+            emit_try_unwind(c, c->try_depth_at_loop, line, true);
             emit_loop(c, c->loop_start, line);
             break;
 
@@ -1186,6 +1311,8 @@ static void compile_node(Compiler *c, AstNode *node) {
             int old_loop_start = c->loop_start;
             int old_loop_depth = c->loop_depth;
             int old_break_count = c->break_count;
+            int old_try_depth_at_loop = c->try_depth_at_loop;
+            c->try_depth_at_loop = c->try_depth;  /* break/continue only unwind try contexts inside this loop */
 
             /* Pre-declare variables that are first-assigned inside the body
              * so that every loop iteration uses STORE_LOCAL, and those
@@ -1211,9 +1338,10 @@ static void compile_node(Compiler *c, AstNode *node) {
             for (int i = old_break_count; i < c->break_count; i++)
                 patch_jump(c, c->break_jumps[i]);
 
-            c->loop_start  = old_loop_start;
-            c->loop_depth  = old_loop_depth;
-            c->break_count = old_break_count;
+            c->loop_start        = old_loop_start;
+            c->loop_depth        = old_loop_depth;
+            c->break_count       = old_break_count;
+            c->try_depth_at_loop = old_try_depth_at_loop;
             break;
         }
 
@@ -1274,9 +1402,11 @@ static void compile_node(Compiler *c, AstNode *node) {
             int idx_slot = add_local(c, "__idx", line);
 
             /* ---- Loop setup ---- */
-            int old_loop_start  = c->loop_start;
-            int old_loop_depth  = c->loop_depth;
-            int old_break_count = c->break_count;
+            int old_loop_start       = c->loop_start;
+            int old_loop_depth       = c->loop_depth;
+            int old_break_count      = c->break_count;
+            int old_try_depth_at_loop = c->try_depth_at_loop;
+            c->try_depth_at_loop = c->try_depth;  /* break/continue only unwind try contexts inside this loop */
 
             c->loop_start = current_chunk(c)->count;
             c->loop_depth++;
@@ -1340,9 +1470,10 @@ static void compile_node(Compiler *c, AstNode *node) {
             for (int i = old_break_count; i < c->break_count; i++)
                 patch_jump(c, c->break_jumps[i]);
 
-            c->loop_start  = old_loop_start;
-            c->loop_depth  = old_loop_depth;
-            c->break_count = old_break_count;
+            c->loop_start        = old_loop_start;
+            c->loop_depth        = old_loop_depth;
+            c->break_count       = old_break_count;
+            c->try_depth_at_loop = old_try_depth_at_loop;
 
             scope_end(c, line);
             break;
@@ -1887,6 +2018,8 @@ void compiler_init(Compiler *c, FluxVM *vm, const char *source_name) {
     c->break_count       = 0;
     c->global_count      = 0;
     c->current_exc_slot  = -1;
+    c->try_depth         = 0;
+    c->try_depth_at_loop = 0;
 }
 
 void compiler_free(Compiler *c) {

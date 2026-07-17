@@ -75,6 +75,19 @@ typedef struct ClassCompiler {
 } ClassCompiler;
 
 /* -------------------------------------------------------------------------
+ * Try/finally context (one per active try block, for early-exit unwinding)
+ * ---------------------------------------------------------------------- */
+#define FLUX_TRY_DEPTH_MAX 32
+
+typedef struct {
+    AstNode *finally_body;      /* NULL = no finally clause                       */
+    bool     in_catch;          /* true while compiling catch body (handler gone)  */
+    int      outer_locals_to_pop; /* number of locals declared in the try's outer
+                                   * scope (catch var, exc slot) that break/continue
+                                   * must pop explicitly to keep the stack balanced  */
+} TryContext;
+
+/* -------------------------------------------------------------------------
  * Compiler
  * ---------------------------------------------------------------------- */
 typedef struct {
@@ -105,6 +118,16 @@ typedef struct {
      * a catch body.  -1 when not inside a catch block.  Saved/restored on
      * nesting so inner try/catch don't clobber outer context. */
     int   current_exc_slot;
+
+    /* Try/finally context stack — tracks active try blocks so that
+     * return/break/continue/raise inside a try or catch body can emit
+     * OP_POP_EXCEPTION_HANDLER and inline finally code before transferring
+     * control out of the protected region. */
+    TryContext try_stack[FLUX_TRY_DEPTH_MAX];
+    int        try_depth;           /* number of active try contexts            */
+    int        try_depth_at_loop;   /* try_depth when the innermost loop began;
+                                     * break/continue only unwind contexts above
+                                     * this level (those inside the current loop) */
 } Compiler;
 
 /* -------------------------------------------------------------------------

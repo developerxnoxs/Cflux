@@ -113,6 +113,11 @@ static void mark_roots(FluxVM *vm) {
 
     /* Main-script coroutine (holds saved context whenever main script awaits) */
     gc_mark_object(vm, (FluxObject *)vm->main_coroutine);
+
+    /* In-flight exception — must be a GC root while propagating so an
+     * allocation inside the error-reporting path (e.g. object_string_copy
+     * for the unhandled-exception message) cannot collect it. */
+    gc_mark_value(vm, vm->current_exception);
 }
 
 /* -------------------------------------------------------------------------

@@ -1,0 +1,38 @@
+# examples/tcp_echo.flx
+# Demo: TCP echo server + client menggunakan modul net
+#
+# Jalankan: ./build_make/flux examples/tcp_echo.flx
+# Kemudian dari terminal lain: nc localhost 9000
+
+import net
+
+async func handle_client(info):
+    conn = info["conn"]
+    addr = info["addr"]
+    port = info["port"]
+    print("Koneksi masuk dari " + addr + ":" + str(port))
+
+    while true:
+        data = await net.recv(conn)
+        if data == null:
+            print("Koneksi ditutup: " + addr)
+            break
+        print("Diterima: " + data)
+        await net.send(conn, "ECHO: " + data)
+
+    net.close(conn)
+
+async func main():
+    print("=== TCP Echo Server ===")
+    print("Mendengarkan di port 9000...")
+    print("Coba: nc localhost 9000")
+
+    server = net.listen("0.0.0.0", 9000, handle_client)
+    print("Server aktif. Tekan Ctrl+C untuk berhenti.")
+
+    # Tunggu selamanya (server akan terus berjalan)
+    import aio
+    while true:
+        await aio.sleep(60000)
+
+main()

@@ -1,0 +1,46 @@
+# examples/libsocket_tcp.flx
+# Demo: TCP low-level menggunakan modul libsocket langsung
+#
+# Jalankan: ./build_make/flux examples/libsocket_tcp.flx
+
+import libsocket
+
+async func main():
+    print("=== libsocket TCP Demo ===")
+
+    # Sambung ke httpbin.org port 80
+    host = "httpbin.org"
+    port = 80
+    print("Menyambung ke " + host + ":" + str(port) + "...")
+
+    conn = await libsocket.tcp_connect(host, port)
+
+    if type(conn) == "string":
+        print("Gagal tersambung: " + conn)
+        return
+
+    print("Tersambung!")
+
+    # Kirim raw HTTP request
+    req = "GET /get HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n"
+    await libsocket.tcp_send(conn, req)
+    print("Request terkirim, menunggu respons...")
+
+    # Terima respons
+    response = ""
+    while true:
+        chunk = await libsocket.tcp_recv(conn)
+        if chunk == null:
+            break   # EOF
+        response = response + chunk
+
+    libsocket.tcp_close(conn)
+
+    # Tampilkan status line
+    lines = response.split("\r\n")
+    print("Response: " + lines[0])
+    print("Panjang respons: " + str(len(response)) + " bytes")
+
+    print("\nSelesai.")
+
+main()

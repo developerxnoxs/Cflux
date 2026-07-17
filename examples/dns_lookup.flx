@@ -1,0 +1,38 @@
+# examples/dns_lookup.flx
+# Demo: async DNS resolution using the dns module
+#
+# Jalankan: ./build_make/flux examples/dns_lookup.flx
+
+import dns
+
+async func main():
+    print("=== DNS Lookup Demo ===")
+
+    # Resolve semua alamat IP (IPv4 + IPv6)
+    addrs = await dns.resolve("google.com")
+    print("google.com resolves to:")
+    for addr in addrs:
+        print("  " + addr)
+
+    # Resolve hanya IPv4
+    v4 = await dns.resolve4("example.com")
+    print("\nexample.com IPv4:")
+    for a in v4:
+        print("  " + a)
+
+    # Lookup (satu alamat + info family)
+    info = await dns.lookup("github.com")
+    print("\ngithub.com lookup:")
+    print("  addr:   " + info["addr"])
+    print("  family: " + info["family"])
+
+    # Reverse lookup
+    name = await dns.reverse("8.8.8.8")
+    if name != null:
+        print("\nReverse 8.8.8.8 → " + name)
+    else:
+        print("\nReverse 8.8.8.8 → (tidak ditemukan)")
+
+    print("\nSelesai.")
+
+main()

@@ -1,0 +1,67 @@
+# examples/http_server.flx
+# Demo: HTTP server sederhana menggunakan modul http
+#
+# Jalankan: ./build_make/flux examples/http_server.flx
+# Akses:    curl http://localhost:8080/
+#           curl http://localhost:8080/hello
+#           curl -X POST http://localhost:8080/echo -d "Halo Flux!"
+
+import http
+import aio
+
+routes = {
+    "/":       "Selamat datang di Flux HTTP Server!",
+    "/hello":  "Halo, Dunia!",
+    "/status": "Server berjalan dengan baik."
+}
+
+func handler(req):
+    method = req["method"]
+    path   = req["path"]
+    body   = req["body"]
+    addr   = req["addr"]
+
+    print(method + " " + path + " dari " + addr)
+
+    # Route /echo: kembalikan body yang dikirim
+    if path == "/echo":
+        if method == "POST":
+            return {
+                "status":  200,
+                "headers": {"Content-Type": "text/plain"},
+                "body":    "Echo: " + body
+            }
+        else:
+            return {"status": 405, "body": "Method Not Allowed"}
+
+    # Cek route statis — gunakan .get() karena 'in' belum didukung untuk dict
+    val = routes.get(path, null)
+    if val != null:
+        return {
+            "status":  200,
+            "headers": {"Content-Type": "text/plain; charset=utf-8"},
+            "body":    val
+        }
+
+    # 404
+    return {
+        "status": 404,
+        "body":   "404 Not Found: " + path
+    }
+
+async func main():
+    port = 8080
+    print("=== Flux HTTP Server ===")
+    print("Mendengarkan di http://localhost:" + str(port))
+    print("Coba:")
+    print("  curl http://localhost:" + str(port) + "/")
+    print("  curl http://localhost:" + str(port) + "/hello")
+    print("  curl -X POST http://localhost:" + str(port) + "/echo -d 'Halo!'")
+    print("Tekan Ctrl+C untuk berhenti.\n")
+
+    server = http.serve(port, handler)
+
+    while true:
+        await aio.sleep(10000)
+
+main()

@@ -681,12 +681,19 @@ State tiap coroutine (call frames + stack) disimpan secara terpisah sehingga rat
 
 ## 11. Sistem Import Modul
 
-Flux bisa memecah kode ke beberapa file `.flx` dan saling mengimpornya sebagai modul.
+Flux bisa memecah kode ke beberapa file `.flx` dan saling mengimpornya sebagai modul. Ada tiga bentuk sintaks import.
+
+### Bentuk 1 — `import nama`
+
+Memuat modul dan mengikatnya ke nama variabel. Semua nama top-level modul diakses lewat `modul.nama`.
 
 ```flux
 # mathutils.flx
 func square(x):
     return x * x
+
+func cube(x):
+    return x * x * x
 
 PI_APPROX = 3.14
 ```
@@ -694,18 +701,79 @@ PI_APPROX = 3.14
 ```flux
 # main.flx
 import mathutils
-import net.http as http     # nama modul bertitik WAJIB diberi alias
 
-print(mathutils.square(5))       # 25
-print(mathutils.PI_APPROX)       # 3.14
+print(mathutils.square(5))    # 25
+print(mathutils.cube(3))      # 27
+print(mathutils.PI_APPROX)    # 3.14
 ```
 
-**Aturan resolusi:**
-- `import nama` mencari file `nama.flx` — pertama di folder file yang meng-import, lalu di working directory proses.
-- Titik pada nama modul menjadi pemisah folder: `net.http` → `net/http.flx`.
-- Modul hanya dijalankan **sekali**; import berikutnya ke file yang sama memakai hasil cache (tidak dieksekusi ulang).
-- Import melingkar (module A meng-import B yang meng-import A lagi) akan menghasilkan runtime error yang jelas, bukan crash/infinite loop.
-- Nama-nama top-level modul (fungsi, `let`/`const`, class) bisa diakses lewat `modul.nama`. **Catatan desain**: nama-nama tersebut juga tetap ada sebagai variabel global biasa di file yang meng-import — ini diperlukan agar fungsi-fungsi di dalam modul tetap bisa memanggil satu sama lain.
+### Bentuk 2 — `import nama as alias`
+
+Memuat modul dan mengikatnya ke nama alias yang dipilih. Berguna untuk nama modul yang panjang atau bertitik (dotted).
+
+```flux
+import mathutils as m
+import net.http as http    # net.http → net/http.flx, diakses lewat alias "http"
+
+print(m.square(4))         # 16
+```
+
+> **Catatan untuk modul bertitik:** `import net.http` tanpa alias secara teknis diizinkan parser, tetapi nama bindingnya menjadi string `"net.http"` yang tidak bisa diakses dengan ekspresi biasa. Selalu gunakan `as alias` untuk modul bertitik.
+
+### Bentuk 3 — `from nama import ...`
+
+Mengimpor nama-nama tertentu langsung ke scope lokal tanpa perlu prefix modul.
+
+**Nama spesifik:**
+
+```flux
+from mathutils import square, cube
+
+print(square(5))    # 25  (tanpa prefix mathutils.)
+print(cube(3))      # 27
+```
+
+**Dengan alias:**
+
+```flux
+from mathutils import square as sq, PI_APPROX as pi
+
+print(sq(6))    # 36
+print(pi)       # 3.14
+```
+
+**Wildcard — impor semua nama top-level:**
+
+```flux
+from mathutils import *
+
+print(square(7))     # 49
+print(PI_APPROX)     # 3.14
+```
+
+---
+
+### Aturan resolusi
+
+Ketika Flux menemukan `import nama` (atau `from nama import`), ia mencari file dalam urutan berikut:
+
+1. **File `.flx`** — `nama.flx` di folder file yang sedang meng-import, lalu di working directory proses.
+2. **Ekstensi native (`.so`)** — jika file `.flx` tidak ditemukan, dicari `stdlib/nama/libnama.so` (standard library resmi), lalu `extension/nama/libnama.so` (ekstensi user/third-party), dengan urutan pencarian yang sama (folder importer dulu, lalu cwd).
+
+Titik pada nama modul menjadi pemisah folder: `net.http` → `net/http.flx`.
+
+### Aturan eksekusi dan cache
+
+- Modul hanya dijalankan **sekali**. Import berikutnya ke file yang sama memakai namespace yang sudah di-cache tanpa mengeksekusi ulang kode modul.
+- Import melingkar (A meng-import B yang meng-import A) menghasilkan runtime error yang jelas, bukan crash atau infinite loop.
+
+### Perbedaan `import` vs `from ... import`
+
+| | `import nama` | `from nama import x, y` | `from nama import *` |
+|---|---|---|---|
+| Cara akses | `nama.x`, `nama.y` | `x`, `y` langsung | semua nama langsung |
+| Namespace modul tersedia? | Ya (`nama`) | Tidak | Tidak |
+| Risiko nama tabrakan | Rendah | Sedang | Tinggi |
 
 Lihat contoh lengkap multi-file di [`examples/modules/`](examples/modules/).
 

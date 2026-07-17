@@ -1,26 +1,89 @@
-# async_demo.flx — demonstrates TRUE async/await backed by libuv
+# async_demo.flx — Demo dasar async/await Flux
 #
-# Expected output (B finishes before A because it sleeps less):
-#   Starting A (sleep 200ms)
-#   Starting B (sleep 50ms)
-#   B done after 50ms
-#   A done after 200ms
-#   Both finished: A B
+# Menunjukkan pola-pola utama:
+#   1. await langsung pada user-defined async func
+#   2. spawn + await untuk concurrency paralel
+#   3. aio.gather untuk fan-out ringkas
+#   4. yield untuk cooperative multitasking tanpa I/O
 
 import aio
 
-async func task(name, delay):
-    print(f"Starting {name} (sleep {delay}ms)")
-    await aio.sleep(delay)
-    print(f"{name} done after {delay}ms")
-    return name
+print("=== Demo Async/Await Flux ===")
 
-# Spawn two concurrent tasks — they run in the scheduler simultaneously
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. await langsung — tidak perlu spawn
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n1. await langsung (tanpa spawn):")
+
+async func kuadrat(n):
+    return n * n
+
+async func faktorial(n):
+    if n <= 1:
+        return 1
+    sisa = await faktorial(n - 1)
+    return n * sisa
+
+print(await kuadrat(8))        # 64
+print(await faktorial(5))      # 120
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. spawn + await — dua task berjalan bersamaan
+#    B (50ms) selesai lebih dulu dari A (200ms) → bukti concurrency nyata
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n2. spawn + await (concurrency nyata):")
+
+async func task(nama, delay):
+    print(f"  Mulai {nama} (sleep {delay}ms)")
+    await aio.sleep(delay)
+    print(f"  {nama} selesai setelah {delay}ms")
+    return nama
+
 t1 = spawn task("A", 200)
 t2 = spawn task("B", 50)
 
-# Await both results
 r1 = await t1
 r2 = await t2
 
-print(f"Both finished: {r1} {r2}")
+print(f"  Keduanya selesai: {r1} {r2}")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. aio.gather — fan-out paling ringkas
+#    Urutan hasil = urutan input, meski task selesai dalam urutan berbeda
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n3. aio.gather (fan-out ringkas):")
+
+async func ambil(sumber, tunda):
+    await aio.sleep(tunda)
+    return "data:" + sumber
+
+hasil = await aio.gather([
+    ambil("users",    100),   # selesai paling lama
+    ambil("posts",     40),   # selesai paling cepat
+    ambil("comments",  70),   # selesai di tengah
+])
+
+print(f"  Hasil: {hasil}")
+# → ["data:users", "data:posts", "data:comments"]  (urutan input, bukan urutan selesai)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. yield — cooperative multitasking tanpa I/O
+#    Alpha dan Beta bergantian — bukan blok per blok
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n4. yield (cooperative multitasking):")
+
+async func counter(nama, n):
+    i = 0
+    while i < n:
+        print(f"  [{nama}] langkah {i}")
+        yield       # serahkan giliran ke coroutine lain
+        i = i + 1
+    return nama + " selesai"
+
+tA = spawn counter("Alpha", 3)
+tB = spawn counter("Beta",  3)
+
+print(await tA)
+print(await tB)
+
+print("\n=== Selesai ===")

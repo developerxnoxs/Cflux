@@ -1,180 +1,306 @@
-# test_async.flx — Comprehensive async/await test suite
+# tests/test_async.flx — Test suite async/await Flux
+#
+# Mencakup seluruh fitur async:
+#   1. await langsung (tanpa spawn) pada user-defined async func
+#   2. Rantai await: async memanggil async
+#   3. spawn + await handle — concurrency eksplisit
+#   4. Auto-spawn: memanggil async func tanpa await → handle coroutine
+#   5. yield — cooperative multitasking tanpa I/O
+#   6. aio.sleep — non-blocking timer, urutan selesai sesuai delay
+#   7. aio.read_file + aio.write_file — I/O file non-blocking
+#   8. aio.gather([...]) — fan-out bersamaan, hasil urut sesuai input
+#   9. aio.create_task(coro) — eksplisit task creation
+#  10. Fan-out / fan-in manual: spawn banyak, await satu per satu
 
 import aio
 
-# Use a list as a mutable counter so inner functions can modify it
-# (plain assignment in a Flux function creates a local, not a global write)
-let counts = [0, 0]   # [passed, failed]
+# ── Utilitas laporan ──────────────────────────────────────────────────────────
+let hasil = [0, 0]   # [lulus, gagal]
 
-func ok(name):
-    print(f"  [PASS] {name}")
-    counts[0] = counts[0] + 1
+func lulus(nama):
+    print(f"  [LULUS] {nama}")
+    hasil[0] = hasil[0] + 1
 
-func fail(name, msg):
-    print(f"  [FAIL] {name}: {msg}")
-    counts[1] = counts[1] + 1
+func gagal(nama, pesan):
+    print(f"  [GAGAL] {nama}: {pesan}")
+    hasil[1] = hasil[1] + 1
 
-print("=== Async Test Suite ===")
+print("=== Flux Async Test Suite ===")
 
-# ── Test 1: basic sleep + return value ────────────────────────────────────────
-print("\n-- 1. Basic sleep & return value --")
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. await langsung pada user-defined async func (tanpa spawn)
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n-- 1. await langsung (tanpa spawn) --")
 
-async func simple_task(val):
-    await aio.sleep(10)
-    return val * 2
+async func sapa(nama):
+    return "Halo, " + nama + "!"
 
-let t = spawn simple_task(21)
-let r = await t
-if r == 42:
-    ok("sleep + return value")
-else:
-    fail("sleep + return value", f"expected 42, got {r}")
-
-# ── Test 2: concurrency ordering (B < A) ──────────────────────────────────────
-print("\n-- 2. Concurrency ordering --")
-
-let order = []
-
-async func track(name, delay):
-    await aio.sleep(delay)
-    order.append(name)
-    return name
-
-let ta = spawn track("A", 120)
-let tb = spawn track("B", 30)
-let tc = spawn track("C", 70)
-
-let ra = await ta
-let rb = await tb
-let rc = await tc
-
-if order[0] == "B" and order[1] == "C" and order[2] == "A":
-    ok("concurrent ordering (B→C→A by delay)")
-else:
-    fail("concurrent ordering", f"got order {order}")
-
-if ra == "A" and rb == "B" and rc == "C":
-    ok("return values from concurrent tasks")
-else:
-    fail("return values from concurrent tasks", f"ra={ra} rb={rb} rc={rc}")
-
-# ── Test 3: many concurrent tasks ─────────────────────────────────────────────
-print("\n-- 3. Many concurrent tasks --")
-
-async func numbered(n):
-    await aio.sleep(5)
+async func kuadrat(n):
     return n * n
 
-let futures = []
-let i = 0
-while i < 10:
-    futures.append(spawn numbered(i))
-    i = i + 1
+async func faktorial(n):
+    if n <= 1:
+        return 1
+    sisa = await faktorial(n - 1)
+    return n * sisa
 
-let sum = 0
-let j = 0
-while j < 10:
-    sum = sum + await futures[j]
-    j = j + 1
-
-# 0²+1²+…+9² = 285
-if sum == 285:
-    ok("10 concurrent tasks, sum of squares = 285")
+# await bisa dipakai langsung di top-level script
+let r1 = await sapa("Flux")
+if r1 == "Halo, Flux!":
+    lulus("await sapa()")
 else:
-    fail("10 concurrent tasks", f"expected 285, got {sum}")
+    gagal("await sapa()", f"dapat: {r1}")
 
-# ── Test 4: async write_file + read_file ──────────────────────────────────────
-print("\n-- 4. Async file I/O --")
-
-let tmp_path = "/tmp/flux_async_test.txt"
-let content  = "Hello from Flux async I/O!\nLine 2\n"
-
-async func write_then_read(path, data):
-    await aio.write_file(path, data)
-    let back = await aio.read_file(path)
-    return back
-
-let io_fut = spawn write_then_read(tmp_path, content)
-let io_res = await io_fut
-
-if io_res == content:
-    ok("async write_file + read_file roundtrip")
+let r2 = await kuadrat(9)
+if r2 == 81:
+    lulus("await kuadrat(9) == 81")
 else:
-    fail("async write_file + read_file", f"got: {io_res}")
+    gagal("await kuadrat(9)", f"dapat: {r2}")
 
-# ── Test 5: sequential awaits inside async func ───────────────────────────────
-print("\n-- 5. Sequential awaits inside async func --")
+let r3 = await faktorial(6)
+if r3 == 720:
+    lulus("await faktorial(6) == 720")
+else:
+    gagal("await faktorial(6)", f"dapat: {r3}")
 
-async func sequential():
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Rantai await: async memanggil async
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n-- 2. Rantai await (async → async) --")
+
+async func pitagoras(a, b):
+    a2 = await kuadrat(a)
+    b2 = await kuadrat(b)
+    return a2 + b2
+
+async func bagi(a, b):
+    return a / b
+
+async func pipeline(n):
+    k = await kuadrat(n)         # n^2
+    p = await pitagoras(3, 4)    # 25
+    r = await bagi(k, p)         # n^2 / 25
+    return r
+
+let p = await pitagoras(3, 4)
+if p == 25:
+    lulus("pitagoras(3, 4) == 25")
+else:
+    gagal("pitagoras(3, 4)", f"dapat: {p}")
+
+let pl = await pipeline(10)
+if pl == 4.0:
+    lulus("pipeline(10) == 4.0  (100 / 25)")
+else:
+    gagal("pipeline(10)", f"dapat: {pl}")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. spawn + await handle — concurrency eksplisit
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n-- 3. spawn + await handle --")
+
+let urutan = []
+
+async func tugas(nama, tunda):
+    await aio.sleep(tunda)
+    urutan.append(nama)
+    return nama
+
+# B (30ms) harus selesai lebih dulu dari A (120ms) dan C (70ms)
+let hA = spawn tugas("A", 120)
+let hB = spawn tugas("B", 30)
+let hC = spawn tugas("C", 70)
+
+let rA = await hA
+let rB = await hB
+let rC = await hC
+
+if rA == "A" and rB == "B" and rC == "C":
+    lulus("nilai return dari spawn + await benar")
+else:
+    gagal("nilai return spawn+await", f"rA={rA} rB={rB} rC={rC}")
+
+if urutan[0] == "B" and urutan[1] == "C" and urutan[2] == "A":
+    lulus("urutan selesai: B→C→A (concurrency nyata)")
+else:
+    gagal("urutan selesai", f"dapat: {urutan}")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Auto-spawn: memanggil async func tanpa await → handle coroutine
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n-- 4. Auto-spawn (panggil tanpa await) --")
+
+async func kerja(n):
     await aio.sleep(10)
-    await aio.sleep(10)
-    await aio.sleep(10)
-    return "seq_done"
+    return n * 10
 
-let seq_fut = spawn sequential()
-let seq_res = await seq_fut
+# Memanggil async func tanpa await → otomatis menjadi coroutine (auto-spawn)
+# Hasilnya adalah handle coroutine, bukan nilai return fungsinya
+let h1 = kerja(3)    # auto-spawn → handle
+let h2 = kerja(7)    # auto-spawn → handle
 
-if seq_res == "seq_done":
-    ok("sequential awaits inside async func")
+let v1 = await h1    # sekarang tunggu hasilnya
+let v2 = await h2
+
+if v1 == 30 and v2 == 70:
+    lulus("auto-spawn: kerja(3)=30, kerja(7)=70")
 else:
-    fail("sequential awaits", f"got: {seq_res}")
+    gagal("auto-spawn", f"v1={v1} v2={v2}")
 
-# ── Test 6: async func calling another async func (nested await) ──────────────
-print("\n-- 6. Nested async calls --")
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. yield — cooperative multitasking tanpa I/O
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n-- 5. yield (cooperative multitasking) --")
 
-async func inner(x):
-    await aio.sleep(5)
-    return x + 10
+let log_yield = []
 
-async func outer(x):
-    let v = await inner(x)
-    await aio.sleep(5)
-    return v * 2
+async func counter(nama, langkah):
+    i = 0
+    while i < langkah:
+        log_yield.append(nama)
+        yield        # serahkan giliran ke coroutine lain
+        i = i + 1
+    return nama + "_selesai"
 
-let nest_fut = spawn outer(5)
-let nest_res = await nest_fut
+let tX = spawn counter("X", 3)
+let tY = spawn counter("Y", 3)
 
-if nest_res == 30:  # (5+10)*2
-    ok("nested async (outer awaits inner)")
+let rX = await tX
+let rY = await tY
+
+# yield menyebabkan X dan Y bergantian: X,Y,X,Y,X,Y
+if rX == "X_selesai" and rY == "Y_selesai":
+    lulus("yield: nilai return coroutine benar")
 else:
-    fail("nested async", f"expected 30, got {nest_res}")
+    gagal("yield return", f"rX={rX} rY={rY}")
 
-# ── Test 7: spawn inside a loop, collect after ────────────────────────────────
-print("\n-- 7. Spawn in loop, collect after --")
-
-async func delayed_echo(v, delay):
-    await aio.sleep(delay)
-    return v
-
-let futs = []
-let k = 1
-while k <= 5:
-    futs.append(spawn delayed_echo(k, k * 10))
+# Cek interleaving: tidak boleh semua X dulu baru semua Y
+let ada_interleaving = false
+let k = 0
+while k < 5:
+    if log_yield[k] != log_yield[k + 1]:
+        ada_interleaving = true
     k = k + 1
 
-let total = 0
-let m = 0
-while m < 5:
-    total = total + await futs[m]
-    m = m + 1
-
-if total == 15:  # 1+2+3+4+5
-    ok("spawn in loop + collect after = 15")
+if ada_interleaving:
+    lulus("yield: coroutine saling bergantian (interleaving)")
 else:
-    fail("spawn in loop", f"expected 15, got {total}")
+    gagal("yield interleaving", f"log: {log_yield}")
 
-# ── Test 8: zero-delay sleep (yield to scheduler) ────────────────────────────
-print("\n-- 8. Zero-delay sleep (yield) --")
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. aio.sleep — non-blocking, urutan selesai sesuai delay
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n-- 6. aio.sleep --")
 
-async func yielding():
-    await aio.sleep(0)
-    return "yielded"
+async func tidur(label, ms):
+    await aio.sleep(ms)
+    return label
 
-let y = await spawn yielding()
-if y == "yielded":
-    ok("zero-delay sleep / scheduler yield")
+# Sleep 0ms — yield ke scheduler, langsung kembali
+let s0 = await tidur("zero", 0)
+if s0 == "zero":
+    lulus("aio.sleep(0) berjalan dan kembali")
 else:
-    fail("zero-delay sleep", f"got: {y}")
+    gagal("aio.sleep(0)", f"dapat: {s0}")
 
-# ── Summary ───────────────────────────────────────────────────────────────────
-print(f"\n=== {counts[0]} passed, {counts[1]} failed ===")
+# Dua sleep bersamaan: yang lebih pendek selesai duluan
+let ha = spawn tidur("lambat", 100)
+let hb = spawn tidur("cepat",  20)
+let ra = await ha
+let rb = await hb
+
+if ra == "lambat" and rb == "cepat":
+    lulus("aio.sleep: dua task bersamaan, nilai return benar")
+else:
+    gagal("aio.sleep dua task", f"ra={ra} rb={rb}")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. aio.read_file + aio.write_file
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n-- 7. aio.write_file + aio.read_file --")
+
+let path_tmp = "/tmp/flux_test_async_io.txt"
+let isi_tulis = "Flux async I/O bekerja!\nBaris kedua.\n"
+
+async func uji_io(path, isi):
+    await aio.write_file(path, isi)
+    let balik = await aio.read_file(path)
+    return balik
+
+let io_hasil = await uji_io(path_tmp, isi_tulis)
+
+if io_hasil == isi_tulis:
+    lulus("aio.write_file + aio.read_file roundtrip")
+else:
+    gagal("aio I/O roundtrip", f"dapat: {io_hasil}")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. aio.gather([...]) — fan-out bersamaan, hasil urut sesuai input
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n-- 8. aio.gather([...]) --")
+
+async func hitung_tunda(n, tunda):
+    await aio.sleep(tunda)
+    return n * n
+
+# Delay berbeda — urutan hasil harus sesuai urutan input (bukan urutan selesai)
+# delay: 4→10ms, 2→50ms, 3→20ms  (selesai: 4,3,2; hasil harus [16,4,9])
+let g_hasil = await aio.gather([hitung_tunda(4, 10), hitung_tunda(2, 50), hitung_tunda(3, 20)])
+
+if g_hasil[0] == 16 and g_hasil[1] == 4 and g_hasil[2] == 9:
+    lulus("aio.gather: hasil [16,4,9] urut sesuai input")
+else:
+    gagal("aio.gather urutan hasil", f"dapat: {g_hasil}")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9. aio.create_task(coro)
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n-- 9. aio.create_task(coro) --")
+
+async func kalikan(n):
+    await aio.sleep(10)
+    return n * 5
+
+# create_task menerima coroutine handle (auto-spawn) dan mengembalikannya
+let ct_a = aio.create_task(kalikan(4))
+let ct_b = aio.create_task(kalikan(9))
+
+let ct_ra = await ct_a
+let ct_rb = await ct_b
+
+if ct_ra == 20 and ct_rb == 45:
+    lulus("aio.create_task: kalikan(4)=20, kalikan(9)=45")
+else:
+    gagal("aio.create_task", f"ct_ra={ct_ra} ct_rb={ct_rb}")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10. Fan-out / fan-in manual: spawn banyak, await satu per satu
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n-- 10. Fan-out / fan-in manual --")
+
+async func proses(id, tunda):
+    await aio.sleep(tunda)
+    return id * id
+
+# Semua task berjalan bersamaan (fan-out), lalu dikumpulkan (fan-in)
+let handles = []
+let fi = 1
+while fi <= 6:
+    handles.append(spawn proses(fi, 40))
+    fi = fi + 1
+
+let fo_hasil = []
+fi = 0
+while fi < 6:
+    fo_hasil.append(await handles[fi])
+    fi = fi + 1
+
+if fo_hasil[0] == 1 and fo_hasil[1] == 4 and fo_hasil[2] == 9 and fo_hasil[3] == 16 and fo_hasil[4] == 25 and fo_hasil[5] == 36:
+    lulus("fan-out/fan-in: [1,4,9,16,25,36]")
+else:
+    gagal("fan-out/fan-in", f"dapat: {fo_hasil}")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ringkasan
+# ─────────────────────────────────────────────────────────────────────────────
+print(f"\n=== {hasil[0]} lulus, {hasil[1]} gagal ===")

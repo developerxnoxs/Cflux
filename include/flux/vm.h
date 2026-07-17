@@ -132,6 +132,10 @@ struct FluxVM {
     /* Runtime error state */
     char error_msg[512];
     bool has_error;
+    /* Set to true by vm_runtime_error() after it prints the message.
+     * Lets flux_handle_exception skip the second print when a native function
+     * already reported the error (prevents duplicate "Runtime error:" lines). */
+    bool error_printed;
 
     /* Exception handling state (try/catch/finally) */
     ExceptionHandler exception_handlers[FLUX_EXCEPTION_HANDLER_MAX];

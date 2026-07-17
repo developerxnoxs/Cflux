@@ -65,8 +65,9 @@ FluxVM *vm_new(void) {
     vm->io_future_count     = 0;
     vm->io_future_capacity  = 0;
 
-    vm->has_error = false;
-    vm->error_msg[0] = '\0';
+    vm->has_error     = false;
+    vm->error_printed = false;
+    vm->error_msg[0]  = '\0';
 
     /* Exception handling state */
     vm->exception_handler_count = 0;
@@ -133,7 +134,8 @@ void vm_runtime_error(FluxVM *vm, const char *fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(vm->error_msg, sizeof(vm->error_msg), fmt, ap);
     va_end(ap);
-    vm->has_error = true;
+    vm->has_error     = true;
+    vm->error_printed = true;
 
     /* Print stack trace (cap at 20 frames to avoid flooding on stack overflow) */
     fprintf(stderr, "Runtime error: %s\n", vm->error_msg);
@@ -149,7 +151,12 @@ void vm_runtime_error(FluxVM *vm, const char *fmt, ...) {
     }
     if (total > 20)
         fprintf(stderr, "  ... (%d more frames)\n", total - 20);
-    vm_reset_stack(vm);
+    /* NOTE: vm_reset_stack() is intentionally NOT called here.
+     * Resetting frame_count to 0 here would corrupt flux_handle_exception's
+     * frame-unwind loop (frames[frame_count-1] would underflow) and make
+     * try/catch around native calls impossible.  Stack cleanup is done by
+     * flux_handle_exception when no handler is found, or by the catch-path
+     * which restores stack_top to the pre-try depth. */
 }
 
 /* -------------------------------------------------------------------------
@@ -2185,7 +2192,8 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
 
             /* Push the exception value so the handler can inspect/store it */
             vm_push(vm, vm->current_exception);
-            vm->has_exception = false;
+            vm->has_exception  = false;
+            vm->error_printed  = false; /* reset so future unhandled errors print normally */
 
             /* Jump to the handler bytecode */
             ip = h->handler_ip;
@@ -2193,8 +2201,10 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
         }
 
         /* ---- No applicable handler in this vm_run invocation ---- */
-        /* Print the error (unless a nested call already printed it) */
-        if (!vm->has_error) {
+        /* Print the error (unless vm_runtime_error() already printed it).
+         * error_printed is set by vm_runtime_error() and stays true until a
+         * catch handler is activated or the VM is reset. */
+        if (!vm->has_error && !vm->error_printed) {
             frame->ip = ip;
             if (IS_STRING(vm->current_exception)) {
                 vm_runtime_error(vm, "%s", AS_STRING(vm->current_exception)->chars);
@@ -2215,6 +2225,12 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                 vm_runtime_error(vm, "Unhandled exception");
             }
         }
+        /* Clean up the VM stack now that the error is unhandled.
+         * This was previously done inside vm_runtime_error(), but doing it
+         * there corrupted frame_count before flux_handle_exception could
+         * unwind frames for a try/catch handler.  Moving it here is safe:
+         * we only reach this point when there is truly no handler to run. */
+        vm_reset_stack(vm);
         return VM_RUNTIME_ERROR;
     }
 

@@ -1,0 +1,632 @@
+# ============================================================
+# Bug Hunt: Error Handling — edge cases untuk menemukan bug
+# ============================================================
+
+passed = 0
+failed = 0
+
+func ok(label):
+    nonlocal passed
+    passed = passed + 1
+    print("[PASS]", label)
+
+func fail(label, got):
+    nonlocal failed
+    failed = failed + 1
+    print("[FAIL]", label, "| got:", got)
+
+# ------------------------------------------------------------
+# 1. finally HARUS jalan meski exception tidak ditangkap
+# ------------------------------------------------------------
+print("\n=== 1. finally runs before propagation ===")
+finally_ran = false
+try:
+    try:
+        raise "prop"
+    finally:
+        finally_ran = true
+catch e:
+    pass
+
+if finally_ran:
+    ok("finally ran before propagation")
+else:
+    fail("finally ran before propagation", finally_ran)
+
+# ------------------------------------------------------------
+# 2. return di dalam try block — finally harus tetap jalan
+# ------------------------------------------------------------
+print("\n=== 2. return inside try still runs finally ===")
+side_effect = false
+
+func test_return_finally():
+    nonlocal side_effect
+    try:
+        return 42
+    finally:
+        side_effect = true
+
+result = test_return_finally()
+if result == 42:
+    ok("return value correct after try/finally")
+else:
+    fail("return value correct after try/finally", result)
+
+if side_effect:
+    ok("finally ran on return from try")
+else:
+    fail("finally ran on return from try", side_effect)
+
+# ------------------------------------------------------------
+# 3. return di dalam catch block — finally harus tetap jalan
+# ------------------------------------------------------------
+print("\n=== 3. return inside catch still runs finally ===")
+catch_finally_ran = false
+
+func test_catch_return():
+    nonlocal catch_finally_ran
+    try:
+        raise "err"
+    catch e:
+        return "from_catch"
+    finally:
+        catch_finally_ran = true
+
+r = test_catch_return()
+if r == "from_catch":
+    ok("return from catch: value correct")
+else:
+    fail("return from catch: value correct", r)
+
+if catch_finally_ran:
+    ok("finally ran on return from catch")
+else:
+    fail("finally ran on return from catch", catch_finally_ran)
+
+# ------------------------------------------------------------
+# 4. break di dalam try — finally harus jalan
+# ------------------------------------------------------------
+print("\n=== 4. break inside try runs finally ===")
+func test_break_finally():
+    count = 0
+    i = 0
+    while i < 3:
+        try:
+            i = i + 1
+            if i == 2:
+                break
+        finally:
+            count = count + 1
+    return count
+
+bfc = test_break_finally()
+if bfc == 2:
+    ok("finally ran on break (count correct)")
+else:
+    fail("finally ran on break (count correct)", bfc)
+
+# ------------------------------------------------------------
+# 5. continue di dalam try — finally harus jalan tiap iterasi
+# ------------------------------------------------------------
+print("\n=== 5. continue inside try runs finally ===")
+func test_continue_finally():
+    count = 0
+    j = 0
+    while j < 3:
+        j = j + 1
+        try:
+            if j == 2:
+                continue
+        finally:
+            count = count + 1
+    return count
+
+cfc = test_continue_finally()
+if cfc == 3:
+    ok("finally ran on continue (all iterations)")
+else:
+    fail("finally ran on continue (all iterations)", cfc)
+
+# ------------------------------------------------------------
+# 6. bare raise di luar catch — harus raise error (bukan crash)
+# ------------------------------------------------------------
+print("\n=== 6. bare raise outside catch ===")
+bare_raise_caught = false
+try:
+    raise   # bare raise outside catch
+catch e:
+    bare_raise_caught = true
+
+if bare_raise_caught:
+    ok("bare raise outside catch raises error")
+else:
+    fail("bare raise outside catch raises error", bare_raise_caught)
+
+# ------------------------------------------------------------
+# 7. raise di dalam finally — exception dari finally propagate
+# ------------------------------------------------------------
+print("\n=== 7. raise inside finally ===")
+finally_exc = null
+try:
+    try:
+        raise "original"
+    finally:
+        raise "from_finally"
+catch e:
+    finally_exc = e
+
+if finally_exc != null:
+    ok("exception from finally was caught")
+    print("  exception value was:", finally_exc)
+else:
+    fail("exception from finally was caught", "nothing caught")
+
+# ------------------------------------------------------------
+# 8. Exception objek — properti terjaga di catch
+# ------------------------------------------------------------
+print("\n=== 8. Error object properties in catch ===")
+caught_msg = null
+try:
+    raise ValueError("bad value")
+catch e:
+    caught_msg = e.message
+
+if caught_msg == "bad value":
+    ok("Error.message preserved in catch")
+else:
+    fail("Error.message preserved in catch", caught_msg)
+
+# ------------------------------------------------------------
+# 9. re-raise di dalam catch — propagate ke outer dengan nilai asli
+# ------------------------------------------------------------
+print("\n=== 9. re-raise propagates to outer ===")
+outer_val = null
+try:
+    try:
+        raise "inner_exc"
+    catch e:
+        raise   # bare re-raise
+catch e2:
+    outer_val = e2
+
+if outer_val == "inner_exc":
+    ok("re-raise propagates original exception")
+else:
+    fail("re-raise propagates original exception", outer_val)
+
+# ------------------------------------------------------------
+# 10. Exception di dalam nested function call di try
+# ------------------------------------------------------------
+print("\n=== 10. Exception from nested function call ===")
+func thrower():
+    raise "from_func"
+
+nested_caught = null
+try:
+    thrower()
+catch e:
+    nested_caught = e
+
+if nested_caught == "from_func":
+    ok("exception from nested function caught")
+else:
+    fail("exception from nested function caught", nested_caught)
+
+# ------------------------------------------------------------
+# 11. catch-variable tidak boleh bocor ke luar scope
+# ------------------------------------------------------------
+print("\n=== 11. catch variable scope ===")
+scope_ok = false
+try:
+    raise "scoped"
+catch scoped_var:
+    pass
+
+try:
+    x = scoped_var   # harus error: scoped_var tidak ada di luar catch
+    scope_ok = false
+catch e:
+    scope_ok = true  # expected: NameError atau sejenisnya
+
+if scope_ok:
+    ok("catch variable not accessible outside catch")
+else:
+    fail("catch variable not accessible outside catch", "scoped_var leaked!")
+
+# ------------------------------------------------------------
+# 12. Stack integrity setelah multiple exceptions di loop
+# ------------------------------------------------------------
+print("\n=== 12. Stack integrity: exceptions in loop ===")
+func test_loop_exceptions():
+    sum_val = 0
+    k = 0
+    while k < 5:
+        k = k + 1
+        try:
+            if k % 2 == 0:
+                raise "even"
+            sum_val = sum_val + k
+        catch e:
+            pass
+    return sum_val
+
+sv = test_loop_exceptions()
+# k=1,3,5 berhasil → sum = 9
+if sv == 9:
+    ok("stack intact after repeated exceptions in loop")
+else:
+    fail("stack intact after repeated exceptions in loop", sv)
+
+# ------------------------------------------------------------
+# 13. Exception saat catch body mengeksekusi
+# ------------------------------------------------------------
+print("\n=== 13. Exception inside catch body ===")
+double_exc = null
+try:
+    try:
+        raise "first"
+    catch e:
+        raise "second"   # new exception during catch
+catch e2:
+    double_exc = e2
+
+if double_exc == "second":
+    ok("exception inside catch propagates correctly")
+else:
+    fail("exception inside catch propagates correctly", double_exc)
+
+# ------------------------------------------------------------
+# 14. finally dapat memodifikasi variabel lokal
+# ------------------------------------------------------------
+print("\n=== 14. local modified in finally is visible ===")
+func test_finally_modifies_local():
+    x = 0
+    try:
+        x = 10
+    finally:
+        x = x + 1
+    return x
+
+nval = test_finally_modifies_local()
+if nval == 11:
+    ok("local modified in finally is visible after")
+else:
+    fail("local modified in finally is visible after", nval)
+
+# ------------------------------------------------------------
+# 15. Closure menangkap variabel dari dalam try block
+# ------------------------------------------------------------
+print("\n=== 15. Closure capturing try-block variable ===")
+captured_fn = null
+try:
+    captured = 99
+    func make_closure():
+        return captured
+    captured_fn = make_closure
+catch e:
+    pass
+
+if captured_fn != null and captured_fn() == 99:
+    ok("closure captures try-block variable correctly")
+else:
+    fail("closure captures try-block variable correctly", captured_fn)
+
+# ------------------------------------------------------------
+# 16. Deeply nested try/catch/finally unwind order
+# ------------------------------------------------------------
+print("\n=== 16. Deep nesting unwind order ===")
+deep_log = []
+try:
+    try:
+        try:
+            deep_log.append("try-3")
+            raise "deep"
+        finally:
+            deep_log.append("finally-3")
+    finally:
+        deep_log.append("finally-2")
+catch e:
+    deep_log.append("catch-1")
+
+expected_log = ["try-3", "finally-3", "finally-2", "catch-1"]
+if deep_log == expected_log:
+    ok("deep nested finally unwind order correct")
+else:
+    fail("deep nested finally unwind order correct", deep_log)
+
+# ------------------------------------------------------------
+# 17. raise integer (non-string, non-Error)
+# ------------------------------------------------------------
+print("\n=== 17. raise non-string, non-Error value ===")
+int_exc = null
+try:
+    raise 404
+catch e:
+    int_exc = e
+
+if int_exc == 404:
+    ok("raise integer caught correctly")
+else:
+    fail("raise integer caught correctly", int_exc)
+
+# ------------------------------------------------------------
+# 18. raise null
+# ------------------------------------------------------------
+print("\n=== 18. raise null ===")
+null_exc_caught = false
+try:
+    raise null
+catch e:
+    null_exc_caught = true
+
+if null_exc_caught:
+    ok("raise null caught")
+else:
+    fail("raise null caught", "not caught")
+
+# ------------------------------------------------------------
+# 19. Handler count tidak bocor setelah normal exit (stress test)
+# ------------------------------------------------------------
+print("\n=== 19. Handler count: 100 normal try/finally ===")
+func stress_try():
+    count = 0
+    n = 0
+    while n < 100:
+        n = n + 1
+        try:
+            count = count + 1
+        finally:
+            pass
+    return count
+
+sc = stress_try()
+if sc == 100:
+    ok("100 normal try/finally without handler leak")
+else:
+    fail("100 normal try/finally without handler leak", sc)
+
+# ------------------------------------------------------------
+# 20. Exception di argumen fungsi di dalam try
+# ------------------------------------------------------------
+print("\n=== 20. Exception in function argument inside try ===")
+func identity(x):
+    return x
+
+func throws_in_eval():
+    raise "arg_error"
+
+arg_exc = null
+try:
+    identity(throws_in_eval())
+catch e:
+    arg_exc = e
+
+if arg_exc == "arg_error":
+    ok("exception in function argument caught")
+else:
+    fail("exception in function argument caught", arg_exc)
+
+# ------------------------------------------------------------
+# 21. try/catch dalam rekursi — unwind per frame
+# ------------------------------------------------------------
+print("\n=== 21. try/catch in recursive function ===")
+func recursive_try(n):
+    if n == 0:
+        raise "base"
+    try:
+        recursive_try(n - 1)
+    catch e:
+        raise e + "_up"
+
+rec_result = null
+try:
+    recursive_try(3)
+catch e:
+    rec_result = e
+
+if rec_result == "base_up_up_up":
+    ok("try/catch in recursion works correctly")
+else:
+    fail("try/catch in recursion works correctly", rec_result)
+
+# ------------------------------------------------------------
+# 22. finally tidak suppress exception (tanpa catch)
+# ------------------------------------------------------------
+print("\n=== 22. finally does not suppress exception ===")
+suppressed = true
+try:
+    try:
+        raise "should_propagate"
+    finally:
+        pass  # hanya finally, tidak ada catch
+catch e:
+    suppressed = false
+
+if not suppressed:
+    ok("finally without catch does not suppress exception")
+else:
+    fail("finally without catch does not suppress exception", "exception was suppressed")
+
+# ------------------------------------------------------------
+# 23. Dua try/catch sequential — state tidak saling mempengaruhi
+# ------------------------------------------------------------
+print("\n=== 23. Sequential try/catch blocks independent ===")
+c1 = null
+c2 = null
+try:
+    raise "first_exc"
+catch e:
+    c1 = e
+
+try:
+    raise "second_exc"
+catch e:
+    c2 = e
+
+if c1 == "first_exc" and c2 == "second_exc":
+    ok("two sequential try/catch blocks independent")
+else:
+    fail("two sequential try/catch blocks independent", [c1, c2])
+
+# ------------------------------------------------------------
+# 24. Runtime error dari index out of bounds
+# ------------------------------------------------------------
+print("\n=== 24. Runtime error from out-of-bounds index ===")
+oob_caught = false
+try:
+    lst = [1, 2, 3]
+    x = lst[10]   # out of bounds
+catch e:
+    oob_caught = true
+
+if oob_caught:
+    ok("index out of bounds caught")
+else:
+    fail("index out of bounds caught", "not caught")
+
+# ------------------------------------------------------------
+# 25. Runtime error dari operasi tipe salah
+# ------------------------------------------------------------
+print("\n=== 25. Type error runtime exception ===")
+type_err_msg = null
+try:
+    result = "hello" - 5
+catch e:
+    type_err_msg = e
+
+if type_err_msg != null:
+    ok("type error caught as exception")
+else:
+    fail("type error caught as exception", type_err_msg)
+
+# ------------------------------------------------------------
+# 26. List equality — structural (normal cases)
+# ------------------------------------------------------------
+print("\n=== 26. Structural list equality ===")
+a = [1, 2, 3]
+b = [1, 2, 3]
+c = [1, 2, 4]
+empty1 = []
+empty2 = []
+
+if a == b:
+    ok("identical list contents are equal")
+else:
+    fail("identical list contents are equal", false)
+
+if not (a == c):
+    ok("different list contents are not equal")
+else:
+    fail("different list contents are not equal", true)
+
+if empty1 == empty2:
+    ok("two empty lists are equal")
+else:
+    fail("two empty lists are equal", false)
+
+nested_a = [[1, 2], [3, 4]]
+nested_b = [[1, 2], [3, 4]]
+nested_c = [[1, 2], [3, 9]]
+if nested_a == nested_b:
+    ok("nested list equal")
+else:
+    fail("nested list equal", false)
+
+if not (nested_a == nested_c):
+    ok("nested list not-equal works")
+else:
+    fail("nested list not-equal works", true)
+
+# ------------------------------------------------------------
+# 27. Dict equality — structural
+# ------------------------------------------------------------
+print("\n=== 27. Structural dict equality ===")
+d1 = {"x": 1, "y": 2}
+d2 = {"x": 1, "y": 2}
+d3 = {"x": 1, "y": 99}
+d_empty1 = {}
+d_empty2 = {}
+
+if d1 == d2:
+    ok("identical dict contents are equal")
+else:
+    fail("identical dict contents are equal", false)
+
+if not (d1 == d3):
+    ok("different dict contents are not equal")
+else:
+    fail("different dict contents are not equal", true)
+
+if d_empty1 == d_empty2:
+    ok("two empty dicts are equal")
+else:
+    fail("two empty dicts are equal", false)
+
+# ------------------------------------------------------------
+# 28. Same-pointer list/dict is still equal to itself
+# ------------------------------------------------------------
+print("\n=== 28. Same-pointer identity still works ===")
+lst = [1, 2, 3]
+alias = lst
+if lst == alias:
+    ok("list alias pointer-equal")
+else:
+    fail("list alias pointer-equal", false)
+
+# ------------------------------------------------------------
+# 29. Cyclic list — must NOT crash (depth guard returns false)
+# ------------------------------------------------------------
+print("\n=== 29. Cyclic list equality — no crash ===")
+cyclic_ok = false
+try:
+    cyc = [1, 2, 3]
+    cyc.append(cyc)   # self-referential
+    cyc2 = [1, 2, 3]
+    cyc2.append(cyc2)
+    # This must not crash — depth guard should terminate it
+    result = cyc == cyc2
+    # Result may be true or false depending on depth-limit, both are acceptable
+    cyclic_ok = true   # the important thing: no crash/exception
+catch e:
+    cyclic_ok = true   # an exception is also acceptable (no crash)
+
+if cyclic_ok:
+    ok("cyclic list comparison does not crash")
+else:
+    fail("cyclic list comparison does not crash", "crashed")
+
+# ------------------------------------------------------------
+# 30. Deeply nested list — must NOT crash (depth guard)
+# ------------------------------------------------------------
+print("\n=== 30. Very deeply nested list equality — no crash ===")
+deep_ok = false
+try:
+    # Build a 300-deep nested list (beyond VALUE_EQUAL_MAX_DEPTH=200)
+    deep = [0]
+    n = 0
+    while n < 300:
+        n = n + 1
+        deep = [deep]
+    deep2 = [0]
+    m = 0
+    while m < 300:
+        m = m + 1
+        deep2 = [deep2]
+    result = deep == deep2   # must not segfault; depth guard kicks in
+    deep_ok = true
+catch e:
+    deep_ok = true   # exception is also fine
+
+if deep_ok:
+    ok("deeply nested list comparison does not crash")
+else:
+    fail("deeply nested list comparison does not crash", "crashed")
+
+# ============================================================
+print("\n============================================================")
+print("Results:", passed, "passed,", failed, "failed")
+if failed == 0:
+    print("ALL TESTS PASSED")
+else:
+    print("BUGS FOUND:", failed, "test(s) failed")
+print("============================================================")

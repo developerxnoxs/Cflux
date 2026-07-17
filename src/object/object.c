@@ -12,7 +12,12 @@
  * Value helpers (need object internals for printing)
  * ---------------------------------------------------------------------- */
 
-bool value_equal(Value a, Value b) {
+/* Maximum structural-equality recursion depth.  Beyond this limit two
+ * containers are considered not-equal rather than risking a stack overflow
+ * (handles cyclic structures and deeply nested containers). */
+#define VALUE_EQUAL_MAX_DEPTH 200
+
+static bool value_equal_depth(Value a, Value b, int depth) {
     if (a.type != b.type) {
         /* Allow int/float cross-comparison */
         if (value_is_number(a) && value_is_number(b))
@@ -24,11 +29,56 @@ bool value_equal(Value a, Value b) {
         case VAL_BOOL:   return a.as.boolean == b.as.boolean;
         case VAL_INT:    return a.as.integer  == b.as.integer;
         case VAL_FLOAT:  return a.as.floating == b.as.floating;
-        case VAL_OBJECT:
-            /* Strings are interned, so pointer equality suffices */
-            return a.as.object == b.as.object;
+        case VAL_OBJECT: {
+            FluxObject *oa = a.as.object;
+            FluxObject *ob = b.as.object;
+            /* Fast path: identical pointer (also handles self-referential cycles
+             * at the top level — a cyclic list compared to itself is equal). */
+            if (oa == ob) return true;
+            /* Strings are interned — different pointer means different string */
+            if (oa->type == OBJ_STRING) return false;
+            /* Depth guard: treat containers that are too deep as not-equal.
+             * This terminates traversal on cyclic or extremely nested structures
+             * without crashing the interpreter. */
+            if (depth >= VALUE_EQUAL_MAX_DEPTH) return false;
+            /* Structural equality for lists */
+            if (oa->type == OBJ_LIST && ob->type == OBJ_LIST) {
+                FluxList *la = (FluxList *)oa;
+                FluxList *lb = (FluxList *)ob;
+                if (la->elements.count != lb->elements.count) return false;
+                for (int i = 0; i < la->elements.count; i++) {
+                    if (!value_equal_depth(la->elements.data[i],
+                                           lb->elements.data[i],
+                                           depth + 1))
+                        return false;
+                }
+                return true;
+            }
+            /* Structural equality for dicts */
+            if (oa->type == OBJ_DICT && ob->type == OBJ_DICT) {
+                FluxDict *da = (FluxDict *)oa;
+                FluxDict *db = (FluxDict *)ob;
+                if (da->count != db->count) return false;
+                /* For every entry in da, look up the same key in db */
+                for (int i = 0; i < da->capacity; i++) {
+                    DictEntry *e = &da->entries[i];
+                    if (!e->key) continue;
+                    Value bval;
+                    if (!dict_get(db, e->key, &bval)) return false;
+                    if (!value_equal_depth(e->value, bval, depth + 1))
+                        return false;
+                }
+                return true;
+            }
+            /* All other object types: pointer identity */
+            return false;
+        }
     }
     return false;
+}
+
+bool value_equal(Value a, Value b) {
+    return value_equal_depth(a, b, 0);
 }
 
 void value_print(Value v) {

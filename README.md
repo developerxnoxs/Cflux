@@ -57,6 +57,13 @@ make -j$(nproc)
 
 # Jalankan semua unit test C
 make test
+
+# Jalankan test suite Flux (file .flx di direktori tests/)
+./build_make/flux tests/bug_hunt_error_handling.flx   # error handling — 38 skenario
+./build_make/flux tests/bug_hunt_closures.flx
+./build_make/flux tests/bug_hunt_classes.flx
+./build_make/flux tests/bug_hunt_scope.flx
+# dst. — semua file tests/bug_hunt_*.flx dan tests/test_*.flx
 ```
 
 Prasyarat: `gcc`/`cc` dan `make` (toolchain standar di kebanyakan sistem Linux/Unix; instal via package manager OS jika belum ada, mis. `apt install build-essential` di Debian/Ubuntu).
@@ -130,7 +137,7 @@ Aturan "truthy/falsy" (seperti Python): `""` (string kosong) dan `[]` (list koso
 | Kategori | Operator |
 |---|---|
 | Aritmatika | `+` `-` `*` `/` (hasil desimal) `//` (pembagian bulat) `%` `**` (pangkat) |
-| Perbandingan | `==` `!=` `<` `>` `<=` `>=` (angka maupun string, lexicographic) |
+| Perbandingan | `==` `!=` `<` `>` `<=` `>=` (angka dan string lexicographic; list dan dict: perbandingan struktural rekursif) |
 | Logika | `and` `or` `not` |
 | Bitwise | `&` (AND) `\|` (OR) `^` (XOR) `~` (NOT/complement) |
 | Pipeline | `\|>` (lihat [5.4](#54-pipeline-operator)) |
@@ -355,6 +362,48 @@ print(user.get("email", "tidak ada"))
 Metode list: `append`, `pop`, `len`, `insert`, `remove`, `contains`, `reverse`.
 Metode dict: `keys`, `values`, `has_key`, `get`.
 Metode string: `upper`, `lower`, `trim`/`strip`, `split`, `join`, `contains`, `starts_with`, `ends_with`, `replace`, `len`.
+
+### Perbandingan List dan Dictionary (`==` / `!=`)
+
+Operator `==` dan `!=` membandingkan list dan dict secara **struktural rekursif** — isi elemen dibandingkan satu per satu, bukan alamat memori.
+
+```flux
+# List
+a = [1, 2, 3]
+b = [1, 2, 3]
+print(a == b)          # true  — isi sama
+print(a == [1, 2, 4])  # false — isi berbeda
+print([] == [])        # true  — dua list kosong selalu sama
+
+# Nested list
+print([[1, 2], [3, 4]] == [[1, 2], [3, 4]])   # true
+print([[1, 2], [3, 4]] == [[1, 2], [3, 9]])   # false
+
+# Dictionary
+d1 = {"x": 1, "y": 2}
+d2 = {"x": 1, "y": 2}
+print(d1 == d2)   # true
+print(d1 == {"x": 1, "y": 99})   # false
+print({} == {})   # true
+
+# Variabel alias (pointer sama) selalu equal
+lst = [10, 20]
+alias = lst
+print(lst == alias)   # true
+```
+
+#### Aturan dan Batasan
+
+| Situasi | Perilaku |
+|---------|----------|
+| Dua list / dict berbeda objek tapi isi sama | `true` |
+| Dua list / dict isi berbeda | `false` |
+| Object lain (function, class, instance) | pointer identity — `true` hanya jika objek sama |
+| String | selalu pointer identity (string di-intern) |
+| List / dict bersarang sangat dalam (> 200 level) | `false` tanpa crash (depth guard) |
+| Struktur siklik (`lst.append(lst)`) | tidak crash; depth guard menghentikan traversal |
+
+> **Catatan:** Batas kedalaman rekursi ekualitas adalah **200 level**. Struktur yang lebih dalam dari itu dianggap tidak sama secara konservatif untuk mencegah stack overflow.
 
 ---
 
@@ -807,6 +856,135 @@ try:
     _ = daftar[99]      # error: index out of range
 catch e:
     print("Index error:", e)
+```
+
+### Aturan Pemakaian
+
+#### `finally` selalu dieksekusi
+
+`finally` dijamin berjalan dalam **semua** jalur keluar dari blok `try` — termasuk `return`, `break`, dan `continue`:
+
+```flux
+func baca_file(path):
+    f = buka(path)
+    try:
+        return proses(f)   # return di sini ...
+    finally:
+        f.tutup()          # ... tetap memanggil finally sebelum benar-benar return
+
+# break dalam loop
+i = 0
+while i < 5:
+    i = i + 1
+    try:
+        if i == 3:
+            break          # break di sini ...
+    finally:
+        catat(i)           # ... tetap dipanggil sebelum keluar loop
+
+# continue dalam loop
+j = 0
+while j < 3:
+    j = j + 1
+    try:
+        if j == 2:
+            continue       # continue di sini ...
+    finally:
+        catat(j)           # ... tetap dipanggil di setiap iterasi
+```
+
+#### `raise` di dalam `finally`
+
+Jika `finally` melempar exception, exception itu **menggantikan** exception asli yang sedang dalam perjalanan:
+
+```flux
+try:
+    try:
+        raise "original"
+    finally:
+        raise "dari_finally"   # exception ini yang akan diterima catch luar
+catch e:
+    print(e)   # "dari_finally"
+```
+
+#### Scope variabel `catch`
+
+Variabel yang dideklarasikan dalam `catch e:` hanya hidup **di dalam blok catch** — tidak bocor ke scope luar:
+
+```flux
+try:
+    raise "terjadi error"
+catch err:
+    print(err)   # "terjadi error" — hanya bisa diakses di sini
+
+# print(err)   # Error: Undefined variable 'err'
+```
+
+#### `raise` tanpa argumen
+
+`raise` tanpa argumen hanya valid **di dalam blok `catch`** — ia melempar ulang exception yang sedang ditangani:
+
+```flux
+try:
+    operasi_berisiko()
+catch e:
+    log_error(e)
+    raise        # propagate ulang ke caller dengan nilai yang sama
+
+# raise tanpa argumen di luar catch → RuntimeError: no active exception to re-raise
+```
+
+#### Nesting `try` dalam fungsi rekursif
+
+`try/catch` aman dipakai dalam fungsi rekursif — setiap call frame memiliki handler-nya sendiri dan exception di-unwind frame per frame:
+
+```flux
+func recursive_try(n):
+    if n == 0:
+        raise "base"
+    try:
+        recursive_try(n - 1)
+    catch e:
+        raise e + "_up"
+
+try:
+    recursive_try(3)
+catch e:
+    print(e)   # "base_up_up_up"
+```
+
+#### Ringkasan aturan
+
+| Situasi | Perilaku |
+|---------|----------|
+| `finally` + tidak ada exception | `finally` jalan, eksekusi lanjut normal |
+| `finally` + ada exception, ada `catch` | `finally` jalan → `catch` menangkap exception |
+| `finally` + ada exception, tidak ada `catch` | `finally` jalan → exception propagate ke caller |
+| `return` / `break` / `continue` di dalam `try` | `finally` jalan terlebih dahulu |
+| `raise` di dalam `finally` | menggantikan exception asli |
+| `raise` di dalam `catch` | `finally` (jika ada) jalan, lalu exception propagate |
+| `raise` (bare) di dalam `catch` | melempar ulang exception yang sedang ditangani |
+| `raise` (bare) di luar `catch` | melempar `RuntimeError: no active exception to re-raise` |
+| Variabel `catch e` | hanya hidup di dalam blok catch |
+| Nesting `try` maksimal | dibatasi oleh `FLUX_TRY_DEPTH_MAX` (default 64); melebihi batas → runtime error |
+
+### Menjalankan Test Suite Error Handling
+
+Suite pengujian error handling tersedia di `tests/bug_hunt_error_handling.flx` dan mencakup 38 skenario:
+
+```bash
+./build_make/flux tests/bug_hunt_error_handling.flx
+```
+
+Contoh output yang diharapkan:
+
+```
+[PASS] finally ran before propagation
+[PASS] return value correct after try/finally
+[PASS] finally ran on return from try
+...
+Results: 38 passed, 0 failed
+ALL TESTS PASSED
 ```
 
 ---

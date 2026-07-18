@@ -266,7 +266,7 @@ else:
 
 ### match
 
-`match` adalah ekspresi switch/case yang mencocokkan nilai secara eksak. `_` adalah wildcard (default).
+`match` adalah ekspresi switch/case yang mencocokkan nilai secara eksak. `_` adalah wildcard (default). **Setiap arm harus ditulis dalam blok indented — tidak bisa satu baris.**
 
 ```flux
 func http_status(code):
@@ -283,7 +283,7 @@ func http_status(code):
 print(http_status(200))   # OK
 print(http_status(999))   # Unknown
 
-# match dengan enum
+# match dengan string
 func day_type(day):
     match day:
         "Saturday":
@@ -292,6 +292,9 @@ func day_type(day):
             return "weekend"
         _:
             return "weekday"
+
+print(day_type("Saturday"))   # weekend
+print(day_type("Monday"))     # weekday
 ```
 
 ### while
@@ -345,6 +348,8 @@ print(i)   # 5
 ## 5. Fungsi
 
 ### Fungsi Biasa
+
+> **Catatan:** Body fungsi **harus selalu ditulis di baris baru dengan indentasi**. Sintaksis satu baris `func f(x): return x` **tidak valid** di Flux.
 
 ```flux
 # Deklarasi fungsi
@@ -452,16 +457,23 @@ print(add5(3))   # 8
 Operator `|>` meneruskan nilai di sebelah kiri sebagai argumen pertama ke fungsi di sebelah kanan.
 
 ```flux
-func double(x):  return x * 2
-func inc(x):     return x + 1
-func to_str(x):  return str(x)
+func double(x):
+    return x * 2
+
+func inc(x):
+    return x + 1
+
+func to_str(x):
+    return str(x)
+
+func add(a, b):
+    return a + b
 
 # Chaining sederhana
 result = 4 |> double |> inc |> to_str
 print(result)   # "9"
 
 # Pipeline dengan fungsi yang butuh argumen tambahan
-func add(a, b): return a + b
 print(10 |> add(5))   # 15   (10 jadi argumen pertama, 5 jadi kedua)
 
 # Pipeline dengan lambda
@@ -542,7 +554,6 @@ nums.append(6)
 for x in nums:
     print(x)
 
-# Slice (jika didukung)
 # Fungsi built-in untuk list
 doubled = map(nums, |x| => x * 2)
 evens   = filter(nums, |x| => x % 2 == 0)
@@ -701,7 +712,9 @@ with Timer("block2") as t:
 # equals — operator ==
 class Color:
     func init(r, g, b):
-        self.r = r; self.g = g; self.b = b
+        self.r = r
+        self.g = g
+        self.b = b
     func equals(other):
         return self.r == other.r and self.g == other.g and self.b == other.b
 
@@ -980,10 +993,10 @@ print(pow(2, 10))     # 1024.0
 print(floor(3.9))     # 3
 print(ceil(3.1))      # 4
 print(log2(8))        # 3.0
-print(degrees(3.14159265358979 / 2))  # 90.0
+print(degrees(3.14159265358979 / 2))  # 90
 print(gcd(12, 8))     # 4
-print(pi)             # 3.14159...
-print(tau)            # 6.28318...
+print(pi)             # 3.14159
+print(tau)            # 6.28319
 print(isinf(inf))     # true
 ```
 

@@ -12,6 +12,7 @@ Flux adalah bahasa pemrograman modern yang diimplementasikan dalam C. Flux memil
    - [Variabel](#variabel)
    - [Tipe Data](#tipe-data)
    - [Operator](#operator)
+   - [Operator Ternary](#operator-ternary)
    - [String & F-string](#string--f-string)
 4. [Struktur Kontrol](#4-struktur-kontrol)
    - [if / elif / else](#if--elif--else)
@@ -205,6 +206,28 @@ x += 5   # x = 15
 x -= 3   # x = 12
 x *= 2   # x = 24
 x /= 4   # x = 6.0
+```
+
+### Operator Ternary
+
+Operator ternary memungkinkan ekspresi kondisional ringkas dalam satu baris dengan sintaksis `kondisi ? nilai_jika_benar : nilai_jika_salah`.
+
+```flux
+x = 10
+print(x > 5 ? "besar" : "kecil")   # besar
+
+# Ternary dalam penugasan
+a = 3
+b = 7
+maks = a > b ? a : b
+print(maks)   # 7
+
+# Ternary sebagai argumen fungsi
+print(str(x > 0 ? x : -x))   # nilai absolut
+
+# Ternary bersarang (right-associative)
+y = 0
+print(y > 0 ? "positif" : y < 0 ? "negatif" : "nol")   # nol
 ```
 
 ### String & F-string

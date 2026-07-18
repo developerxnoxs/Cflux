@@ -43,6 +43,11 @@ make clean
 - `tests/` — test suite (.flx dan .c)
 - `build_make/` — output build (dibuat oleh `make all`)
 
+## Fitur Bahasa & Modul
+
+- **Operator ternary**: `kondisi ? nilai_jika_benar : nilai_jika_salah`
+- **Modul socket** (`stdlib/socket/`): TCP client/server, UDP, raw socket, DNS resolve, select — semua fungsi kembalikan `{ok, error, ...}` sehingga error tidak pernah diam-diam hilang
+
 ## Perubahan Terbaru
 
 - **Sintaksis class**: Konstruktor kini menggunakan `func __init__(...)` (Python-style). Compiler juga menerima `func init(...)` sebagai alias untuk kompatibilitas mundur.

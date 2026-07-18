@@ -34,11 +34,12 @@ Flux adalah bahasa pemrograman modern yang diimplementasikan dalam C. Flux memil
 11. [Penanganan Error (try / catch / finally / raise)](#11-penanganan-error-try--catch--finally--raise)
 12. [Sistem Import Modul](#12-sistem-import-modul)
 13. [Standard Library](#13-standard-library)
-14. [FFI — Import dan Panggil Library C Native](#14-ffi--import-dan-panggil-library-c-native)
-15. [Ekstensi Native (.so Plugin)](#15-ekstensi-native-so-plugin)
-16. [Embed libflux ke Program C](#16-embed-libflux-ke-program-c)
-17. [Struktur Proyek](#17-struktur-proyek)
-18. [Arsitektur Internal](#18-arsitektur-internal)
+14. [Modul Socket](#14-modul-socket)
+15. [FFI — Import dan Panggil Library C Native](#15-ffi--import-dan-panggil-library-c-native)
+16. [Ekstensi Native (.so Plugin)](#16-ekstensi-native-so-plugin)
+17. [Embed libflux ke Program C](#17-embed-libflux-ke-program-c)
+18. [Struktur Proyek](#18-struktur-proyek)
+19. [Arsitektur Internal](#19-arsitektur-internal)
 
 ---
 
@@ -1157,7 +1158,178 @@ print(...)                   # cetak ke stdout
 
 ---
 
-## 14. FFI — Import dan Panggil Library C Native
+## 14. Modul Socket
+
+Modul `socket` menyediakan TCP, UDP, dan raw socket. Semua fungsi mengembalikan dict `{ok: bool, error: string, ...}` sehingga error selalu terlihat — tidak ada hang diam-diam, SIGPIPE, atau segfault.
+
+**Prinsip keamanan bawaan:**
+- Timeout default 30 detik pada setiap socket (bisa diubah dengan `set_timeout`)
+- `tcp_accept` menggunakan `select()` — tidak pernah hang selamanya
+- `send`/`sendto` menggunakan `MSG_NOSIGNAL` — tidak dibunuh saat remote tutup koneksi
+- Buffer size dibatasi 64 MB
+- Setiap syscall dicek hasilnya dan error dilaporkan lewat field `error`
+
+### TCP Client
+
+```flux
+import socket
+
+# Buka koneksi TCP
+r = socket.tcp_connect("example.com", 80)
+if not r["ok"]:
+    print("Gagal: " + r["error"])
+else:
+    fd = r["fd"]
+
+    # Kirim request HTTP
+    req = "GET / HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n\r\n"
+    sent = socket.send(fd, req)
+    print("Terkirim: " + str(sent["nbytes"]) + " byte")
+
+    # Terima semua response hingga koneksi ditutup
+    resp = socket.recv_all(fd)
+    print("Diterima: " + str(resp["nbytes"]) + " byte")
+    print(resp["data"])
+
+    socket.close(fd)
+```
+
+### TCP Server
+
+```flux
+import socket
+
+srv = socket.tcp_listen("0.0.0.0", 8080)
+if not srv["ok"]:
+    print("listen gagal: " + srv["error"])
+else:
+    print("Server berjalan di port 8080")
+
+    while true:
+        # Tunggu koneksi masuk (timeout 60 detik)
+        client = socket.tcp_accept(srv["fd"], 60)
+        if not client["ok"]:
+            print("timeout atau error: " + client["error"])
+            break
+
+        print("Koneksi dari " + client["addr"] + ":" + str(client["port"]))
+
+        # Terima data
+        data = socket.recv(client["fd"], 4096)
+        if data["ok"] and data["nbytes"] > 0:
+            print("Data: " + data["data"])
+            socket.send(client["fd"], "Halo dari Flux!\r\n")
+
+        socket.close(client["fd"])
+
+    socket.close(srv["fd"])
+```
+
+### UDP
+
+```flux
+import socket
+
+# UDP sender
+s = socket.udp_socket()
+socket.udp_sendto(s["fd"], "ping", "127.0.0.1", 5005)
+socket.close(s["fd"])
+
+# UDP receiver
+r = socket.udp_socket()
+socket.udp_bind(r["fd"], "0.0.0.0", 5005)
+pkt = socket.udp_recvfrom(r["fd"], 1024)
+if pkt["ok"]:
+    print("Dari " + pkt["addr"] + ":" + str(pkt["port"]) + " → " + pkt["data"])
+socket.close(r["fd"])
+```
+
+### Raw Socket
+
+```flux
+import socket
+
+# Butuh CAP_NET_RAW atau root
+raw = socket.raw_socket(socket.IPPROTO_ICMP)
+if not raw["ok"]:
+    print("Gagal: " + raw["error"])   # biasanya "Operation not permitted"
+else:
+    fd = raw["fd"]
+    # Kirim paket ICMP (header IP sudah termasuk karena IP_HDRINCL aktif)
+    socket.raw_sendto(fd, paket_bytes, "8.8.8.8")
+
+    # Terima — hasil termasuk IP header
+    pkt = socket.raw_recv(fd, 65535)
+    if pkt["ok"]:
+        print("Dari: " + pkt["src_addr"] + " (" + str(pkt["nbytes"]) + " byte)")
+    socket.close(fd)
+```
+
+### Utilitas
+
+```flux
+import socket
+
+# Resolve hostname ke IPv4
+ip = socket.resolve("google.com")
+print(ip)   # "142.250.x.x"
+
+# Periksa beberapa fd sekaligus (non-blocking)
+ready_fds = socket.select([fd1, fd2, fd3], 5)   # timeout 5 detik
+
+# Ubah timeout
+socket.set_timeout(fd, 10)          # 10 detik
+
+# Non-blocking mode (recv kembalikan error EAGAIN jika belum ada data)
+socket.set_nonblocking(fd, true)
+
+# Tutup dengan bersih
+socket.shutdown(fd, socket.SHUT_RDWR)
+socket.close(fd)
+```
+
+### Referensi Fungsi
+
+| Fungsi | Deskripsi | Nilai kembalian |
+|--------|-----------|-----------------|
+| `tcp_connect(host, port [, timeout])` | Buka koneksi TCP | `{ok, fd, error}` |
+| `tcp_listen(host, port [, backlog])` | Buat TCP server | `{ok, fd, error}` |
+| `tcp_accept(fd [, timeout])` | Terima koneksi masuk | `{ok, fd, addr, port, error}` |
+| `send(fd, data)` | Kirim data (loop sampai selesai) | `{ok, nbytes, error}` |
+| `recv(fd, bufsize)` | Terima hingga bufsize byte | `{ok, data, nbytes, error}` |
+| `recv_all(fd [, chunk])` | Terima semua hingga koneksi ditutup | `{ok, data, nbytes, error}` |
+| `udp_socket()` | Buat UDP socket | `{ok, fd, error}` |
+| `udp_bind(fd, host, port)` | Bind UDP ke alamat lokal | `{ok, error}` |
+| `udp_sendto(fd, data, host, port)` | Kirim datagram UDP | `{ok, nbytes, error}` |
+| `udp_recvfrom(fd, bufsize)` | Terima datagram UDP | `{ok, data, nbytes, addr, port, error}` |
+| `raw_socket(protocol)` | Buat raw socket (butuh root) | `{ok, fd, error}` |
+| `raw_sendto(fd, data, host)` | Kirim raw packet | `{ok, nbytes, error}` |
+| `raw_recv(fd, bufsize)` | Terima raw packet + IP header | `{ok, data, nbytes, src_addr, error}` |
+| `close(fd)` | Tutup socket | `bool` |
+| `shutdown(fd, how)` | Shutdown socket | `bool` |
+| `set_timeout(fd, detik)` | Ubah timeout recv/send | `bool` |
+| `set_nonblocking(fd, aktif)` | Aktifkan mode non-blocking | `bool` |
+| `set_reuseaddr(fd, aktif)` | Aktifkan SO_REUSEADDR | `bool` |
+| `resolve(host)` | DNS lookup ke IPv4 | `string \| null` |
+| `getpeername(fd)` | Alamat remote | `{ok, addr, port, error}` |
+| `getsockname(fd)` | Alamat lokal | `{ok, addr, port, error}` |
+| `select(fds, timeout)` | Cek fd mana yang siap dibaca | `list` |
+
+**Konstanta:**
+
+| Nama | Nilai | Keterangan |
+|------|-------|------------|
+| `IPPROTO_ICMP` | 1 | Protocol ICMP (ping) |
+| `IPPROTO_TCP` | 6 | Protocol TCP |
+| `IPPROTO_UDP` | 17 | Protocol UDP |
+| `IPPROTO_RAW` | 255 | Raw IP |
+| `SHUT_RD` | 0 | Shutdown sisi read |
+| `SHUT_WR` | 1 | Shutdown sisi write |
+| `SHUT_RDWR` | 2 | Shutdown keduanya |
+
+---
+
+## 15. FFI — Import dan Panggil Library C Native
 
 Modul `native` memungkinkan Flux memanggil fungsi dari shared library (`.so`) secara langsung.
 
@@ -1193,7 +1365,7 @@ close(libc)
 
 ---
 
-## 15. Ekstensi Native (.so Plugin)
+## 16. Ekstensi Native (.so Plugin)
 
 Ekstensi native adalah shared library C yang mengimplementasikan modul Flux. Contoh tersedia di `extension/postgresql/`.
 
@@ -1242,7 +1414,7 @@ Hasilnya: `extension/postgresql/libpostgresql.so`
 
 ---
 
-## 16. Embed libflux ke Program C
+## 17. Embed libflux ke Program C
 
 `libflux` tersedia sebagai static library (`libflux.a`) dan shared library (`libflux.so`).
 
@@ -1281,7 +1453,7 @@ gcc -Iinclude -o myapp myapp.c -L./build_make -lflux -lm -ldl -luv
 
 ---
 
-## 17. Struktur Proyek
+## 18. Struktur Proyek
 
 ```
 flux/
@@ -1339,7 +1511,7 @@ flux/
 
 ---
 
-## 18. Arsitektur Internal
+## 19. Arsitektur Internal
 
 Flux diimplementasikan sebagai **bytecode-compiled, stack-based virtual machine** dengan komponen berikut:
 

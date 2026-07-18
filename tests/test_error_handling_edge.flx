@@ -1,0 +1,442 @@
+# ============================================================
+# Edge-case tests for Flux error handling
+# Covers gaps not in bug_hunt_error_handling.flx
+# ============================================================
+
+passed = 0
+failed = 0
+
+func ok(label):
+    nonlocal passed
+    passed = passed + 1
+    print("[PASS]", label)
+
+func fail(label, got):
+    nonlocal failed
+    failed = failed + 1
+    print("[FAIL]", label, "| got:", got)
+
+# ------------------------------------------------------------
+# 1. catch: without variable (unnamed catch)
+# ------------------------------------------------------------
+print("\n=== 1. unnamed catch: (no variable) ===")
+caught = false
+try:
+    raise "unnamed_test"
+catch:
+    caught = true
+
+if caught:
+    ok("unnamed catch executes body")
+else:
+    fail("unnamed catch executes body", caught)
+
+# ------------------------------------------------------------
+# 2. bare raise inside unnamed catch re-raises correctly
+# ------------------------------------------------------------
+print("\n=== 2. bare raise inside unnamed catch ===")
+outer_val = null
+try:
+    try:
+        raise "reraise_test"
+    catch:
+        raise   # should re-raise "reraise_test"
+catch e:
+    outer_val = e
+
+if outer_val == "reraise_test":
+    ok("bare raise in unnamed catch re-raises original")
+else:
+    fail("bare raise in unnamed catch re-raises original", outer_val)
+
+# ------------------------------------------------------------
+# 3. finally with return — return value wins, exception suppressed
+# ------------------------------------------------------------
+print("\n=== 3. return inside finally suppresses exception ===")
+func test_finally_return():
+    try:
+        raise "should_be_suppressed"
+    finally:
+        return "finally_wins"
+
+val = test_finally_return()
+if val == "finally_wins":
+    ok("return in finally suppresses exception and returns correct value")
+else:
+    fail("return in finally suppresses exception and returns correct value", val)
+
+# ------------------------------------------------------------
+# 4. finally with return on the normal (non-exception) path
+# ------------------------------------------------------------
+print("\n=== 4. return inside finally on normal path ===")
+func test_finally_return_normal():
+    try:
+        x = 1
+    finally:
+        return "from_finally_normal"
+
+val2 = test_finally_return_normal()
+if val2 == "from_finally_normal":
+    ok("return in finally on normal path returns correct value")
+else:
+    fail("return in finally on normal path returns correct value", val2)
+
+# ------------------------------------------------------------
+# 5. Exception in for-loop iterator expression caught by outer try
+# ------------------------------------------------------------
+print("\n=== 5. exception during for-loop body caught ===")
+caught5 = false
+sum5 = 0
+try:
+    for i in [1, 2, 3]:
+        if i == 2:
+            raise "stop"
+        sum5 = sum5 + i
+catch e:
+    caught5 = true
+
+if caught5 and sum5 == 1:
+    ok("exception in for-loop body caught by outer try")
+else:
+    fail("exception in for-loop body caught by outer try", [caught5, sum5])
+
+# ------------------------------------------------------------
+# 6. Nested try/catch/finally — all finallys run on exception
+# ------------------------------------------------------------
+print("\n=== 6. nested try/finally — both finallys run on exception ===")
+log6 = []
+try:
+    try:
+        try:
+            raise "deep"
+        finally:
+            log6 = log6 + ["inner_finally"]
+    finally:
+        log6 = log6 + ["outer_finally"]
+catch e:
+    log6 = log6 + ["caught"]
+
+expected6 = ["inner_finally", "outer_finally", "caught"]
+if log6 == expected6:
+    ok("nested finally runs in correct order on exception")
+else:
+    fail("nested finally runs in correct order on exception", log6)
+
+# ------------------------------------------------------------
+# 7. Exception class — catch catches custom class instance
+# Note: Flux method syntax does NOT include explicit 'self' in params;
+#       self is implicit at slot 0. Use 'init' or '__init__' as name.
+# ------------------------------------------------------------
+print("\n=== 7. catching custom class instance ===")
+class MyError:
+    func __init__(msg):
+        self.message = msg
+
+caught7 = false
+msg7 = null
+try:
+    raise MyError("custom_error")
+catch e:
+    caught7 = true
+    msg7 = e.message
+
+if caught7 and msg7 == "custom_error":
+    ok("custom class instance caught and message accessible")
+else:
+    fail("custom class instance caught and message accessible", [caught7, msg7])
+
+# ------------------------------------------------------------
+# 8. Exception during init propagates out of constructor
+# ------------------------------------------------------------
+print("\n=== 8. exception in init propagates ===")
+class BadInit:
+    func __init__():
+        raise "init_failed"
+
+caught8 = false
+try:
+    b = BadInit()
+catch e:
+    caught8 = true
+
+if caught8:
+    ok("exception in __init__ propagates out of constructor")
+else:
+    fail("exception in __init__ propagates out of constructor", caught8)
+
+# ------------------------------------------------------------
+# 9. Re-raise from named catch — loads current value of catch var
+# ------------------------------------------------------------
+print("\n=== 9. re-raise propagates value stored in catch var ===")
+outer9 = null
+try:
+    try:
+        raise "original_val"
+    catch err:
+        raise   # re-raise current value of err
+catch e:
+    outer9 = e
+
+if outer9 == "original_val":
+    ok("re-raise from named catch propagates correct value")
+else:
+    fail("re-raise from named catch propagates correct value", outer9)
+
+# ------------------------------------------------------------
+# 10. Multiple sequential try/catch — handler count doesn't leak
+# ------------------------------------------------------------
+print("\n=== 10. handler count clean after exception path ===")
+results10 = []
+i10 = 0
+while i10 < 5:
+    i10 = i10 + 1
+    try:
+        if i10 % 2 == 0:
+            raise "even"
+    catch e:
+        results10 = results10 + [e]
+
+if results10 == ["even", "even"]:
+    ok("handler count stays clean across mixed pass/fail iterations")
+else:
+    fail("handler count stays clean across mixed pass/fail iterations", results10)
+
+# ------------------------------------------------------------
+# 11. Exception inside finally on normal path propagates
+# ------------------------------------------------------------
+print("\n=== 11. exception in finally (normal path) propagates ===")
+caught11 = false
+val11 = null
+try:
+    try:
+        x = 1  # no exception
+    finally:
+        raise "from_finally_11"
+catch e:
+    caught11 = true
+    val11 = e
+
+if caught11 and val11 == "from_finally_11":
+    ok("exception in finally on normal path propagates to outer catch")
+else:
+    fail("exception in finally on normal path propagates to outer catch", [caught11, val11])
+
+# ------------------------------------------------------------
+# 12. Exception in finally on exception path replaces original
+# ------------------------------------------------------------
+print("\n=== 12. exception in finally replaces original exception ===")
+val12 = null
+try:
+    try:
+        raise "original_12"
+    finally:
+        raise "from_finally_12"
+catch e:
+    val12 = e
+
+if val12 == "from_finally_12":
+    ok("exception in finally replaces original exception")
+else:
+    fail("exception in finally replaces original exception", val12)
+
+# ------------------------------------------------------------
+# 13. try/catch inside a closure captures exception correctly
+# ------------------------------------------------------------
+print("\n=== 13. try/catch inside closure ===")
+func make_catcher(target):
+    func catcher():
+        try:
+            raise target
+        catch e:
+            return e
+    return catcher
+
+c13 = make_catcher("closure_exc")
+val13 = c13()
+if val13 == "closure_exc":
+    ok("try/catch inside closure works correctly")
+else:
+    fail("try/catch inside closure works correctly", val13)
+
+# ------------------------------------------------------------
+# 14. Exception propagates through multiple call frames
+# ------------------------------------------------------------
+print("\n=== 14. exception propagates through multiple call frames ===")
+func deep3():
+    raise "deep_exc"
+
+func deep2():
+    deep3()
+
+func deep1():
+    deep2()
+
+val14 = null
+try:
+    deep1()
+catch e:
+    val14 = e
+
+if val14 == "deep_exc":
+    ok("exception propagates through 3 call frames")
+else:
+    fail("exception propagates through 3 call frames", val14)
+
+# ------------------------------------------------------------
+# 15. try with only finally (no catch) re-raises on exception
+# ------------------------------------------------------------
+print("\n=== 15. try+finally only re-raises exception ===")
+log15 = []
+val15 = null
+try:
+    try:
+        raise "reraise_15"
+    finally:
+        log15 = log15 + ["finally_ran"]
+catch e:
+    val15 = e
+
+if log15 == ["finally_ran"] and val15 == "reraise_15":
+    ok("try+finally re-raises exception correctly")
+else:
+    fail("try+finally re-raises exception correctly", [log15, val15])
+
+# ------------------------------------------------------------
+# 16. Catch variable is null before exception, set after
+# ------------------------------------------------------------
+print("\n=== 16. catch variable scoping — before/during/after ===")
+exc_during = null
+try:
+    raise "scope_test"
+catch err:
+    exc_during = err
+
+if exc_during == "scope_test":
+    ok("catch variable has correct value during catch body")
+else:
+    fail("catch variable has correct value during catch body", exc_during)
+
+# 'err' should not be visible here — test that it raises a runtime error
+visible = false
+try:
+    _ = err
+    visible = true
+catch:
+    pass
+
+if not visible:
+    ok("catch variable not visible after catch block")
+else:
+    fail("catch variable not visible after catch block", visible)
+
+# ------------------------------------------------------------
+# 17. Raise inside a method propagates to caller's try
+# ------------------------------------------------------------
+print("\n=== 17. exception from method propagates to caller's try ===")
+# Both Flux-style (no self) and Python-style (explicit self) must work
+class Thrower:
+    func __init__(self, label):
+        self.label = label
+    func boom(self, msg):
+        raise self.label + ":" + msg
+    func silent():
+        return "ok"
+
+t = Thrower("T")
+val17 = null
+try:
+    t.boom("method_exc")
+catch e:
+    val17 = e
+
+if val17 == "T:method_exc":
+    ok("exception from Python-style method propagates to caller try/catch")
+else:
+    fail("exception from Python-style method propagates to caller try/catch", val17)
+
+if t.silent() == "ok":
+    ok("no-self method still works alongside Python-style methods")
+else:
+    fail("no-self method still works alongside Python-style methods", t.silent())
+
+# ------------------------------------------------------------
+# 18. Raise integer, list, dict — non-string, non-Error values
+# ------------------------------------------------------------
+print("\n=== 18. raise various value types ===")
+val18a = null
+try:
+    raise 42
+catch e:
+    val18a = e
+
+val18b = null
+try:
+    raise [1, 2, 3]
+catch e:
+    val18b = e
+
+val18c = null
+try:
+    raise {"key": "val"}
+catch e:
+    val18c = e
+
+if val18a == 42:
+    ok("raise integer caught correctly")
+else:
+    fail("raise integer caught correctly", val18a)
+
+if val18b == [1, 2, 3]:
+    ok("raise list caught correctly")
+else:
+    fail("raise list caught correctly", val18b)
+
+if val18c != null and val18c["key"] == "val":
+    ok("raise dict caught correctly")
+else:
+    fail("raise dict caught correctly", val18c)
+
+# ------------------------------------------------------------
+# 19. Handler count is correct after max-depth nesting (no leak)
+# ------------------------------------------------------------
+print("\n=== 19. no handler leak after deep nesting ===")
+func deep_try(n):
+    if n == 0:
+        return "ok"
+    try:
+        return deep_try(n - 1)
+    catch e:
+        return "caught:" + e
+
+val19 = deep_try(20)
+if val19 == "ok":
+    ok("no handler leak with 20 levels of try/catch nesting")
+else:
+    fail("no handler leak with 20 levels of try/catch nesting", val19)
+
+# ------------------------------------------------------------
+# 20. Exception raised in catch body propagates to outer catch
+# ------------------------------------------------------------
+print("\n=== 20. exception raised in catch body — outer catch gets it ===")
+val20 = null
+try:
+    try:
+        raise "first"
+    catch e1:
+        raise "second"   # raised inside catch body
+catch e2:
+    val20 = e2
+
+if val20 == "second":
+    ok("exception from catch body caught by outer try")
+else:
+    fail("exception from catch body caught by outer try", val20)
+
+# ============================================================
+print("\n============================================================")
+print("Results:", passed, "passed,", failed, "failed")
+if failed == 0:
+    print("ALL TESTS PASSED")
+else:
+    print("SOME TESTS FAILED")
+print("============================================================")

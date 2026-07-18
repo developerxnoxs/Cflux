@@ -845,6 +845,7 @@ static Value value_add(FluxVM *vm, Value a, Value b) {
         return value_object((FluxObject *)s);
     }
     return value_null(); /* signal error */
+    /* NOTE: list + list is handled directly in OP_ADD with GC protection. */
 }
 
 #define NUMERIC_BINOP(op_int, op_float) \
@@ -1491,6 +1492,36 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
 
             /* ---- Arithmetic --------------------------------------- */
             case OP_ADD: {
+                /* List concatenation: handled before popping so a and b
+                 * remain on the VM stack as GC roots during allocation. */
+                if (IS_LIST(vm_peek(vm, 1)) && IS_LIST(vm_peek(vm, 0))) {
+                    /* a = TOS-1, b = TOS — both still on stack (GC-safe) */
+                    FluxList *result = object_list_new(vm);
+                    /* Push result to root it before any further alloc */
+                    vm_push(vm, value_object((FluxObject *)result));
+                    /* Re-read a/b and result after the push (stack may have
+                     * been reallocated; object pointers stable under mark-sweep) */
+                    FluxList *la = AS_LIST(vm_peek(vm, 2)); /* a */
+                    FluxList *lb = AS_LIST(vm_peek(vm, 1)); /* b */
+                    result       = AS_LIST(vm_peek(vm, 0)); /* result */
+                    int na = la->elements.count;
+                    int nb = lb->elements.count;
+                    for (int i = 0; i < na; i++) {
+                        gc_value_array_write(vm, &result->elements,
+                                             AS_LIST(vm_peek(vm, 2))->elements.data[i]);
+                        result = AS_LIST(vm_peek(vm, 0)); /* refresh after alloc */
+                    }
+                    for (int i = 0; i < nb; i++) {
+                        gc_value_array_write(vm, &result->elements,
+                                             AS_LIST(vm_peek(vm, 1))->elements.data[i]);
+                        result = AS_LIST(vm_peek(vm, 0)); /* refresh after alloc */
+                    }
+                    Value list_val = vm_pop(vm); /* pop protected result */
+                    vm_pop(vm);                  /* pop b */
+                    vm_pop(vm);                  /* pop a */
+                    vm_push(vm, list_val);
+                    break;
+                }
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
                 Value r = value_add(vm, a, b);

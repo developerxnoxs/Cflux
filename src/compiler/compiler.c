@@ -1586,16 +1586,30 @@ static void compile_node(Compiler *c, AstNode *node) {
 
                 const char   *mname  = stmt->as.func_def.name;
                 AstParamList *params = &stmt->as.func_def.params;
-                bool is_init = strcmp(mname, "init") == 0;
+                /* Treat __init__ as an alias for init (Python-style compatibility) */
+                bool is_init = strcmp(mname, "init") == 0 ||
+                               strcmp(mname, "__init__") == 0;
+                const char *emit_mname = is_init ? "init" : mname;
                 FuncKind mk  = is_init ? FUNC_INIT :
                                (stmt->as.func_def.is_async ? FUNC_ASYNC : FUNC_METHOD);
 
+                /* If the first param is "self", skip it: slot 0 is already reserved
+                 * for the receiver by frame_init, so an explicit "self" would shift
+                 * all subsequent params by one and cause arity mismatches. */
+                int param_start = 0;
+                if (params->count > 0) {
+                    int plen = params->data[0].name.length;
+                    const char *pstart = params->data[0].name.start;
+                    if (plen == 4 && strncmp(pstart, "self", 4) == 0)
+                        param_start = 1;
+                }
+
                 CompilerFrame mf;
-                frame_init(c, &mf, mk, mname, (int)strlen(mname));
+                frame_init(c, &mf, mk, emit_mname, (int)strlen(emit_mname));
                 scope_begin(c);
-                c->frame->function->arity = params->count;
+                c->frame->function->arity = params->count - param_start;
                 /* slot 0 = self (already reserved in frame_init) */
-                for (int j = 0; j < params->count; j++)
+                for (int j = param_start; j < params->count; j++)
                     add_local_tok(c, params->data[j].name.start,
                                      params->data[j].name.length, stmt->line);
                 compile_node(c, stmt->as.func_def.body);
@@ -1617,7 +1631,7 @@ static void compile_node(Compiler *c, AstNode *node) {
                 }
 
                 emit_byte(c, OP_METHOD, line);
-                emit_uint16(c, identifier_constant(c, mname, (int)strlen(mname), line), line);
+                emit_uint16(c, identifier_constant(c, emit_mname, (int)strlen(emit_mname), line), line);
             }
 
             emit_byte(c, OP_POP, line); /* pop class from stack */
@@ -1886,15 +1900,28 @@ static void compile_node(Compiler *c, AstNode *node) {
 
                 const char   *mn  = s->as.func_def.name;
                 AstParamList *mp  = &s->as.func_def.params;
-                bool is_init      = strcmp(mn, "init") == 0;
+                /* Treat __init__ as an alias for init (Python-style compatibility) */
+                bool is_init      = strcmp(mn, "init") == 0 ||
+                                    strcmp(mn, "__init__") == 0;
+                const char *emit_mn = is_init ? "init" : mn;
                 FuncKind mk = is_init ? FUNC_INIT :
                               (s->as.func_def.is_async ? FUNC_ASYNC : FUNC_METHOD);
 
+                /* If the first param is "self", skip it: slot 0 is already reserved
+                 * for the receiver by frame_init. */
+                int mp_start = 0;
+                if (mp->count > 0) {
+                    int plen = mp->data[0].name.length;
+                    const char *pstart = mp->data[0].name.start;
+                    if (plen == 4 && strncmp(pstart, "self", 4) == 0)
+                        mp_start = 1;
+                }
+
                 CompilerFrame mf;
-                frame_init(c, &mf, mk, mn, (int)strlen(mn));
+                frame_init(c, &mf, mk, emit_mn, (int)strlen(emit_mn));
                 scope_begin(c);
-                c->frame->function->arity = mp->count;
-                for (int j = 0; j < mp->count; j++)
+                c->frame->function->arity = mp->count - mp_start;
+                for (int j = mp_start; j < mp->count; j++)
                     add_local_tok(c, mp->data[j].name.start, mp->data[j].name.length, s->line);
                 compile_node(c, s->as.func_def.body);
                 if (is_init) {
@@ -1911,7 +1938,7 @@ static void compile_node(Compiler *c, AstNode *node) {
                     emit_byte(c, mf.upvalues[j].index, line);
                 }
                 emit_byte(c, OP_METHOD, line);
-                emit_uint16(c, identifier_constant(c, mn, (int)strlen(mn), line), line);
+                emit_uint16(c, identifier_constant(c, emit_mn, (int)strlen(emit_mn), line), line);
             }
 
             emit_byte(c, OP_POP, line); /* pop class */

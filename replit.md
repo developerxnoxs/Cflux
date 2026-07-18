@@ -101,20 +101,49 @@ See `examples/test_magic_methods.flx` for working examples of every method.
 
 ## Error Handling
 
-Flux has full `try / catch / finally / raise` exception handling as of July 2026.
+Flux has full `try / catch / finally / raise` exception handling.
 
 ```flux
 try:
-    raise ValueError("bad input")
+    raise "bad input"
 catch e:
-    print(e.message)   # ValueError instance
+    print(e)       # any value can be raised and caught
 finally:
     print("always runs")
+
+# Unnamed catch (no variable):
+try:
+    risky()
+catch:
+    print("something went wrong")
 ```
 
 Built-in error classes (no import needed): `Error`, `TypeError`, `ValueError`, `RuntimeError`, `IndexError`, `KeyError`, `IOError`, `StopIteration`.
 
-Any value can be raised (string, int, Error instance). Runtime errors from the VM are also catchable with `try/catch`.
+Any value can be raised — string, int, list, dict, or a class instance. Runtime errors from the VM are also catchable with `try/catch`.
+
+**Class init / constructor syntax**: use `init` (or `__init__`) as method name; `self` is implicit and must NOT be in the parameter list:
+
+```flux
+class MyError:
+    func __init__(msg):    # 'self' is implicit — do NOT add it as a param
+        self.message = msg
+
+try:
+    raise MyError("oops")
+catch e:
+    print(e.message)       # "oops"
+```
+
+## List Operators
+
+`list + list` concatenation is supported:
+
+```flux
+a = [1, 2, 3]
+b = [4, 5, 6]
+print(a + b)   # [1, 2, 3, 4, 5, 6]
+```
 
 ## User Preferences
 

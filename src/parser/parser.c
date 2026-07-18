@@ -720,7 +720,15 @@ static AstParamList parse_params(Parser *p) {
     while (!check(p, TOK_RPAREN) && !check(p, TOK_EOF)) {
         AstParam param;
         memset(&param, 0, sizeof(param));
-        consume(p, TOK_IDENT, "Expected parameter name");
+        /* Accept 'self' and 'super' as parameter names so Python-style method
+         * signatures like func init(self, x) parse without hanging.  The
+         * compiler strips a leading 'self' param from class methods so the
+         * slot layout stays correct regardless. */
+        if (check(p, TOK_SELF) || check(p, TOK_SUPER)) {
+            advance(p);
+        } else {
+            consume(p, TOK_IDENT, "Expected parameter name");
+        }
         param.name = p->previous;
         if (match(p, TOK_COLON)) {
             /* Skip type annotation but record a placeholder */

@@ -1322,24 +1322,7 @@ Flux diimplementasikan sebagai **bytecode-compiled, stack-based virtual machine*
 
 ### Pipeline Eksekusi
 
-```
-Source (.flx)
-    │
-    ▼
-Lexer (lexer.c)
-    │  Token stream
-    ▼
-Parser (parser.c)
-    │  AST (Abstract Syntax Tree)
-    ▼
-Compiler (compiler.c)
-    │  Bytecode (Chunk)
-    ▼
-VM (vm.c)
-    │  Eksekusi bytecode
-    ▼
-Runtime Output
-```
+![Pipeline Eksekusi Flux](docs/pipeline.svg)
 
 ### Komponen Utama
 

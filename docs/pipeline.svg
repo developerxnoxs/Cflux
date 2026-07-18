@@ -1,0 +1,161 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 660 820" width="660" height="820" font-family="'Segoe UI', system-ui, sans-serif">
+  <defs>
+    <!-- Background gradient -->
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0f1117"/>
+      <stop offset="100%" stop-color="#161b27"/>
+    </linearGradient>
+
+    <!-- Box gradients -->
+    <linearGradient id="sourceGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1e3a5f"/>
+      <stop offset="100%" stop-color="#0d2137"/>
+    </linearGradient>
+    <linearGradient id="lexerGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2d1b69"/>
+      <stop offset="100%" stop-color="#1a0f40"/>
+    </linearGradient>
+    <linearGradient id="parserGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a3a5c"/>
+      <stop offset="100%" stop-color="#0e2340"/>
+    </linearGradient>
+    <linearGradient id="compilerGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2a1f5e"/>
+      <stop offset="100%" stop-color="#160f38"/>
+    </linearGradient>
+    <linearGradient id="vmGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1c4a38"/>
+      <stop offset="100%" stop-color="#0d2e22"/>
+    </linearGradient>
+    <linearGradient id="outputGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4a2800"/>
+      <stop offset="100%" stop-color="#2e1800"/>
+    </linearGradient>
+
+    <!-- Arrow marker -->
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#4a9eff"/>
+    </marker>
+
+    <!-- Shadow filter -->
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="#000" flood-opacity="0.5"/>
+    </filter>
+
+    <!-- Glow filter for arrows -->
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="660" height="820" fill="url(#bgGrad)" rx="16"/>
+
+  <!-- Title -->
+  <text x="330" y="46" text-anchor="middle" font-size="20" font-weight="700" fill="#e2e8f0" letter-spacing="0.5">Pipeline Eksekusi Flux</text>
+  <text x="330" y="66" text-anchor="middle" font-size="12" fill="#64748b">Alur kompilasi dan eksekusi program .flx</text>
+
+  <!-- ── SOURCE ─────────────────────────────────────────────── -->
+  <g filter="url(#shadow)">
+    <rect x="180" y="90" width="300" height="76" rx="12" fill="url(#sourceGrad)" stroke="#3b82f6" stroke-width="1.5"/>
+  </g>
+  <text x="330" y="123" text-anchor="middle" font-size="15" font-weight="700" fill="#93c5fd">📄  Source Code</text>
+  <text x="330" y="143" text-anchor="middle" font-size="11.5" fill="#60a5fa" font-family="'Courier New', monospace">script.flx</text>
+  <text x="330" y="158" text-anchor="middle" font-size="10.5" fill="#475569">Teks program Flux</text>
+
+  <!-- Arrow 1 with label -->
+  <line x1="330" y1="166" x2="330" y2="192" stroke="#4a9eff" stroke-width="2" marker-end="url(#arrow)" filter="url(#glow)"/>
+  <rect x="260" y="175" width="140" height="18" rx="4" fill="#1e293b" opacity="0.9"/>
+  <text x="330" y="188" text-anchor="middle" font-size="10" fill="#94a3b8" font-style="italic">karakter per karakter</text>
+
+  <!-- ── LEXER ──────────────────────────────────────────────── -->
+  <g filter="url(#shadow)">
+    <rect x="180" y="200" width="300" height="88" rx="12" fill="url(#lexerGrad)" stroke="#8b5cf6" stroke-width="1.5"/>
+  </g>
+  <text x="330" y="229" text-anchor="middle" font-size="15" font-weight="700" fill="#c4b5fd">🔤  Lexer</text>
+  <text x="330" y="248" text-anchor="middle" font-size="11" fill="#a78bfa" font-family="'Courier New', monospace">src/lexer/lexer.c</text>
+  <text x="330" y="266" text-anchor="middle" font-size="10.5" fill="#94a3b8">Tokenisasi source text</text>
+  <text x="330" y="280" text-anchor="middle" font-size="10.5" fill="#94a3b8">keyword, identifier, literal, operator</text>
+
+  <!-- Arrow 2 with label -->
+  <line x1="330" y1="288" x2="330" y2="314" stroke="#4a9eff" stroke-width="2" marker-end="url(#arrow)" filter="url(#glow)"/>
+  <rect x="250" y="296" width="160" height="18" rx="4" fill="#1e293b" opacity="0.9"/>
+  <text x="330" y="309" text-anchor="middle" font-size="10" fill="#94a3b8" font-style="italic">Token stream</text>
+
+  <!-- ── PARSER ─────────────────────────────────────────────── -->
+  <g filter="url(#shadow)">
+    <rect x="180" y="322" width="300" height="88" rx="12" fill="url(#parserGrad)" stroke="#0ea5e9" stroke-width="1.5"/>
+  </g>
+  <text x="330" y="351" text-anchor="middle" font-size="15" font-weight="700" fill="#7dd3fc">🌳  Parser</text>
+  <text x="330" y="370" text-anchor="middle" font-size="11" fill="#38bdf8" font-family="'Courier New', monospace">src/parser/parser.c</text>
+  <text x="330" y="388" text-anchor="middle" font-size="10.5" fill="#94a3b8">Recursive-descent parser</text>
+  <text x="330" y="402" text-anchor="middle" font-size="10.5" fill="#94a3b8">Membangun AST (Abstract Syntax Tree)</text>
+
+  <!-- Arrow 3 with label -->
+  <line x1="330" y1="410" x2="330" y2="436" stroke="#4a9eff" stroke-width="2" marker-end="url(#arrow)" filter="url(#glow)"/>
+  <rect x="240" y="418" width="180" height="18" rx="4" fill="#1e293b" opacity="0.9"/>
+  <text x="330" y="431" text-anchor="middle" font-size="10" fill="#94a3b8" font-style="italic">AST (Abstract Syntax Tree)</text>
+
+  <!-- ── COMPILER ───────────────────────────────────────────── -->
+  <g filter="url(#shadow)">
+    <rect x="180" y="444" width="300" height="88" rx="12" fill="url(#compilerGrad)" stroke="#6366f1" stroke-width="1.5"/>
+  </g>
+  <text x="330" y="473" text-anchor="middle" font-size="15" font-weight="700" fill="#a5b4fc">⚙️  Compiler</text>
+  <text x="330" y="492" text-anchor="middle" font-size="11" fill="#818cf8" font-family="'Courier New', monospace">src/compiler/compiler.c</text>
+  <text x="330" y="510" text-anchor="middle" font-size="10.5" fill="#94a3b8">Traversal AST → bytecode</text>
+  <text x="330" y="524" text-anchor="middle" font-size="10.5" fill="#94a3b8">Resolusi scope, upvalue, closure</text>
+
+  <!-- Arrow 4 with label -->
+  <line x1="330" y1="532" x2="330" y2="558" stroke="#4a9eff" stroke-width="2" marker-end="url(#arrow)" filter="url(#glow)"/>
+  <rect x="255" y="540" width="150" height="18" rx="4" fill="#1e293b" opacity="0.9"/>
+  <text x="330" y="553" text-anchor="middle" font-size="10" fill="#94a3b8" font-style="italic">Bytecode Chunk</text>
+
+  <!-- ── VM ────────────────────────────────────────────────── -->
+  <g filter="url(#shadow)">
+    <rect x="180" y="566" width="300" height="100" rx="12" fill="url(#vmGrad)" stroke="#10b981" stroke-width="1.5"/>
+  </g>
+  <text x="330" y="597" text-anchor="middle" font-size="15" font-weight="700" fill="#6ee7b7">🖥️  Virtual Machine</text>
+  <text x="330" y="616" text-anchor="middle" font-size="11" fill="#34d399" font-family="'Courier New', monospace">src/vm/vm.c  ·  src/gc/gc.c</text>
+  <text x="330" y="634" text-anchor="middle" font-size="10.5" fill="#94a3b8">Stack-based bytecode interpreter</text>
+  <text x="330" y="648" text-anchor="middle" font-size="10.5" fill="#94a3b8">GC tri-color mark-and-sweep</text>
+  <text x="330" y="662" text-anchor="middle" font-size="10.5" fill="#94a3b8">Async event loop (libuv)</text>
+
+  <!-- Arrow 5 with label -->
+  <line x1="330" y1="666" x2="330" y2="692" stroke="#4a9eff" stroke-width="2" marker-end="url(#arrow)" filter="url(#glow)"/>
+  <rect x="255" y="674" width="150" height="18" rx="4" fill="#1e293b" opacity="0.9"/>
+  <text x="330" y="687" text-anchor="middle" font-size="10" fill="#94a3b8" font-style="italic">Hasil eksekusi</text>
+
+  <!-- ── OUTPUT ────────────────────────────────────────────── -->
+  <g filter="url(#shadow)">
+    <rect x="180" y="700" width="300" height="76" rx="12" fill="url(#outputGrad)" stroke="#f59e0b" stroke-width="1.5"/>
+  </g>
+  <text x="330" y="733" text-anchor="middle" font-size="15" font-weight="700" fill="#fcd34d">✨  Runtime Output</text>
+  <text x="330" y="752" text-anchor="middle" font-size="11" fill="#fbbf24" font-family="'Courier New', monospace">stdout / return value / side effects</text>
+  <text x="330" y="768" text-anchor="middle" font-size="10.5" fill="#92400e">Print, file I/O, network, FFI</text>
+
+  <!-- Side note: stdlib loader -->
+  <g opacity="0.85">
+    <rect x="10" y="580" width="148" height="68" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <text x="84" y="600" text-anchor="middle" font-size="10.5" font-weight="600" fill="#94a3b8">📦 Stdlib / Ekstensi</text>
+    <text x="84" y="616" text-anchor="middle" font-size="9.5" fill="#64748b">stdlib/*.so</text>
+    <text x="84" y="630" text-anchor="middle" font-size="9.5" fill="#64748b">extension/*.so</text>
+    <text x="84" y="644" text-anchor="middle" font-size="9.5" fill="#64748b">dlopen() lazy load</text>
+    <!-- connector line to VM -->
+    <line x1="158" y1="616" x2="180" y2="616" stroke="#334155" stroke-width="1.5" stroke-dasharray="4,3"/>
+  </g>
+
+  <!-- Side note: C API -->
+  <g opacity="0.85">
+    <rect x="502" y="580" width="148" height="68" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <text x="576" y="600" text-anchor="middle" font-size="10.5" font-weight="600" fill="#94a3b8">🔌 C Public API</text>
+    <text x="576" y="616" text-anchor="middle" font-size="9.5" fill="#64748b">flux_vm_new()</text>
+    <text x="576" y="630" text-anchor="middle" font-size="9.5" fill="#64748b">flux_eval()</text>
+    <text x="576" y="644" text-anchor="middle" font-size="9.5" fill="#64748b">flux_vm_destroy()</text>
+    <!-- connector line to VM -->
+    <line x1="502" y1="616" x2="480" y2="616" stroke="#334155" stroke-width="1.5" stroke-dasharray="4,3"/>
+  </g>
+
+  <!-- Footer -->
+  <text x="330" y="800" text-anchor="middle" font-size="10" fill="#334155">Flux v0.1.0 — bytecode-compiled, stack-based virtual machine</text>
+</svg>

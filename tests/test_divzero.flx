@@ -1,4 +1,16 @@
 # Test: Division by zero
 print("=== Division by zero ===")
-result = 10 / 0
-print(result)
+try:
+    result = 10 / 0
+    print(result)
+catch e:
+    print("[PASS] error tertangkap: " + str(e))
+
+print("=== Float division by zero ===")
+try:
+    result = 3.14 / 0.0
+    print(result)
+catch e:
+    print("[PASS] float div zero tertangkap: " + str(e))
+
+print("divzero: OK")

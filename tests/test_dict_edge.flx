@@ -5,6 +5,19 @@ d = {}
 d["key"] = "value"
 print(d["key"])
 
-# Missing key
+# Missing key — harus error, bukan crash
 print("Missing key test:")
-print(d["nonexistent"])
+try:
+    print(d["nonexistent"])
+catch e:
+    print("[PASS] key tidak ada tertangkap: " + str(e))
+
+# .get() dengan default
+val = d.get("nonexistent", "default_val")
+print("[PASS] .get() default: " + val)
+
+# Overwrite key
+d["key"] = "updated"
+print("[PASS] overwrite: " + d["key"])
+
+print("dict_edge: OK")

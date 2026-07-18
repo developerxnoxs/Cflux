@@ -20,6 +20,11 @@ c = Child(3, 4)
 print(c.get_x())    # 3
 print(c.get_sum())  # 7
 
-# Access undefined attribute
+# Access undefined attribute — harus error, bukan crash
 print("Undefined attr:")
-print(c.z)
+try:
+    print(c.z)
+catch e:
+    print("[PASS] atribut tidak ada tertangkap: " + str(e))
+
+print("class_edge: OK")

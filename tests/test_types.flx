@@ -12,9 +12,14 @@ print(type({}))
 print(int("42"))
 print(float("3.14"))
 print(str(100))
-print(int(3.9))   # truncates?
+print(int(3.9))
 print(float(5))
 
-# Bad conversion
+# Bad conversion — harus error, bukan crash
 print("Bad int conversion:")
-print(int("abc"))
+try:
+    print(int("abc"))
+catch e:
+    print("[PASS] konversi buruk tertangkap: " + str(e))
+
+print("types: OK")

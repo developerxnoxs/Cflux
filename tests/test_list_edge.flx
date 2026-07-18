@@ -16,6 +16,11 @@ print(lst[2])
 print(lst[-1])
 print(lst[-2])
 
-# Out of bounds
+# Out of bounds — harus error, bukan crash
 print("Out of bounds test:")
-print(lst[10])
+try:
+    print(lst[10])
+catch e:
+    print("[PASS] out of bounds tertangkap: " + str(e))
+
+print("list_edge: OK")

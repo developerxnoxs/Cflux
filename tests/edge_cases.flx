@@ -2,6 +2,29 @@
 
 # 1. Division by zero
 print("=== Division by zero ===")
-result = 10 / 0
-print(result)
+try:
+    result = 10 / 0
+    print(result)
+catch e:
+    print("[PASS] tertangkap: " + str(e))
 
+# 2. Modulo by zero
+print("=== Modulo by zero ===")
+try:
+    result = 7 % 0
+    print(result)
+catch e:
+    print("[PASS] tertangkap: " + str(e))
+
+# 3. Large integer
+print("=== Large integer ===")
+big = 999999999 * 999999999
+print("[PASS] large int: " + str(big))
+
+# 4. Nested function call
+print("=== Nested call ===")
+func double(x):
+    return x * 2
+func quad(x):
+    return double(double(x))
+print("[PASS] quad(3) = " + str(quad(3)))

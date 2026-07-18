@@ -894,6 +894,21 @@ static void compile_expr(Compiler *c, AstNode *node) {
             break;
         }
 
+        case AST_TERNARY: {
+            /* cond ? then_expr : else_expr
+             * Compiles like an inline if/else that leaves a value on the stack. */
+            compile_expr(c, node->as.ternary.condition);
+            int else_jump = emit_jump(c, OP_JUMP_IF_FALSE, line);
+            emit_byte(c, OP_POP, line);            /* pop condition (truthy path) */
+            compile_expr(c, node->as.ternary.then_expr);
+            int end_jump = emit_jump(c, OP_JUMP, line);
+            patch_jump(c, else_jump);
+            emit_byte(c, OP_POP, line);            /* pop condition (falsy path) */
+            compile_expr(c, node->as.ternary.else_expr);
+            patch_jump(c, end_jump);
+            break;
+        }
+
         default:
             compile_error(c, line, "Expected expression, got statement kind %d", node->kind);
             break;

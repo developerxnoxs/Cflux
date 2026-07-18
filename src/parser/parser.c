@@ -522,11 +522,6 @@ static AstNode *parse_postfix(Parser *p) {
             buf[len] = '\0';
             attr->as.attr.attr = buf;
             node = attr;
-        } else if (match(p, TOK_QUESTION)) {
-            /* ? operator: error propagation (currently treated as postfix no-op) */
-            /* Wrap in a special unary-ish node — for now just pass through */
-            /* TODO: compile as early return on error */
-            (void)node; /* already set */
         } else {
             break;
         }
@@ -675,11 +670,43 @@ static AstNode *parse_pipeline(Parser *p) {
 }
 
 /* -------------------------------------------------------------------------
+ * Ternary  cond ? then_expr : else_expr
+ * Precedence: lower than pipeline, higher than assignment.
+ * Right-associative for the else branch.
+ * ---------------------------------------------------------------------- */
+
+static AstNode *parse_ternary(Parser *p) {
+    AstNode *cond = parse_pipeline(p);
+    if (!check(p, TOK_QUESTION)) return cond;
+
+    int line = p->current.line, col = p->current.column;
+    advance(p); /* consume '?' */
+
+    AstNode *then_expr = parse_ternary(p);
+
+    if (!check(p, TOK_COLON)) {
+        /* TOK_COLON is also used by dict literals and slices; if it's
+         * missing here it's a syntax error. */
+        parser_error(p, "expected ':' in ternary expression");
+        return cond;
+    }
+    advance(p); /* consume ':' */
+
+    AstNode *else_expr = parse_ternary(p); /* right-assoc */
+
+    AstNode *n = ast_node_alloc(p->arena, AST_TERNARY, line, col);
+    n->as.ternary.condition = cond;
+    n->as.ternary.then_expr = then_expr;
+    n->as.ternary.else_expr = else_expr;
+    return n;
+}
+
+/* -------------------------------------------------------------------------
  * Assignment  (lowest precedence expression)
  * ---------------------------------------------------------------------- */
 
 static AstNode *parse_expr(Parser *p) {
-    AstNode *left = parse_pipeline(p);
+    AstNode *left = parse_ternary(p);
 
     int line = p->current.line, col = p->current.column;
 

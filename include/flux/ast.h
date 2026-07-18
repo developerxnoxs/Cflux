@@ -39,6 +39,7 @@ typedef enum {
     AST_DICT,
     AST_LAMBDA,          /* |params| => expr */
     AST_PIPELINE,        /* expr |> expr     */
+    AST_TERNARY,         /* cond ? then : else */
     AST_SPAWN,           /* spawn expr       */
 
     /* Control */
@@ -181,6 +182,9 @@ struct AstNode {
 
         /* AST_PIPELINE: left |> right */
         struct { AstNode *left; AstNode *right; } pipeline;
+
+        /* AST_TERNARY: cond ? then_expr : else_expr */
+        struct { AstNode *condition; AstNode *then_expr; AstNode *else_expr; } ternary;
 
         /* AST_IF */
         struct {

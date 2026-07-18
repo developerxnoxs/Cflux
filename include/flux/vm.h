@@ -20,7 +20,7 @@
  * Limits
  * ---------------------------------------------------------------------- */
 #define FLUX_STACK_MAX               (256 * 64)
-#define FLUX_FRAMES_MAX              6000
+#define FLUX_FRAMES_MAX              500
 #define FLUX_GLOBALS_INITIAL         64
 #define FLUX_GC_HEAP_GROW_FACTOR     2
 #define FLUX_IMPORT_DIR_MAX          64
@@ -179,6 +179,15 @@ Value vm_invoke(FluxVM *vm, Value callee, Value *args, int argc);
  * Stack helpers
  * ---------------------------------------------------------------------- */
 static inline void vm_push(FluxVM *vm, Value v) {
+    /* Guard against silent value-stack overflow (would corrupt adjacent memory). */
+    if (vm->stack_top >= vm->stack + FLUX_STACK_MAX) {
+        if (!vm->has_error) {
+            vm->has_error = true;
+            snprintf(vm->error_msg, sizeof(vm->error_msg),
+                     "Value stack overflow (FLUX_STACK_MAX=%d)", FLUX_STACK_MAX);
+        }
+        return; /* do not write past end of stack */
+    }
     *vm->stack_top++ = v;
 }
 

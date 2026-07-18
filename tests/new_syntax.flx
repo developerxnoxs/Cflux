@@ -116,7 +116,7 @@ print(f"rect area = {rect.width * rect.height}")
 
 # ─── Class with new syntax ────────────────────────────────────────────────────
 class Animal:
-    func init(name, sound):
+    func __init__(name, sound):
         self.name = name
         self.sound = sound
 

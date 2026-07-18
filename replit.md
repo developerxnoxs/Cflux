@@ -43,6 +43,11 @@ make clean
 - `tests/` — test suite (.flx dan .c)
 - `build_make/` — output build (dibuat oleh `make all`)
 
+## Perubahan Terbaru
+
+- **Sintaksis class**: Konstruktor kini menggunakan `func __init__(...)` (Python-style). Compiler juga menerima `func init(...)` sebagai alias untuk kompatibilitas mundur.
+- **Stack overflow protection**: `FLUX_FRAMES_MAX` dikurangi dari 6000 → 500 untuk mencegah segfault di Replit; ditambahkan bounds check pada `vm_push` dan `call_closure`.
+
 ## User Preferences
 
 - Dokumentasi menggunakan Bahasa Indonesia

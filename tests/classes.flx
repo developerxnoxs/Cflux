@@ -1,7 +1,7 @@
 # Kelas dan Inheritance - OOP di Flux
 
 class Animal:
-    func init(name, sound):
+    func __init__(name, sound):
         self.name = name
         self.sound = sound
 
@@ -12,7 +12,7 @@ class Animal:
         print("I am " + self.name)
 
 class Dog(Animal):
-    func init(name):
+    func __init__(name):
         self.name = name
         self.sound = "Woof!"
 
@@ -20,7 +20,7 @@ class Dog(Animal):
         print(self.name + " fetches the ball!")
 
 class Cat(Animal):
-    func init(name):
+    func __init__(name):
         self.name = name
         self.sound = "Meow!"
 

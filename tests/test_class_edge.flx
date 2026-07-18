@@ -2,14 +2,14 @@
 print("=== Class edge cases ===")
 
 class Base:
-    func init(x):
+    func __init__(x):
         self.x = x
 
     func get_x():
         return self.x
 
 class Child(Base):
-    func init(x, y):
+    func __init__(x, y):
         self.x = x
         self.y = y
 

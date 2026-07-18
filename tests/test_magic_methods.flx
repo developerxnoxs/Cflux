@@ -6,7 +6,7 @@ print("")
 # ── init (constructor) ────────────────────────────────────────────────
 print("--- init ---")
 class Point:
-    func init(x, y):
+    func __init__(x, y):
         self.x = x
         self.y = y
 
@@ -17,7 +17,7 @@ print(p.y)   # 4
 # ── to_str (print / str) ──────────────────────────────────────────────
 print("--- to_str ---")
 class Vec2:
-    func init(x, y):
+    func __init__(x, y):
         self.x = x
         self.y = y
     func to_str():
@@ -30,7 +30,7 @@ print(str(v))    # Vec2(1, 2)
 # ── to_repr (debug representation) ────────────────────────────────────
 print("--- to_repr ---")
 class Color:
-    func init(r, g, b):
+    func __init__(r, g, b):
         self.r = r
         self.g = g
         self.b = b
@@ -46,7 +46,7 @@ print(c)         # rgb(255, 128, 0)
 # ── on_len (len() support) ────────────────────────────────────────────
 print("--- on_len ---")
 class Stack:
-    func init():
+    func __init__():
         self.items = []
     func push(val):
         self.items.append(val)
@@ -62,7 +62,7 @@ print(len(s))   # 3
 # ── on_get / on_set (indexing) ────────────────────────────────────────
 print("--- on_get / on_set ---")
 class SparseArray:
-    func init():
+    func __init__():
         self.data = {}
     func on_get(key):
         k = str(key)
@@ -82,7 +82,7 @@ print(a[0])    # 0  (default)
 # ── on_iter (for-loop support) ────────────────────────────────────────
 print("--- on_iter ---")
 class Range2:
-    func init(start, stop):
+    func __init__(start, stop):
         self.start = start
         self.stop  = stop
     func on_iter():
@@ -99,7 +99,7 @@ for x in Range2(3, 7):
 # ── on_len + on_get for-loop (direct iteration via protocol) ──────────
 print("--- on_len + on_get for-loop ---")
 class NumberedList:
-    func init():
+    func __init__():
         self.items = ["a", "b", "c"]
     func on_len():
         return len(self.items)
@@ -113,7 +113,7 @@ for item in nl:
 # ── on_call (callable instances) ─────────────────────────────────────
 print("--- on_call ---")
 class Multiplier:
-    func init(factor):
+    func __init__(factor):
         self.factor = factor
     func on_call(x):
         return x * self.factor
@@ -126,7 +126,7 @@ print(triple(5))   # 15
 # ── on_enter / on_exit (with statement) ──────────────────────────────
 print("--- on_enter / on_exit ---")
 class Timer:
-    func init(name):
+    func __init__(name):
         self.name = name
     func on_enter():
         print("Entering: " + self.name)

@@ -580,7 +580,13 @@ static bool call_closure(FluxVM *vm, FluxClosure *closure, int argc) {
         return false;
     }
     if (vm->frame_count >= FLUX_FRAMES_MAX) {
-        vm_runtime_error(vm, "Stack overflow");
+        vm_runtime_error(vm, "Stack overflow (max call depth %d)", FLUX_FRAMES_MAX);
+        return false;
+    }
+    /* Conservative value-stack space check: require at least 64 free slots.
+     * Prevents a value-stack overflow segfault in deeply recursive calls. */
+    if ((vm->stack_top - vm->stack) + 64 > FLUX_STACK_MAX) {
+        vm_runtime_error(vm, "Stack overflow (value stack exhausted)");
         return false;
     }
     CallFrame *frame = &vm->frames[vm->frame_count++];

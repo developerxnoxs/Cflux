@@ -4,7 +4,7 @@ print("=== CLASSES ===")
 
 # Basic class
 class Point:
-    func init(x, y):
+    func __init__(x, y):
         self.x = x
         self.y = y
 
@@ -22,14 +22,14 @@ print(p.distance_origin())  # 5.0
 
 # Inheritance
 class Shape:
-    func init(color):
+    func __init__(color):
         self.color = color
 
     func describe():
         return "Shape: " + self.color
 
 class Circle(Shape):
-    func init(color, radius):
+    func __init__(color, radius):
         self.color = color
         self.radius = radius
 
@@ -47,7 +47,7 @@ print(c.area())      # ~78.54
 
 # Inherited method (not overridden in child)
 class Rectangle(Shape):
-    func init(color, w, h):
+    func __init__(color, w, h):
         self.color = color
         self.width = w
         self.height = h
@@ -61,7 +61,7 @@ print(r.area())      # 24
 
 # Multiple levels of inheritance
 class Animal:
-    func init(name):
+    func __init__(name):
         self.name = name
     func speak():
         return self.name + " makes a sound"
@@ -81,7 +81,7 @@ print(puppy.speak())  # Tiny says Yip
 
 # Dynamic attribute assignment
 class Empty:
-    func init():
+    func __init__():
         pass
 
 e = Empty()
@@ -92,7 +92,7 @@ print(e.label)  # hello
 
 # Class with list attribute
 class Stack:
-    func init():
+    func __init__():
         self.items = []
 
     func push(val):

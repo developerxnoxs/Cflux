@@ -47,7 +47,7 @@ for item in by_first:
 
 print("=== has_attr / get_attr / set_attr ===")
 class Point:
-    func init(x, y):
+    func __init__(x, y):
         self.x = x
         self.y = y
 
@@ -61,11 +61,11 @@ print(get_attr(p, "z"))
 
 print("=== is_instance ===")
 class Animal:
-    func init(name):
+    func __init__(name):
         self.name = name
 
 class Dog(Animal):
-    func init(name):
+    func __init__(name):
         self.name = name
     func speak():
         return self.name + " says Woof"
@@ -89,7 +89,7 @@ print(names)
 
 print("=== to_string hook ===")
 class Vec:
-    func init(x, y):
+    func __init__(x, y):
         self.x = x
         self.y = y
     func to_str():
@@ -101,7 +101,7 @@ print(str(v))
 
 print("=== length hook ===")
 class Stack:
-    func init():
+    func __init__():
         self.items = []
     func push(item):
         self.items.append(item)
@@ -116,7 +116,7 @@ print(len(s))
 
 print("=== equals hook ===")
 class Color:
-    func init(r, g, b):
+    func __init__(r, g, b):
         self.r = r
         self.g = g
         self.b = b

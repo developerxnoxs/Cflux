@@ -610,7 +610,7 @@ catch e:
 
 ```flux
 class Animal:
-    func init(name, sound):
+    func __init__(name, sound):
         self.name = name
         self.sound = sound
 
@@ -627,7 +627,7 @@ dog.describe()  # I am Dog
 
 # Pewarisan (Inheritance)
 class Dog(Animal):
-    func init(name):
+    func __init__(name):
         self.name = name
         self.sound = "Woof!"
 
@@ -646,7 +646,7 @@ Magic methods memungkinkan kelas mengimplementasikan perilaku bawaan seperti kon
 
 | Method       | Dipanggil saat                      |
 |--------------|--------------------------------------|
-| `init`       | `Kelas(args)` — konstruktor          |
+| `__init__`   | `Kelas(args)` — konstruktor          |
 | `to_str`     | `print(obj)` / `str(obj)`           |
 | `to_repr`    | `repr(obj)`                         |
 | `on_len`     | `len(obj)`                          |
@@ -661,7 +661,7 @@ Magic methods memungkinkan kelas mengimplementasikan perilaku bawaan seperti kon
 ```flux
 # to_str
 class Vec2:
-    func init(x, y):
+    func __init__(x, y):
         self.x = x
         self.y = y
     func to_str():
@@ -673,7 +673,7 @@ print(str(v))  # Vec2(1, 2)
 
 # on_len + on_get → iterable lewat for
 class NumberedList:
-    func init():
+    func __init__():
         self.items = ["a", "b", "c"]
     func on_len():
         return len(self.items)
@@ -685,7 +685,7 @@ for item in NumberedList():
 
 # on_call — instance bisa dipanggil seperti fungsi
 class Multiplier:
-    func init(factor):
+    func __init__(factor):
         self.factor = factor
     func on_call(x):
         return x * self.factor
@@ -695,7 +695,7 @@ print(double(7))   # 14
 
 # on_enter / on_exit — context manager (with statement)
 class Timer:
-    func init(name):
+    func __init__(name):
         self.name = name
     func on_enter():
         print("Entering: " + self.name)
@@ -711,7 +711,7 @@ with Timer("block2") as t:
 
 # equals — operator ==
 class Color:
-    func init(r, g, b):
+    func __init__(r, g, b):
         self.r = r
         self.g = g
         self.b = b

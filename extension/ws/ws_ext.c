@@ -62,6 +62,7 @@
 #define WS_MAX_HDR_LEN       (16 * 1024)
 #define WS_MAX_MSG_LEN       (16 * 1024 * 1024)   /* 16 MB per pesan */
 #define WS_GUID              "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+#define WS_MSG_QUEUE_CAP     16   /* kapasitas antrean pesan masuk */
 
 /* =========================================================================
  * Data structures
@@ -76,14 +77,24 @@ typedef struct {
     uint8_t *data;
     size_t   len;
     uint8_t  opcode;
-    bool     ready;
 } WsMsg;
+
+/* Antrean pesan masuk — menghindari kehilangan pesan ketika wslay
+ * mengantar beberapa frame (mis. TEXT + CLOSE) dalam satu panggilan
+ * wslay_event_recv(). Pola slot-tunggal sebelumnya membuang frame
+ * pertama jika frame kedua tiba sebelum dibaca oleh ws.recv(). */
+typedef struct {
+    WsMsg msgs[WS_MSG_QUEUE_CAP];
+    int   head;   /* indeks pesan berikutnya yang akan dibaca */
+    int   tail;   /* indeks slot kosong berikutnya */
+    int   count;  /* jumlah pesan dalam antrean */
+} WsMsgQueue;
 
 typedef struct {
     int                    fd;
     wslay_event_context_ptr ctx;
-    WsMsg                  pending;   /* pesan terakhir dari on_msg_recv_cb */
-    int                    error;     /* errno saat send/recv gagal */
+    WsMsgQueue             queue;   /* antrean pesan masuk */
+    int                    error;   /* errno saat send/recv gagal */
     bool                   closed;
 } WsConn;
 
@@ -351,11 +362,15 @@ static void wslay_on_msg_recv_cb(wslay_event_context_ptr ctx,
     (void)ctx;
     WsConn *conn = (WsConn *)user_data;
 
-    /* Buang pesan sebelumnya jika belum diambil (tidak seharusnya terjadi) */
-    free(conn->pending.data);
-    conn->pending.data = NULL;
+    /* Jika antrean penuh, buang pesan paling lama (head) */
+    if (conn->queue.count >= WS_MSG_QUEUE_CAP) {
+        free(conn->queue.msgs[conn->queue.head].data);
+        conn->queue.msgs[conn->queue.head].data = NULL;
+        conn->queue.head = (conn->queue.head + 1) % WS_MSG_QUEUE_CAP;
+        conn->queue.count--;
+    }
 
-    /* Salin data pesan */
+    /* Salin data pesan ke slot tail */
     uint8_t *copy = NULL;
     if (arg->msg_length > 0) {
         copy = malloc(arg->msg_length + 1);
@@ -365,10 +380,12 @@ static void wslay_on_msg_recv_cb(wslay_event_context_ptr ctx,
         }
     }
 
-    conn->pending.data   = copy;
-    conn->pending.len    = arg->msg_length;
-    conn->pending.opcode = arg->opcode;
-    conn->pending.ready  = true;
+    int slot = conn->queue.tail;
+    conn->queue.msgs[slot].data   = copy;
+    conn->queue.msgs[slot].len    = arg->msg_length;
+    conn->queue.msgs[slot].opcode = arg->opcode;
+    conn->queue.tail  = (slot + 1) % WS_MSG_QUEUE_CAP;
+    conn->queue.count++;
 }
 
 /* =========================================================================
@@ -432,7 +449,13 @@ static void wsconn_free(WsConn *conn) {
     if (!conn) return;
     if (conn->ctx) wslay_event_context_free(conn->ctx);
     if (conn->fd >= 0) close(conn->fd);
-    free(conn->pending.data);
+    /* Bebaskan semua pesan dalam antrean */
+    while (conn->queue.count > 0) {
+        free(conn->queue.msgs[conn->queue.head].data);
+        conn->queue.msgs[conn->queue.head].data = NULL;
+        conn->queue.head = (conn->queue.head + 1) % WS_MSG_QUEUE_CAP;
+        conn->queue.count--;
+    }
     free(conn);
 }
 
@@ -530,13 +553,16 @@ static int tcp_connect_timeout(const char *host, int port,
         /* Tunggu writable (connect selesai) */
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
-        long remain = deadline->tv_sec - now.tv_sec;
-        if (remain <= 0) { close(sfd); break; }
+        long remain_sec  = deadline->tv_sec  - now.tv_sec;
+        long remain_nsec = deadline->tv_nsec - now.tv_nsec;
+        if (remain_nsec < 0) { remain_sec--; remain_nsec += 1000000000L; }
+        if (remain_sec < 0 || (remain_sec == 0 && remain_nsec <= 0)) { close(sfd); break; }
+        long remain = remain_sec;
 
         fd_set wfds, efds;
         FD_ZERO(&wfds); FD_ZERO(&efds);
         FD_SET(sfd, &wfds); FD_SET(sfd, &efds);
-        struct timeval tv = { remain, 0 };
+        struct timeval tv = { remain, (int)(remain_nsec / 1000) };
         int sel = select(sfd + 1, NULL, &wfds, &efds, &tv);
         if (sel <= 0 || !FD_ISSET(sfd, &wfds)) { close(sfd); break; }
 
@@ -599,12 +625,14 @@ static bool ws_client_handshake(int fd, const char *host, int port,
     while ((size_t)req_len > sent) {
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
-        long remain = deadline->tv_sec - now.tv_sec;
-        if (remain <= 0) return false;
+        long remain_sec  = deadline->tv_sec  - now.tv_sec;
+        long remain_nsec = deadline->tv_nsec - now.tv_nsec;
+        if (remain_nsec < 0) { remain_sec--; remain_nsec += 1000000000L; }
+        if (remain_sec < 0 || (remain_sec == 0 && remain_nsec <= 0)) return false;
 
         fd_set wfds;
         FD_ZERO(&wfds); FD_SET(fd, &wfds);
-        struct timeval tv = { remain, 0 };
+        struct timeval tv = { remain_sec, (int)(remain_nsec / 1000) };
         if (select(fd + 1, NULL, &wfds, NULL, &tv) <= 0) return false;
 
         ssize_t n = send(fd, req + sent, (size_t)req_len - sent, 0);
@@ -696,7 +724,8 @@ static Value ws_connect(FluxVM *vm, int argc, Value *argv) {
     char host[256], path[1024];
     int port;
     if (!parse_ws_url(url, host, sizeof(host), &port, path, sizeof(path))) {
-        vm_runtime_error(vm, "ws.connect: URL tidak valid (harus 'ws://host:port/path'): %s", url);
+        /* URL tidak valid — kembalikan null tanpa runtime error agar
+         * skrip bisa memeriksa hasilnya (ws.connect kontrak: null = gagal). */
         return value_null();
     }
 
@@ -912,41 +941,47 @@ static Value ws_recv(FluxVM *vm, int argc, Value *argv) {
     clock_gettime(CLOCK_MONOTONIC, &deadline);
     deadline.tv_sec += timeout_sec;
 
-    conn->pending.ready = false;
-
     for (;;) {
-        /* Cek apakah close sudah diterima */
+        /* Kembalikan pesan pertama dari antrean jika ada */
+        if (conn->queue.count > 0) {
+            int slot = conn->queue.head;
+            WsMsg msg = conn->queue.msgs[slot];
+            conn->queue.msgs[slot].data = NULL;
+            conn->queue.head  = (slot + 1) % WS_MSG_QUEUE_CAP;
+            conn->queue.count--;
+
+            const char *type = "text";
+            if      (msg.opcode == WSLAY_BINARY_FRAME)     type = "binary";
+            else if (msg.opcode == WSLAY_PING)              type = "ping";
+            else if (msg.opcode == WSLAY_PONG)              type = "pong";
+            else if (msg.opcode == WSLAY_CONNECTION_CLOSE)  type = "close";
+
+            Value rv = make_recv_result(vm, type, msg.data, msg.len);
+            free(msg.data);
+
+            /* Tandai koneksi tertutup setelah frame close dikembalikan */
+            if (msg.opcode == WSLAY_CONNECTION_CLOSE)
+                conn->closed = true;
+            return rv;
+        }
+
+        /* Cek apakah close sudah diterima oleh wslay (tanpa frame di antrean) */
         if (wslay_event_get_close_received(conn->ctx)) {
             conn->closed = true;
             return make_recv_result(vm, "close", NULL, 0);
-        }
-
-        /* Jika sudah ada pesan pending, kembalikan langsung */
-        if (conn->pending.ready) {
-            conn->pending.ready = false;
-            const char *type = "text";
-            if      (conn->pending.opcode == WSLAY_BINARY_FRAME)     type = "binary";
-            else if (conn->pending.opcode == WSLAY_PING)              type = "ping";
-            else if (conn->pending.opcode == WSLAY_PONG)              type = "pong";
-            else if (conn->pending.opcode == WSLAY_CONNECTION_CLOSE)  type = "close";
-            Value rv = make_recv_result(vm, type,
-                                        conn->pending.data,
-                                        conn->pending.len);
-            free(conn->pending.data);
-            conn->pending.data = NULL;
-            conn->pending.len  = 0;
-            return rv;
         }
 
         /* Tentukan apa yang perlu di-select */
         int want_r = wslay_event_want_read(conn->ctx);
         int want_w = wslay_event_want_write(conn->ctx);
 
-        /* Hitung sisa waktu */
+        /* Hitung sisa waktu (nsec-aware) */
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
-        long remain = deadline.tv_sec - now.tv_sec;
-        if (remain <= 0) return value_null();
+        long remain_sec  = deadline.tv_sec  - now.tv_sec;
+        long remain_nsec = deadline.tv_nsec - now.tv_nsec;
+        if (remain_nsec < 0) { remain_sec--; remain_nsec += 1000000000L; }
+        if (remain_sec < 0 || (remain_sec == 0 && remain_nsec <= 0)) return value_null();
 
         fd_set rfds, wfds;
         FD_ZERO(&rfds);
@@ -954,7 +989,7 @@ static Value ws_recv(FluxVM *vm, int argc, Value *argv) {
         if (want_r || !want_w) FD_SET(conn->fd, &rfds);   /* default: tunggu baca */
         if (want_w)             FD_SET(conn->fd, &wfds);
 
-        struct timeval tv = { remain, 0 };
+        struct timeval tv = { remain_sec, (int)(remain_nsec / 1000) };
         int sel = select(conn->fd + 1, &rfds, &wfds, NULL, &tv);
         if (sel < 0 && errno == EINTR) continue;
         if (sel == 0) return value_null();   /* timeout */
@@ -968,7 +1003,7 @@ static Value ws_recv(FluxVM *vm, int argc, Value *argv) {
             }
         }
 
-        /* Kemudian recv */
+        /* Kemudian recv — callback akan mengisi antrean */
         if (FD_ISSET(conn->fd, &rfds) && wslay_event_want_read(conn->ctx)) {
             int r = wslay_event_recv(conn->ctx);
             if (r != 0 && r != WSLAY_ERR_WOULDBLOCK) {

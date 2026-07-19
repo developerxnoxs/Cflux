@@ -1,46 +1,26 @@
 import ws
+import shell
+import time
 
 print("=== Flux WebSocket Client Test ===")
 
 # ---- Test 1: ws.connect() ke echo server lokal ----
 print("")
 print("-- Test 1: connect ke echo server lokal --")
-
-# Jalankan mini echo server di background via spawn
-func run_echo_server():
-    srv = ws.listen("127.0.0.1", 19001)
-    conn = ws.accept(srv, 5)
-    if conn == null:
-        ws.close_server(srv)
-        return
-    msg = ws.recv(conn, 5)
-    if msg != null and msg["type"] == "text":
-        ws.send(conn, "ECHO:" + msg["data"])
-    ws.close(conn)
-    ws.close_server(srv)
-
-spawn run_echo_server()
-
-# Beri waktu server untuk siap
-import time
-time.sleep(0.1)
-
+shell.exec("./build_make/flux tests/ws_echo_server.flx > /dev/null 2>&1 &")
+time.sleep(0.3)
 conn = ws.connect("ws://127.0.0.1:19001/", {}, 5)
 if conn == null:
     print("[FAIL] ws.connect() mengembalikan null")
 else:
     print("[PASS] ws.connect() berhasil")
-
     ws.send(conn, "HaloClient")
     reply = ws.recv(conn, 5)
-
-    if reply == null:
-        print("[FAIL] ws.recv() timeout")
-    elif reply["type"] == "text" and reply["data"] == "ECHO:HaloClient":
+    recv_ok = reply != null and reply["type"] == "text" and reply["data"] == "ECHO:HaloClient"
+    if recv_ok:
         print("[PASS] ws.recv() benar: " + reply["data"])
     else:
-        print("[FAIL] balasan tidak sesuai: " + str(reply))
-
+        print("[FAIL] ws.recv() gagal: " + str(reply))
     ws.close(conn)
     print("[PASS] ws.close() selesai")
 
@@ -49,7 +29,7 @@ print("")
 print("-- Test 2: URL tidak valid --")
 bad = ws.connect("http://localhost:19001/")
 if bad == null:
-    print("[PASS] URL tidak valid → null")
+    print("[PASS] URL tidak valid -> null")
 else:
     print("[FAIL] seharusnya null untuk URL bukan ws://")
 
@@ -58,34 +38,17 @@ print("")
 print("-- Test 3: host tidak ada (timeout cepat) --")
 noconn = ws.connect("ws://127.0.0.1:19999/", {}, 2)
 if noconn == null:
-    print("[PASS] host tidak ada → null")
+    print("[PASS] host tidak ada -> null")
 else:
     print("[FAIL] seharusnya null")
 
 # ---- Test 4: ws.connect() dengan custom headers ----
 print("")
 print("-- Test 4: connect dengan custom headers --")
-
-func run_header_echo_server():
-    srv = ws.listen("127.0.0.1", 19002)
-    conn = ws.accept(srv, 5)
-    if conn == null:
-        ws.close_server(srv)
-        return
-    # Terima dan echo kembali
-    msg = ws.recv(conn, 5)
-    if msg != null and msg["type"] == "text":
-        ws.send(conn, msg["data"])
-    ws.close(conn)
-    ws.close_server(srv)
-
-spawn run_header_echo_server()
-time.sleep(0.1)
-
-conn2 = ws.connect("ws://127.0.0.1:19002/test",
-    {"X-Token": "flux-secret", "X-Client": "flux-test"},
-    5)
-
+shell.exec("./build_make/flux tests/ws_header_echo_server.flx > /dev/null 2>&1 &")
+time.sleep(0.3)
+headers2 = {"X-Token": "flux-secret", "X-Client": "flux-test"}
+conn2 = ws.connect("ws://127.0.0.1:19002/test", headers2, 5)
 if conn2 == null:
     print("[FAIL] ws.connect() dengan headers mengembalikan null")
 else:

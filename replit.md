@@ -50,6 +50,26 @@ make clean
 - **Modul mysql** (`extension/mysql/`): koneksi ke MySQL/MariaDB, query/exec/insert_id/escape/ping/close — tipe data kolom dikonversi otomatis (INT→int, FLOAT→float, NULL→null)
 - **Modul http** (`extension/http/`): HTTP/1.1 client (via libcurl — HTTPS, redirect, chunked, IPv6) + HTTP server (raw POSIX socket, deadline-timeout, validasi Content-Length). API identik v2.
 
+## Menjalankan Test WebSocket Client
+
+```bash
+# Pastikan sudah build terlebih dahulu
+make all
+
+# Jalankan test suite ws client (termasuk server fixture di background)
+./build_make/flux tests/ws_client_flux_test.flx
+```
+
+File fixture:
+- `tests/ws_echo_server.flx` — echo server pada port 19001 (dipakai Test 1)
+- `tests/ws_header_echo_server.flx` — echo server pada port 19002 (dipakai Test 4)
+
+Catatan penting tentang Flux + WebSocket:
+- `ws.accept()`, `ws.recv()`, `ws.send()` adalah blocking POSIX call — tidak kompatibel dengan `spawn` (coroutine)
+- Untuk test in-process server+client, gunakan `shell.exec("... &")` agar server berjalan di proses terpisah
+- Hindari blank line di antara cabang `if/elif/else` — Flux memisahkan blok berdasarkan indentasi/baris kosong
+- Kondisi `and` kompleks di `elif` sebaiknya diekstrak ke variabel terlebih dahulu
+
 ## Perubahan Terbaru
 
 - **Fix print() buffering** (`src/stdlib/stdlib_core.c`): Tambah `fflush(stdout)` di `native_print` sehingga output `print()` langsung muncul bahkan saat stdout bukan TTY (misalnya saat server HTTP menunggu koneksi). Sebelumnya hanya `write()` yang flush, `print()` tidak.

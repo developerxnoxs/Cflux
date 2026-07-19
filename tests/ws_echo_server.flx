@@ -1,0 +1,12 @@
+# ws_echo_server.flx - fixture echo server untuk ws_client_flux_test.flx
+# Mendengarkan di port 19001, menerima SATU koneksi, echo satu pesan, lalu keluar.
+import ws
+
+srv = ws.listen("127.0.0.1", 19001)
+conn = ws.accept(srv, 5)
+if conn != null:
+    msg = ws.recv(conn, 5)
+    if msg != null and msg["type"] == "text":
+        ws.send(conn, "ECHO:" + msg["data"])
+    ws.close(conn)
+ws.close_server(srv)

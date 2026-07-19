@@ -1,0 +1,12 @@
+# ws_header_echo_server.flx - fixture echo server untuk test custom headers.
+# Mendengarkan di port 19002, menerima SATU koneksi, echo satu pesan, lalu keluar.
+import ws
+
+srv = ws.listen("127.0.0.1", 19002)
+conn = ws.accept(srv, 5)
+if conn != null:
+    msg = ws.recv(conn, 5)
+    if msg != null and msg["type"] == "text":
+        ws.send(conn, msg["data"])
+    ws.close(conn)
+ws.close_server(srv)

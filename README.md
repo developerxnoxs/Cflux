@@ -35,11 +35,12 @@ Flux adalah bahasa pemrograman modern yang diimplementasikan dalam C. Flux memil
 12. [Sistem Import Modul](#12-sistem-import-modul)
 13. [Standard Library](#13-standard-library)
 14. [Modul Socket](#14-modul-socket)
-15. [FFI — Import dan Panggil Library C Native](#15-ffi--import-dan-panggil-library-c-native)
-16. [Ekstensi Native (.so Plugin)](#16-ekstensi-native-so-plugin)
-17. [Embed libflux ke Program C](#17-embed-libflux-ke-program-c)
-18. [Struktur Proyek](#18-struktur-proyek)
-19. [Arsitektur Internal](#19-arsitektur-internal)
+15. [Modul MySQL](#15-modul-mysql)
+16. [FFI — Import dan Panggil Library C Native](#16-ffi--import-dan-panggil-library-c-native)
+17. [Ekstensi Native (.so Plugin)](#17-ekstensi-native-so-plugin)
+18. [Embed libflux ke Program C](#18-embed-libflux-ke-program-c)
+19. [Struktur Proyek](#19-struktur-proyek)
+20. [Arsitektur Internal](#20-arsitektur-internal)
 
 ---
 
@@ -1329,7 +1330,112 @@ socket.close(fd)
 
 ---
 
-## 15. FFI — Import dan Panggil Library C Native
+## 15. Modul MySQL
+
+Modul `mysql` menghubungkan Flux ke database MySQL atau MariaDB via **MariaDB Connector/C**. Tipe data kolom otomatis dikonversi — integer jadi `int`, DECIMAL/FLOAT jadi `float`, NULL jadi `null`, sisanya jadi `string`.
+
+### Koneksi
+
+```flux
+import mysql
+
+conn = mysql.connect("host", "user", "password", "database")      # port default 3306
+conn = mysql.connect("host", "user", "password", "database", 3306) # port eksplisit
+```
+
+### SELECT (query)
+
+```flux
+rows = mysql.query(conn, "SELECT id, nama, saldo FROM users WHERE aktif = 1")
+
+i = 0
+while i < len(rows):
+    r = rows[i]
+    print(r["nama"] + " - saldo: " + str(r["saldo"]))
+    i += 1
+```
+
+### INSERT / UPDATE / DELETE (exec)
+
+```flux
+# Mengembalikan jumlah baris yang terpengaruh
+n = mysql.exec(conn, "INSERT INTO users (nama, umur) VALUES ('Budi', 25)")
+id_baru = mysql.insert_id(conn)   # AUTO_INCREMENT id dari INSERT terakhir
+print("Baris baru id=" + str(id_baru))
+
+n = mysql.exec(conn, "UPDATE users SET aktif = 0 WHERE umur < 18")
+print("Diupdate: " + str(n) + " baris")
+
+n = mysql.exec(conn, "DELETE FROM users WHERE aktif = 0")
+print("Dihapus: " + str(n) + " baris")
+```
+
+### Escape (cegah SQL injection)
+
+```flux
+# SELALU gunakan escape untuk data dari input user
+input_user = "O'Brien; DROP TABLE users --"
+aman = mysql.escape(conn, input_user)
+rows = mysql.query(conn, "SELECT * FROM users WHERE nama = '" + aman + "'")
+```
+
+### Contoh lengkap
+
+```flux
+import mysql
+
+conn = mysql.connect("sql12.freesqldatabase.com", "user", "pass", "dbname", 3306)
+
+# Buat tabel
+mysql.exec(conn, "CREATE TABLE IF NOT EXISTS produk (
+    id    INT AUTO_INCREMENT PRIMARY KEY,
+    nama  VARCHAR(100) NOT NULL,
+    harga DOUBLE,
+    stok  INT DEFAULT 0
+)")
+
+# Tambah data
+mysql.exec(conn, "INSERT INTO produk (nama, harga, stok) VALUES ('Buku Flux', 75000.0, 50)")
+mysql.exec(conn, "INSERT INTO produk (nama, harga, stok) VALUES ('Kaos Flux', 120000.0, 30)")
+
+# Baca data
+produk = mysql.query(conn, "SELECT * FROM produk ORDER BY harga")
+i = 0
+while i < len(produk):
+    p = produk[i]
+    print(p["nama"] + " — Rp" + str(p["harga"]) + " (stok: " + str(p["stok"]) + ")")
+    i += 1
+
+# Cek koneksi masih hidup
+print("Koneksi ok: " + str(mysql.ping(conn)))
+
+mysql.close(conn)
+```
+
+### Referensi Fungsi
+
+| Fungsi | Deskripsi | Kembalian |
+|--------|-----------|-----------|
+| `connect(host, user, pass, db [, port])` | Buka koneksi | connection handle |
+| `query(conn, sql)` | Jalankan SELECT | `list` of `dict` |
+| `exec(conn, sql)` | Jalankan INSERT/UPDATE/DELETE/DDL | `int` (affected rows) |
+| `insert_id(conn)` | AUTO_INCREMENT id dari INSERT terakhir | `int` |
+| `escape(conn, str)` | Escape string untuk query aman | `string` |
+| `ping(conn)` | Cek koneksi masih hidup | `bool` |
+| `close(conn)` | Tutup koneksi | `null` |
+
+**Konversi tipe otomatis:**
+
+| Tipe MySQL | Tipe Flux |
+|------------|-----------|
+| TINYINT, SMALLINT, INT, BIGINT, YEAR | `int` |
+| FLOAT, DOUBLE, DECIMAL, NUMERIC | `float` |
+| NULL | `null` |
+| VARCHAR, TEXT, CHAR, DATE, DATETIME, BLOB, ENUM, dll | `string` |
+
+---
+
+## 16. FFI — Import dan Panggil Library C Native
 
 Modul `native` memungkinkan Flux memanggil fungsi dari shared library (`.so`) secara langsung.
 
@@ -1365,7 +1471,7 @@ close(libc)
 
 ---
 
-## 16. Ekstensi Native (.so Plugin)
+## 17. Ekstensi Native (.so Plugin)
 
 Ekstensi native adalah shared library C yang mengimplementasikan modul Flux. Contoh tersedia di `extension/postgresql/`.
 
@@ -1414,7 +1520,7 @@ Hasilnya: `extension/postgresql/libpostgresql.so`
 
 ---
 
-## 17. Embed libflux ke Program C
+## 18. Embed libflux ke Program C
 
 `libflux` tersedia sebagai static library (`libflux.a`) dan shared library (`libflux.so`).
 
@@ -1453,7 +1559,7 @@ gcc -Iinclude -o myapp myapp.c -L./build_make -lflux -lm -ldl -luv
 
 ---
 
-## 18. Struktur Proyek
+## 19. Struktur Proyek
 
 ```
 flux/
@@ -1511,7 +1617,7 @@ flux/
 
 ---
 
-## 19. Arsitektur Internal
+## 20. Arsitektur Internal
 
 Flux diimplementasikan sebagai **bytecode-compiled, stack-based virtual machine** dengan komponen berikut:
 

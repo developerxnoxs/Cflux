@@ -47,6 +47,7 @@ make clean
 
 - **Operator ternary**: `kondisi ? nilai_jika_benar : nilai_jika_salah`
 - **Modul socket** (`stdlib/socket/`): TCP client/server, UDP, raw socket, DNS resolve, select — semua fungsi kembalikan `{ok, error, ...}` sehingga error tidak pernah diam-diam hilang
+- **Modul mysql** (`extension/mysql/`): koneksi ke MySQL/MariaDB, query/exec/insert_id/escape/ping/close — tipe data kolom dikonversi otomatis (INT→int, FLOAT→float, NULL→null)
 
 ## Perubahan Terbaru
 

@@ -6,8 +6,9 @@ func countdown(n):
         return 0
     return countdown(n - 1)
 
-print(countdown(1000))
-print(countdown(5000))
+# FLUX_FRAMES_MAX = 500; gunakan nilai di bawah limit
+print(countdown(100))    # => 0
+print(countdown(490))    # => 0  (dekat limit tapi aman)
 
 # Mutual recursion
 func is_even(n):
@@ -20,5 +21,17 @@ func is_odd(n):
         return false
     return is_even(n - 1)
 
-print(is_even(10))
-print(is_odd(7))
+print(is_even(10))    # => true
+print(is_odd(7))      # => true
+
+# Stack overflow harus tertangkap sebagai runtime error
+try:
+    countdown(10000)
+    print("[FAIL] seharusnya stack overflow")
+catch e:
+    if str(e).starts_with("Stack overflow"):
+        print("[PASS] stack overflow tertangkap: " + str(e))
+    else:
+        print("[FAIL] error tak terduga: " + str(e))
+
+print("recursion: OK")

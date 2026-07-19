@@ -1,0 +1,25 @@
+import http
+
+print("=== Flux HTTP Server Demo ===")
+print("Listening on port 8080...")
+
+server = http.listen("0.0.0.0", 8080)
+
+print("Menunggu request...")
+
+req = http.accept(server, 10)
+
+if req == null:
+    print("Timeout — tidak ada request.")
+else:
+    print("Request masuk!")
+    print("  Method : " + req["method"])
+    print("  Path   : " + req["path"])
+    print("  Body   : " + req["body"])
+
+    body = '{"status": "ok", "message": "Hello dari Flux!", "path": "' + req["path"] + '"}'
+    http.respond(req, 200, {"Content-Type": "application/json"}, body)
+    print("Response dikirim.")
+
+http.close(server)
+print("Server selesai.")

@@ -52,8 +52,35 @@ make clean
 
 ## Perubahan Terbaru
 
+- **Modul HTTP v2** (`extension/http/http_ext.c`): Upgrade besar — lihat detail di bawah.
 - **Sintaksis class**: Konstruktor kini menggunakan `func __init__(...)` (Python-style). Compiler juga menerima `func init(...)` sebagai alias untuk kompatibilitas mundur.
 - **Stack overflow protection**: `FLUX_FRAMES_MAX` dikurangi dari 6000 → 500 untuk mencegah segfault di Replit; ditambahkan bounds check pada `vm_push` dan `call_closure`.
+
+### Modul HTTP v2 — Ringkasan Perubahan
+
+**Perbaikan bug:**
+- Chunked transfer encoding kini dibaca tuntas dari socket (sebelumnya hanya sisa buffer recv_headers)
+- `HEAD` / `1xx` / `204` / `304` tidak lagi membaca body (sesuai RFC 7230 §3.3)
+- Redirect `307`/`308` kini mempertahankan method dan body asli (301/302 tetap ganti ke GET)
+- Tidak lagi menduplikasi `Content-Length` jika sudah ada di header custom
+- Buffer baris header di `http.respond` diperbesar ke 8 KB (mencegah overflow)
+
+**Peningkatan:**
+- Dukungan IPv6 — client pakai `AF_UNSPEC`, server dual-stack (`IPV6_V6ONLY=0`)
+- Parameter `timeout_sec` opsional di semua fungsi client
+- URL fragment (`#...`) di-strip sebelum dikirim
+- Buffer URL & host diperbesar (8 KB / 512 B)
+- Validasi port 1–65535 di `http.listen`
+- Header `Date` RFC 7231 ditambahkan otomatis di setiap response server
+- Server decode `Transfer-Encoding: chunked` pada request body
+- Daftar status code lengkap (100–511)
+- Pesan error lebih informatif
+
+**Fungsi baru:**
+- `http.close_conn(req)` — tutup koneksi tanpa mengirim response
+- `http.url_encode(str)` — percent-encode string (RFC 3986)
+- `http.url_decode(str)` — percent-decode string
+- `http.parse_query(str)` — parse query string ke dict
 
 ## User Preferences
 

@@ -1438,7 +1438,7 @@ mysql.close(conn)
 
 ## 16. Modul HTTP
 
-Modul `http` menyediakan **HTTP/1.1 client** dan **HTTP server** berbasis raw POSIX socket — tanpa dependensi libcurl atau library eksternal apapun. Dibangun langsung di atas `socket()` / `connect()` / `accept()` sehingga dapat digunakan di semua environment tanpa instalasi tambahan.
+Modul `http` menyediakan **HTTP/1.1 client** dan **HTTP server** berbasis raw POSIX socket — tanpa dependensi libcurl atau library eksternal apapun.
 
 ```flux
 import http
@@ -1448,20 +1448,17 @@ import http
 
 ### 16.1 Batasan & Aturan Penting
 
-Baca bagian ini sebelum menggunakan modul:
-
 | # | Aturan |
 |---|--------|
 | 1 | **HTTPS tidak didukung.** Hanya `http://`. URL `https://` langsung mengembalikan `ok=false`. Gunakan reverse proxy (nginx, caddy) untuk SSL. |
-| 2 | **IPv4 saja.** Belum mendukung IPv6 (`AF_INET` only). |
-| 3 | **Server single-threaded.** `http.accept` memblok sampai ada koneksi; hanya satu request ditangani sekaligus. Tidak ada konkurensi bawaan. |
-| 4 | **Satu respond per request.** Memanggil `http.respond` dua kali pada request yang sama adalah runtime error. |
-| 5 | **Selalu respond atau tutup.** Setiap `req` yang diterima dari `http.accept` **harus** direspons dengan `http.respond`. Jika tidak, koneksi client akan menggantung sampai timeout. |
-| 6 | **Ukuran header request/response dibatasi 64 KB.** Jika melebihi, koneksi ditutup dan `http.accept` melanjutkan ke koneksi berikutnya. |
-| 7 | **Ukuran body dibatasi 64 MB** (client dan server). |
-| 8 | **Koneksi TCP non-HTTP (health-check bare TCP, port scanner, dsb) diabaikan otomatis** — server menutupnya dan menunggu koneksi berikutnya tanpa mengembalikan `null`. |
-| 9 | **`http.close` harus dipanggil** saat server sudah tidak diperlukan untuk melepas file descriptor listening socket. |
-| 10 | **URL harus dimulai dengan `http://`.** Skema lain (ftp, ws, dsb) mengembalikan `ok=false`. |
+| 2 | **Server single-threaded.** `http.accept` memblok sampai ada koneksi; hanya satu request ditangani sekaligus. Gunakan `spawn` Flux untuk konkurensi. |
+| 3 | **Satu respond per request.** Memanggil `http.respond` atau `http.close_conn` dua kali pada request yang sama adalah runtime error. |
+| 4 | **Selalu respond atau tutup.** Setiap `req` dari `http.accept` **harus** direspons dengan `http.respond` atau ditutup dengan `http.close_conn`. Jika tidak, koneksi client akan menggantung. |
+| 5 | **Ukuran header dibatasi 64 KB.** Jika melebihi, koneksi ditutup dan `http.accept` melanjutkan ke koneksi berikutnya. |
+| 6 | **Ukuran body dibatasi 64 MB** (client dan server). |
+| 7 | **Koneksi TCP non-HTTP diabaikan otomatis** — server menutupnya dan menunggu koneksi berikutnya tanpa mengembalikan `null`. |
+| 8 | **`http.close` harus dipanggil** saat server sudah tidak diperlukan untuk melepas file descriptor. |
+| 9 | **URL harus dimulai dengan `http://`.** Skema lain mengembalikan `ok=false`. |
 
 ---
 
@@ -1469,7 +1466,7 @@ Baca bagian ini sebelum menggunakan modul:
 
 #### 16.2.1 Fungsi-fungsi Client
 
-**`http.get(url [, headers])`**
+**`http.get(url [, headers [, timeout_sec]])`**
 
 Kirim HTTP GET.
 
@@ -1481,11 +1478,14 @@ r = http.get("http://api.example.com/users")
 # Dengan header custom
 r = http.get("http://api.example.com/users",
     {"Authorization": "Bearer eyJhbGci...", "Accept": "application/json"})
+
+# Dengan timeout 10 detik
+r = http.get("http://api.example.com/users", {}, 10)
 ```
 
-**`http.post(url, body [, headers])`**
+**`http.post(url, body [, headers [, timeout_sec]])`**
 
-Kirim HTTP POST dengan body. `body` adalah string (bisa JSON, form-encoded, dsb).
+Kirim HTTP POST dengan body. `body` adalah string (JSON, form-encoded, dll).
 
 ```flux
 # POST JSON
@@ -1497,54 +1497,25 @@ r = http.post("http://api.example.com/users",
 r = http.post("http://api.example.com/login",
     "username=budi&password=rahasia",
     {"Content-Type": "application/x-www-form-urlencoded"})
-
-# POST tanpa header (body plain text)
-r = http.post("http://api.example.com/log", "ini pesan log")
 ```
 
-**`http.put(url, body [, headers])`**
+**`http.put(url, body [, headers [, timeout_sec]])`**  
+**`http.patch(url, body [, headers [, timeout_sec]])`**
 
-Kirim HTTP PUT. Signature sama dengan `post`.
+Signature sama dengan `post`.
 
-```flux
-r = http.put("http://api.example.com/users/42",
-    '{"nama": "Budi Santoso", "aktif": true}',
-    {"Content-Type": "application/json",
-     "Authorization": "Bearer eyJhbGci..."})
-```
-
-**`http.delete(url [, headers])`**
+**`http.delete(url [, headers [, timeout_sec]])`**
 
 Kirim HTTP DELETE. Tidak ada parameter body.
 
-```flux
-r = http.delete("http://api.example.com/users/42",
-    {"Authorization": "Bearer eyJhbGci..."})
-```
-
-**`http.patch(url, body [, headers])`**
-
-Kirim HTTP PATCH. Signature sama dengan `post`.
-
-```flux
-r = http.patch("http://api.example.com/users/42",
-    '{"aktif": false}',
-    {"Content-Type": "application/json"})
-```
-
-**`http.request(method, url [, body [, headers]])`**
+**`http.request(method, url [, body [, headers [, timeout_sec]]])`**
 
 Kirim request dengan HTTP method bebas. `method` otomatis diubah uppercase.
 
 ```flux
-# OPTIONS
 r = http.request("OPTIONS", "http://api.example.com/users", "", {})
-
-# HEAD (body kosong)
-r = http.request("HEAD", "http://api.example.com/users", "", {})
-
-# Method custom
-r = http.request("PURGE", "http://cache.internal/path", "", {})
+r = http.request("HEAD",    "http://api.example.com/users", "", {})
+r = http.request("PURGE",   "http://cache.internal/path",   "", {})
 ```
 
 ---
@@ -1555,40 +1526,45 @@ Semua fungsi client mengembalikan **dict** dengan field berikut:
 
 ```flux
 {
-    "ok":      true,                          # bool: true jika koneksi berhasil (termasuk 4xx/5xx)
-    "status":  200,                           # int: HTTP status code; 0 jika koneksi gagal
-    "headers": {"content-type": "...", ...},  # dict: header response, semua key lowercase
-    "body":    "...",                         # string: response body
-    "error":   ""                             # string: pesan error jika ok=false, kosong jika ok=true
+    "ok":      true,    # bool: true jika koneksi dan HTTP exchange berhasil
+    "status":  200,     # int: HTTP status code; 0 jika koneksi gagal
+    "headers": {...},   # dict: header response, semua key lowercase
+    "body":    "...",   # string: response body (sudah di-decode jika chunked)
+    "error":   ""       # string: pesan error jika ok=false
 }
 ```
 
-> **Penting:** `ok=true` berarti koneksi dan HTTP exchange berhasil — **bukan** berarti status 2xx. Respons 404 atau 500 tetap `ok=true`. Cek `r["status"]` untuk kode HTTP.
+> **Catatan:** `ok=true` berarti koneksi berhasil — **bukan** berarti status 2xx. Respons 404 atau 500 tetap `ok=true`. Cek `r["status"]`.
 
 ```flux
 r = http.get("http://api.example.com/users/999")
-
 if r["ok"] == false:
     print("Koneksi gagal: " + r["error"])
 elif r["status"] == 200:
     print("Data: " + r["body"])
 elif r["status"] == 404:
-    print("User tidak ditemukan")
-elif r["status"] >= 500:
-    print("Server error: " + str(r["status"]))
+    print("Tidak ditemukan")
 ```
 
 ---
 
 #### 16.2.3 Timeout & Batas Client
 
-| Parameter | Nilai | Keterangan |
-|-----------|-------|------------|
+| Parameter | Default | Keterangan |
+|-----------|---------|------------|
 | Timeout koneksi TCP | **15 detik** | Waktu tunggu `connect()` sebelum menyerah |
 | Timeout receive/send | **30 detik** | Per `recv()`/`send()` setelah terkoneksi |
-| Maksimum redirect | **5 hop** | Lebih dari 5 → `ok=false`, error "Terlalu banyak redirect" |
-| Maksimum header | **64 KB** | Header response melebihi batas → error |
-| Maksimum body | **64 MB** | Body response melebihi batas → dipotong |
+| Maksimum redirect | **5 hop** | Lebih dari 5 → `ok=false` |
+| Maksimum header | **64 KB** | Melebihi batas → error |
+| Maksimum body | **64 MB** | Melebihi batas → error |
+| Timeout kustom | opsional | Argumen `timeout_sec` terakhir di semua fungsi |
+
+```flux
+# Timeout 5 detik untuk semua operasi
+r = http.get("http://api.example.com/slow", {}, 5)
+if r["ok"] == false:
+    print("Timeout atau gagal: " + r["error"])
+```
 
 ---
 
@@ -1596,107 +1572,59 @@ elif r["status"] >= 500:
 
 Client mengikuti redirect **301, 302, 307, 308** secara otomatis:
 
-- Redirect selalu dilanjutkan dengan **GET** (mengikuti perilaku browser) — body dan method asli dibuang setelah redirect.
-- Redirect relatif (misal `/new-path`) dikonversi ke URL absolut menggunakan host asal.
+| Kode | Perilaku |
+|------|----------|
+| 301, 302 | Lanjutkan dengan GET, body dibuang (perilaku browser) |
+| 307, 308 | Lanjutkan dengan **method dan body asli** (sesuai RFC 7231) |
+
+- Redirect relatif (`/new-path`) dikonversi ke URL absolut menggunakan host asal.
 - Redirect ke `https://` akan gagal karena HTTPS tidak didukung.
+- Fragment URL (`#...`) selalu di-strip sebelum request dikirim.
+
+---
+
+#### 16.2.5 Dukungan IPv6
+
+Client otomatis mencoba IPv6 maupun IPv4 (resolusi `AF_UNSPEC`). Jika host memiliki rekaman AAAA, koneksi IPv6 dicoba terlebih dahulu, lalu fallback ke IPv4.
 
 ```flux
-# Jika server reply 301 → http://api.example.com/v2/users
-# client akan otomatis GET ke URL baru
-r = http.get("http://api.example.com/users")
-print(r["status"])  # status dari URL akhir setelah redirect
+r = http.get("http://ipv6.google.com/")   # bekerja jika tersedia IPv6
 ```
 
 ---
 
-#### 16.2.5 Header Default Client
-
-Header berikut **selalu dikirim** otomatis (tidak perlu disertakan manual):
+#### 16.2.6 Header Default Client
 
 ```
 Connection: close
 User-Agent: Flux/1.0
 Accept: */*
-Host: <host>              (atau <host>:<port> jika port bukan 80)
-Content-Length: <n>       (hanya jika ada body)
+Host: <host>            (atau <host>:<port> jika port bukan 80)
+Content-Length: <n>     (hanya jika ada body dan user tidak menyediakan sendiri)
 ```
 
-Header custom yang disertakan melalui parameter `headers` **ditambahkan setelah** header default dan dapat menimpa `User-Agent` dan `Accept`.
-
----
-
-#### 16.2.6 Membaca Header Response
-
-Semua key header response **selalu lowercase**:
-
-```flux
-r = http.get("http://api.example.com/data")
-
-ct   = r["headers"]["content-type"]      # "application/json"
-cl   = r["headers"]["content-length"]    # "1234"
-srv  = r["headers"]["server"]            # "nginx/1.24.0"
-auth = r["headers"]["www-authenticate"]  # hanya ada jika 401
-```
-
-Jika header tidak ada, akses key tersebut akan menghasilkan `null`.
-
----
-
-#### 16.2.7 Contoh Lengkap: Konsumsi REST API
-
-```flux
-import http
-
-base = "http://jsonplaceholder.typicode.com"
-
-# Ambil semua post
-r = http.get(base + "/posts")
-if r["ok"] and r["status"] == 200:
-    print("Posts: " + str(len(r["body"])) + " bytes")
-
-# Buat post baru
-r = http.post(base + "/posts",
-    '{"title": "Flux", "body": "Halo dari Flux!", "userId": 1}',
-    {"Content-Type": "application/json"})
-print("Buat post: status=" + str(r["status"]))   # 201
-
-# Update post
-r = http.put(base + "/posts/1",
-    '{"title": "Flux Updated", "body": "Diperbarui", "userId": 1}',
-    {"Content-Type": "application/json"})
-print("Update: status=" + str(r["status"]))  # 200
-
-# Hapus post
-r = http.delete(base + "/posts/1")
-print("Hapus: status=" + str(r["status"]))   # 200
-
-# Cek error
-r = http.get("http://host-tidak-ada.invalid/")
-if r["ok"] == false:
-    print("Gagal: " + r["error"])  # "Koneksi gagal atau timeout"
-
-# HTTPS ditolak
-r = http.get("https://example.com")
-print(r["ok"])     # false
-print(r["error"])  # "HTTPS belum didukung. Gunakan http:// atau reverse proxy."
-```
+> Header `Content-Length` **tidak diduplikasi** jika sudah ada di dict headers custom.
 
 ---
 
 ### 16.3 HTTP Server
 
-#### 16.3.1 Siklus Hidup Server
+#### 16.3.1 Contoh Minimal
 
-```
-http.listen(host, port)   →  buat listening socket, return handle
-       ↓
-http.accept(srv, timeout) →  tunggu & terima satu request, return req dict
-       ↓                      (null jika timeout tercapai)
-http.respond(req, ...)    →  kirim satu HTTP response, tutup koneksi
-       ↓
- (ulangi accept/respond)
-       ↓
-http.close(srv)           →  tutup listening socket
+```flux
+import http
+
+srv = http.listen("0.0.0.0", 8080)
+
+while true:
+    req = http.accept(srv, 30)
+    if req == null:
+        continue
+
+    if req["path"] == "/ping":
+        http.respond(req, 200, {"Content-Type": "text/plain"}, "pong")
+    else:
+        http.respond(req, 404, {}, "Not found")
 ```
 
 ---
@@ -1706,314 +1634,261 @@ http.close(srv)           →  tutup listening socket
 Membuat TCP server dan mulai mendengarkan koneksi masuk.
 
 ```flux
-srv = http.listen("0.0.0.0", 8080)   # dengarkan semua interface
-srv = http.listen("127.0.0.1", 9000) # hanya localhost
+srv = http.listen("0.0.0.0", 8080)    # semua interface (IPv4 + IPv6)
+srv = http.listen("127.0.0.1", 9000)  # hanya localhost IPv4
+srv = http.listen("::", 8080)          # semua interface IPv6 dual-stack
 ```
 
 **Parameter:**
-- `host` — string IP atau hostname. `"0.0.0.0"` untuk semua interface. Juga menerima hostname yang di-resolve via DNS.
-- `port` — int, nomor port 1–65535.
-
-**Return:** handle server (dict opak). Simpan ke variabel, teruskan ke `accept` dan `close`.
+- `host` — IP atau hostname. `"0.0.0.0"` atau `"::"` untuk semua interface. DNS di-resolve otomatis.
+- `port` — int, nomor port **1–65535** (nilai di luar range menghasilkan runtime error).
 
 **Perilaku internal:**
+- Mencoba socket **IPv6 dual-stack** (menerima koneksi IPv4 dan IPv6) terlebih dahulu, fallback ke IPv4 jika tidak tersedia.
 - `SO_REUSEADDR` diset → port bisa langsung dipakai ulang setelah restart.
-- Backlog listen queue = **128** koneksi.
-- Gagal `bind()` (port sudah dipakai) menghasilkan runtime error.
-
-```flux
-# Pastikan port tidak bentrok
-srv = http.listen("0.0.0.0", 8080)
-# Runtime error jika port 8080 sudah dipakai:
-# "http.listen: bind() gagal: Address already in use"
-```
+- Backlog listen queue = 128.
+- Gagal `bind()` menghasilkan runtime error dengan pesan informatif.
 
 ---
 
-#### 16.3.3 `http.accept(server, timeout_sec)`
+#### 16.3.3 `http.accept(server [, timeout_sec])`
 
-Menunggu request masuk. **Memblok** hingga ada koneksi atau timeout tercapai.
+Menunggu request masuk. **Memblok** hingga ada koneksi atau timeout.
 
 ```flux
 req = http.accept(srv, 30)   # tunggu maks 30 detik
 if req == null:
-    # timeout — tidak ada request dalam 30 detik
-    break
+    continue  # timeout
 ```
 
-**Parameter:**
-- `server` — handle dari `http.listen`.
-- `timeout_sec` — int, batas tunggu dalam detik. Default 30 jika tidak disertakan.
+**Return:** dict request, atau `null` jika timeout.
 
-**Return:**
-- **dict** berisi data request jika ada koneksi HTTP valid.
-- **`null`** jika timeout atau terjadi error fatal pada listening socket.
-
-**Perilaku penting:**
-- Koneksi TCP yang bukan HTTP valid (bare TCP, port scanner, health-check probe `nc -z`) **otomatis dibuang** dan `accept` melanjutkan menunggu tanpa mengembalikan `null`. Koneksi buruk tidak memutus loop server.
-- Setiap koneksi client yang diterima memiliki timeout recv/send **10 detik**. Jika client terlalu lambat mengirim request, koneksi ditutup dan accept dilanjutkan.
+**Perilaku:**
+- Koneksi TCP non-HTTP (bare TCP, port scanner) dibuang otomatis, accept dilanjutkan.
+- Request dengan `Transfer-Encoding: chunked` di-decode otomatis.
+- Setiap koneksi client memiliki timeout recv/send **10 detik**.
 
 ---
 
 #### 16.3.4 Field Request Dict
 
-`http.accept` mengembalikan dict dengan field-field berikut:
-
 | Field | Tipe | Contoh | Keterangan |
 |-------|------|--------|------------|
 | `ok` | bool | `true` | Selalu `true` jika bukan `null` |
 | `method` | string | `"GET"` | HTTP method uppercase |
-| `path` | string | `"/api/users"` | Path URL tanpa query string |
-| `query` | string | `"page=1&limit=10"` | Query string mentah (setelah `?`), string kosong jika tidak ada |
-| `body` | string | `'{"nama":"Budi"}'` | Request body mentah; string kosong jika tidak ada |
-| `headers` | dict | `{"content-type": "..."}` | Semua header request, **key selalu lowercase** |
-| `remote_addr` | string | `"192.168.1.5"` | IP address client |
+| `path` | string | `"/api/users"` | Path URL tanpa query string dan tanpa fragment |
+| `query` | string | `"page=1&limit=10"` | Query string mentah (setelah `?`), kosong jika tidak ada |
+| `body` | string | `'{"nama":"Budi"}'` | Request body (di-decode jika chunked) |
+| `headers` | dict | `{"content-type": "..."}` | Header request, **key selalu lowercase** |
+| `remote_addr` | string | `"192.168.1.5"` | IP address client (IPv4-mapped IPv6 ditampilkan sebagai IPv4) |
 | `remote_port` | int | `54321` | Port sumber client |
 
 ```flux
 req = http.accept(srv, 30)
 if req != null:
-    print(req["method"])                         # "POST"
-    print(req["path"])                           # "/api/users"
-    print(req["query"])                          # "dry_run=1"
-    print(req["body"])                           # '{"nama":"Budi"}'
-    print(req["remote_addr"])                    # "127.0.0.1"
-    print(str(req["remote_port"]))               # "51200"
+    print(req["method"])       # "POST"
+    print(req["path"])         # "/api/users"
+    print(req["query"])        # "dry_run=1"
+    ct = req["headers"]["content-type"]   # "application/json"
 
-    ct = req["headers"]["content-type"]          # "application/json"
-    auth = req["headers"]["authorization"]       # "Bearer eyJ..."
-    ua = req["headers"]["user-agent"]            # "curl/8.1.0"
+    # Parse query string ke dict
+    params = http.parse_query(req["query"])
+    # params["dry_run"] == "1"
 ```
-
-> **Query string tidak di-parse otomatis.** Field `query` adalah string mentah `"page=1&limit=10"`. Parse sendiri dengan `split` jika diperlukan.
 
 ---
 
 #### 16.3.5 `http.respond(req, status, headers, body)`
 
-Mengirim satu HTTP response ke client dan **langsung menutup koneksi**.
+Mengirim satu HTTP response ke client dan langsung menutup koneksi.
 
 ```flux
 ok = http.respond(req, 200,
     {"Content-Type": "application/json"},
     '{"status": "ok"}')
-
-print(ok)  # true jika berhasil dikirim, false jika koneksi putus
 ```
 
-**Parameter:**
-| Parameter | Tipe | Keterangan |
-|-----------|------|------------|
-| `req` | dict | Request dict dari `http.accept` |
-| `status` | int | HTTP status code (200, 404, 500, dsb) |
-| `headers` | dict | Header response tambahan. Boleh `{}` untuk kosong. |
-| `body` | string | Body response. Boleh `""` untuk kosong. |
+**Perilaku penting:**
+- Response `204 No Content`, `304 Not Modified`, dan `1xx` tidak mengirim body meskipun argumen `body` diisi (sesuai RFC 7230 §3.3).
+- Request `HEAD`: body tidak dikirim, hanya header (termasuk `Content-Length`).
+- Header `Date` RFC 7231 ditambahkan otomatis.
+- `Content-Type: text/plain; charset=utf-8` ditambahkan otomatis jika tidak disediakan dan ada body.
 
-**Return:** `bool` — `true` jika seluruh response berhasil dikirim, `false` jika koneksi terputus di tengah.
+**Status code yang dikenali** (reason phrase otomatis): 100–103, 200–208, 226, 300–308, 400–418, 421–429, 431, 451, 500–511.
 
-**Header otomatis yang selalu ditambahkan:**
+```flux
+# Redirect
+http.respond(req, 301, {"Location": "http://example.com/new"}, "")
+
+# No Content
+http.respond(req, 204, {}, "")  # body tidak dikirim
+
+# JSON response
+http.respond(req, 200,
+    {"Content-Type": "application/json"},
+    '{"items": [1, 2, 3]}')
 ```
-HTTP/1.1 <status> <pesan>
-Server: Flux/1.0
-Connection: close
-Content-Length: <panjang body>
-Content-Type: text/plain; charset=utf-8   ← hanya jika headers tidak menyertakan Content-Type
-```
-
-**Status code yang memiliki pesan bawaan:**
-
-| Kode | Pesan |
-|------|-------|
-| 200 | OK |
-| 201 | Created |
-| 204 | No Content |
-| 301 | Moved Permanently |
-| 302 | Found |
-| 304 | Not Modified |
-| 400 | Bad Request |
-| 401 | Unauthorized |
-| 403 | Forbidden |
-| 404 | Not Found |
-| 405 | Method Not Allowed |
-| 409 | Conflict |
-| 422 | Unprocessable Entity |
-| 429 | Too Many Requests |
-| 500 | Internal Server Error |
-| 502 | Bad Gateway |
-| 503 | Service Unavailable |
-
-Status code lain yang tidak ada di tabel tetap valid — pesan yang dikirim adalah `"OK"` sebagai fallback.
-
-**Aturan penting:**
-- **Hanya boleh dipanggil sekali per `req`.** Setelah `http.respond` dipanggil, field internal `_fd` di-set ke 0. Memanggil `respond` lagi pada req yang sama menghasilkan runtime error: `"http.respond: koneksi sudah ditutup"`.
-- **Koneksi ditutup otomatis** setelah respond — tidak perlu dan tidak bisa keep-alive.
-- Jika `ok` return `false`, data mungkin hanya terkirim sebagian. Biasanya karena client memutus koneksi duluan.
 
 ---
 
-#### 16.3.6 `http.close(server)`
+#### 16.3.6 `http.close_conn(req)`
 
-Menutup listening socket dan membebaskan memori server handle.
+Tutup koneksi client **tanpa** mengirim response apapun. Berguna untuk memutus koneksi yang tidak memenuhi syarat (misal auth gagal sebelum sempat memeriksa path).
+
+```flux
+req = http.accept(srv, 30)
+if req == null:
+    continue
+
+auth = req["headers"]["authorization"]
+if auth == null or auth != "Bearer secret":
+    http.close_conn(req)   # tutup tanpa respond
+    continue
+
+http.respond(req, 200, {}, "OK")
+```
+
+---
+
+#### 16.3.7 `http.close(server)`
+
+Tutup listening socket dan bebaskan resource.
 
 ```flux
 http.close(srv)
 ```
 
-Setelah dipanggil, variabel `srv` tidak dapat digunakan lagi. Memanggil `accept` pada handle yang sudah ditutup menghasilkan runtime error.
-
 ---
 
-#### 16.3.7 Pola Server Lengkap
+### 16.4 Utilitas
 
-**Server dasar dengan routing:**
+#### `http.url_encode(str)` → string
+
+Percent-encode string sesuai RFC 3986. Karakter unreserved (A–Z, a–z, 0–9, `-`, `_`, `.`, `~`) tidak di-encode.
 
 ```flux
 import http
 
-PORT = 8080
-srv = http.listen("0.0.0.0", PORT)
-print("Server jalan di port " + str(PORT))
+enc = http.url_encode("hello world! & more")
+# "hello%20world%21%20%26%20more"
 
-while true:
-    req = http.accept(srv, 60)
-    if req == null:          # tidak ada request dalam 60 detik
-        print("Idle timeout, server berhenti")
-        break
+enc = http.url_encode("nama=Budi Santoso")
+# "nama%3DBudi%20Santoso"
+```
 
+#### `http.url_decode(str)` → string
+
+Decode string yang di-percent-encode. `+` diubah menjadi spasi (form encoding).
+
+```flux
+dec = http.url_decode("hello%20world%21")
+# "hello world!"
+
+dec = http.url_decode("nama=Budi+Santoso")
+# "nama=Budi Santoso"
+```
+
+#### `http.parse_query(query_str)` → dict
+
+Parse query string `"key=val&key2=val2"` menjadi dict. Key dan value di-URL-decode secara otomatis.
+
+```flux
+params = http.parse_query("page=1&q=hello+world&tag=flux%20lang")
+# params["page"]  == "1"
+# params["q"]     == "hello world"
+# params["tag"]   == "flux lang"
+
+# Contoh penggunaan dalam server:
+req = http.accept(srv, 30)
+if req != null:
+    params = http.parse_query(req["query"])
+    page = params["page"]
+    if page == null:
+        page = "1"
+    http.respond(req, 200, {}, "page=" + page)
+```
+
+---
+
+### 16.5 Contoh Lengkap: REST API Client
+
+```flux
+import http
+
+base = "http://jsonplaceholder.typicode.com"
+
+# GET
+r = http.get(base + "/posts/1")
+if r["ok"] and r["status"] == 200:
+    print("Body: " + r["body"])
+
+# POST JSON
+r = http.post(base + "/posts",
+    '{"title": "Flux", "body": "Halo!", "userId": 1}',
+    {"Content-Type": "application/json"})
+print("Buat post: " + str(r["status"]))   # 201
+
+# PUT
+r = http.put(base + "/posts/1",
+    '{"title": "Updated", "body": "Diperbarui", "userId": 1}',
+    {"Content-Type": "application/json"})
+print("Update: " + str(r["status"]))      # 200
+
+# DELETE
+r = http.delete(base + "/posts/1")
+print("Hapus: " + str(r["status"]))       # 200
+
+# HEAD (cek resource tanpa download body)
+r = http.request("HEAD", base + "/posts/1", "", {})
+print("Exist: " + str(r["status"]))       # 200, body kosong
+print("Type: " + r["headers"]["content-type"])
+```
+
+---
+
+### 16.6 Contoh Lengkap: HTTP Server dengan Routing
+
+```flux
+import http
+
+func handle(req):
     method = req["method"]
     path   = req["path"]
-    body   = req["body"]
-    query  = req["query"]
+    params = http.parse_query(req["query"])
 
-    # Routing berdasarkan path dan method
-    if path == "/" and method == "GET":
+    if path == "/":
         http.respond(req, 200,
-            {"Content-Type": "text/html; charset=utf-8"},
-            "<!DOCTYPE html><html><body><h1>Halo dari Flux!</h1></body></html>")
-
-    elif path == "/api/ping":
-        http.respond(req, 200,
-            {"Content-Type": "application/json"},
-            '{"pong": true}')
+            {"Content-Type": "text/html"},
+            "<h1>Flux HTTP Server</h1>")
 
     elif path == "/api/echo" and method == "POST":
         http.respond(req, 200,
             {"Content-Type": "application/json"},
-            '{"echo": "' + body + '", "query": "' + query + '"}')
+            '{"echo": ' + '"' + req["body"] + '"}')
 
-    elif path == "/stop":
-        http.respond(req, 200, {}, "Server dihentikan")
-        break   # keluar dari loop, lanjut ke http.close
+    elif path == "/api/search":
+        q = params["q"]
+        if q == null:
+            http.respond(req, 400, {}, "Parameter q wajib diisi")
+        else:
+            http.respond(req, 200,
+                {"Content-Type": "application/json"},
+                '{"query": "' + q + '", "results": []}')
 
     else:
         http.respond(req, 404,
             {"Content-Type": "application/json"},
-            '{"error": "Not Found", "path": "' + path + '"}')
-
-http.close(srv)
-print("Server selesai")
-```
-
-**Server yang berjalan selamanya (tanpa idle timeout):**
-
-```flux
-import http
+            '{"error": "Not found"}')
 
 srv = http.listen("0.0.0.0", 8080)
+print("Server berjalan di port 8080")
 
 while true:
-    req = http.accept(srv, 0)   # timeout 0 detik = tunggu selamanya
+    req = http.accept(srv, 60)
     if req == null:
-        continue                 # tidak pernah null jika timeout=0, tapi aman
-
-    http.respond(req, 200, {"Content-Type": "text/plain"}, "OK")
+        continue
+    handle(req)
 ```
-
-> **Catatan:** `timeout_sec = 0` membuat `accept` menunggu tanpa batas waktu. Ini berguna untuk server production yang tidak boleh berhenti karena idle.
-
-**Membaca header request:**
-
-```flux
-req = http.accept(srv, 30)
-if req != null:
-    hdrs = req["headers"]
-
-    # Autentikasi via header
-    auth = hdrs["authorization"]
-    if auth == null or auth != "Bearer rahasia123":
-        http.respond(req, 401,
-            {"Content-Type": "application/json",
-             "WWW-Authenticate": "Bearer"},
-            '{"error": "Unauthorized"}')
-    else:
-        http.respond(req, 200, {}, "Selamat datang!")
-```
-
-**Response dengan multiple header:**
-
-```flux
-http.respond(req, 201,
-    {"Content-Type":  "application/json",
-     "Location":      "/api/users/42",
-     "X-Request-Id":  "abc-123",
-     "Cache-Control": "no-cache"},
-    '{"id": 42, "nama": "Budi"}')
-```
-
-**Response 204 No Content (tanpa body):**
-
-```flux
-http.respond(req, 204, {}, "")
-```
-
----
-
-#### 16.3.8 Keterbatasan Server
-
-| Keterbatasan | Detail |
-|---|---|
-| **Single-threaded** | Satu request diproses per waktu. Selama Flux menjalankan logika bisnis Anda, koneksi baru menunggu di backlog (maks 128). |
-| **Tidak ada keep-alive** | Setiap request adalah koneksi TCP baru. `Connection: close` selalu dikirim. |
-| **Tidak ada WebSocket** | Upgrade protocol tidak didukung. |
-| **Body tidak di-stream** | Seluruh body request dibaca ke memori sebelum dikembalikan ke Flux. Maks 64 MB. |
-| **Hanya IPv4** | Binding ke alamat IPv6 tidak didukung. |
-| **Tidak ada TLS/SSL** | Gunakan reverse proxy (nginx, caddy, haproxy) untuk HTTPS. |
-
----
-
-### 16.4 Referensi Cepat
-
-#### Client
-
-| Fungsi | Signature | Body? |
-|--------|-----------|-------|
-| `http.get` | `get(url [, headers])` | Tidak |
-| `http.post` | `post(url, body [, headers])` | Ya |
-| `http.put` | `put(url, body [, headers])` | Ya |
-| `http.delete` | `delete(url [, headers])` | Tidak |
-| `http.patch` | `patch(url, body [, headers])` | Ya |
-| `http.request` | `request(method, url [, body [, headers]])` | Opsional |
-
-Semua fungsi client mengembalikan: `{"ok": bool, "status": int, "headers": dict, "body": string, "error": string}`
-
-#### Server
-
-| Fungsi | Signature | Return |
-|--------|-----------|--------|
-| `http.listen` | `listen(host, port)` | handle server |
-| `http.accept` | `accept(server [, timeout_sec])` | request dict atau `null` |
-| `http.respond` | `respond(req, status, headers, body)` | bool |
-| `http.close` | `close(server)` | null |
-
-#### Kode Error Client
-
-| `ok` | `status` | `error` | Penyebab |
-|------|----------|---------|----------|
-| `false` | `0` | `"Koneksi gagal atau timeout"` | Host tidak dapat dijangkau / timeout 15 detik |
-| `false` | `0` | `"HTTPS belum didukung..."` | URL dimulai dengan `https://` |
-| `false` | `0` | `"URL tidak valid atau skema tidak didukung"` | URL bukan `http://` atau `https://` |
-| `false` | `0` | `"Terlalu banyak redirect"` | Lebih dari 5 redirect berturut-turut |
-| `true` | `4xx/5xx` | `""` | Request berhasil, server mengembalikan error HTTP |
 
 ---
 

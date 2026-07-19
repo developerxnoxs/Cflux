@@ -37,11 +37,12 @@ Flux adalah bahasa pemrograman modern yang diimplementasikan dalam C. Flux memil
 14. [Modul Socket](#14-modul-socket)
 15. [Modul MySQL](#15-modul-mysql)
 16. [Modul HTTP](#16-modul-http)
-17. [FFI — Import dan Panggil Library C Native](#17-ffi--import-dan-panggil-library-c-native)
-18. [Ekstensi Native (.so Plugin)](#18-ekstensi-native-so-plugin)
-19. [Embed libflux ke Program C](#19-embed-libflux-ke-program-c)
-20. [Struktur Proyek](#20-struktur-proyek)
-21. [Arsitektur Internal](#21-arsitektur-internal)
+17. [Modul WebSocket](#17-modul-websocket)
+18. [FFI — Import dan Panggil Library C Native](#18-ffi--import-dan-panggil-library-c-native)
+19. [Ekstensi Native (.so Plugin)](#19-ekstensi-native-so-plugin)
+20. [Embed libflux ke Program C](#20-embed-libflux-ke-program-c)
+21. [Struktur Proyek](#21-struktur-proyek)
+22. [Arsitektur Internal](#22-arsitektur-internal)
 
 ---
 
@@ -1998,7 +1999,462 @@ while true:
 
 ---
 
-## 17. FFI — Import dan Panggil Library C Native
+## 17. Modul WebSocket
+
+Modul `ws` menyediakan **WebSocket server** dan **WebSocket client** berbasis [wslay](https://github.com/tatsuhiro-t/wslay) (RFC 6455) dengan raw POSIX socket. wslay hanya mengurus framing WebSocket; semua I/O dilakukan via callback sehingga tidak ada event loop tambahan dan tidak konflik dengan async runtime Flux.
+
+```flux
+import ws
+```
+
+---
+
+### 17.1 Batasan & Aturan Penting
+
+| # | Aturan |
+|---|--------|
+| 1 | **Hanya `ws://` yang didukung.** Koneksi terenkripsi (`wss://`) belum diimplementasikan; gunakan reverse proxy (nginx/caddy) yang meng-upgrade TLS ke ws:// lokal jika diperlukan. |
+| 2 | **Single-threaded per koneksi.** `ws.accept` dan `ws.connect` memblok; gunakan `spawn` Flux untuk menangani banyak koneksi secara konkuren. |
+| 3 | **Ukuran pesan dibatasi 16 MB per frame.** Pesan lebih besar dari batas ini menghasilkan runtime error. |
+| 4 | **Setiap `ws.accept` atau `ws.connect` harus diakhiri dengan `ws.close`.** Tidak menutup koneksi menyebabkan kebocoran file descriptor. |
+| 5 | **Setiap `ws.listen` harus diakhiri dengan `ws.close_server`.** |
+| 6 | **`ws.recv` mengembalikan `null` saat timeout** — bukan error. Gunakan loop jika ingin menunggu lebih lama. |
+| 7 | **Ping/pong ditangani otomatis oleh wslay** — tidak perlu membalas ping secara manual. `ws.recv` tetap mengembalikan frame ping agar aplikasi dapat memantaunya. |
+| 8 | **SIGPIPE diblokir** — pengiriman ke koneksi yang sudah putus mengembalikan `false`, bukan crash. |
+| 9 | **Header HTTP upgrade dibatasi 16 KB.** Lebih dari itu, koneksi ditolak. |
+| 10 | **Timeout di semua fungsi bersifat deadline absolut** (implementasi `select()`). Client/server lambat tidak dapat memblok proses Flux selamanya. |
+
+---
+
+### 17.2 WebSocket Server
+
+#### 17.2.1 Contoh Minimal Server
+
+```flux
+import ws
+
+srv = ws.listen("0.0.0.0", 9001)
+print("WS server di ws://0.0.0.0:9001")
+
+while true:
+    conn = ws.accept(srv, 30)
+    if conn == null:
+        continue   # timeout, tunggu lagi
+
+    msg = ws.recv(conn, 60)
+    if msg != null and msg["type"] == "text":
+        ws.send(conn, "Echo: " + msg["data"])
+
+    ws.close(conn)
+```
+
+---
+
+#### 17.2.2 `ws.listen(host, port)` → server_handle
+
+Membuat TCP socket, bind, dan mulai mendengarkan koneksi WebSocket masuk.
+
+```flux
+srv = ws.listen("0.0.0.0", 9001)     # semua interface IPv4
+srv = ws.listen("127.0.0.1", 9001)   # hanya loopback
+srv = ws.listen("::", 9001)           # dual-stack IPv4+IPv6
+```
+
+**Parameter:**
+- `host` — string IP atau hostname. `"0.0.0.0"` berarti semua interface IPv4, `"::"` berarti dual-stack.
+- `port` — int, **1–65535**.
+
+**Perilaku:**
+- Mencoba socket IPv6 dual-stack terlebih dahulu, fallback ke IPv4 jika tidak tersedia.
+- `SO_REUSEADDR` dan `SO_REUSEPORT` diset — restart server tidak perlu menunggu TIME_WAIT.
+- Backlog listen queue = **128**.
+- Gagal bind langsung menghasilkan **runtime error**.
+
+**Return:** opaque server handle (FluxDict internal). Jangan akses field-nya.
+
+---
+
+#### 17.2.3 `ws.accept(server [, timeout_sec])` → conn_handle | null
+
+Menunggu satu koneksi WebSocket masuk, melakukan HTTP upgrade handshake, dan mengembalikan handle koneksi.
+
+```flux
+conn = ws.accept(srv)       # timeout default 30 detik
+conn = ws.accept(srv, 60)   # tunggu hingga 60 detik
+conn = ws.accept(srv, 0)    # non-blocking (langsung return null jika tidak ada)
+
+if conn == null:
+    continue   # timeout
+```
+
+**Parameter:**
+- `timeout_sec` — int, opsional. Default: **30**. `0` = non-blocking.
+
+**Return:** conn_handle jika ada koneksi masuk dan handshake berhasil; `null` jika timeout.
+
+**Perilaku handshake:**
+- Baca HTTP `GET` request dengan header `Upgrade: websocket`.
+- Verifikasi `Sec-WebSocket-Version: 13`.
+- Hitung `Sec-WebSocket-Accept` = base64(SHA1(key + GUID)).
+- Kirim respons `HTTP/1.1 101 Switching Protocols`.
+- Koneksi TCP yang bukan HTTP WebSocket yang valid dibuang secara senyap; accept melanjutkan ke koneksi berikutnya.
+
+---
+
+### 17.3 WebSocket Client
+
+#### 17.3.1 Contoh Minimal Client
+
+```flux
+import ws
+
+conn = ws.connect("ws://echo.example.com:9001/echo")
+if conn == null:
+    print("Gagal terhubung")
+else:
+    ws.send(conn, "Halo server!")
+    msg = ws.recv(conn, 10)
+    if msg != null:
+        print("Balasan: " + msg["data"])
+    ws.close(conn)
+```
+
+---
+
+#### 17.3.2 `ws.connect(url [, headers [, timeout_sec]])` → conn_handle | null
+
+Membuat koneksi WebSocket ke server. Melakukan TCP connect, lalu HTTP upgrade handshake sisi client.
+
+```flux
+# Koneksi dasar
+conn = ws.connect("ws://localhost:9001/")
+
+# Dengan path spesifik
+conn = ws.connect("ws://api.example.com:8080/live/feed")
+
+# Dengan header custom (contoh: autentikasi)
+conn = ws.connect("ws://api.example.com:9001/stream",
+    {"Authorization": "Bearer eyJhbGci...",
+     "X-Client-ID": "flux-app-1"})
+
+# Dengan timeout 10 detik
+conn = ws.connect("ws://api.example.com:9001/", {}, 10)
+
+if conn == null:
+    print("Koneksi gagal atau timeout")
+```
+
+**Format URL:** `ws://host:port/path`
+- Skema harus `ws://` (bukan `wss://`).
+- Port wajib dicantumkan secara eksplisit jika bukan 80.
+- Path boleh kosong (diisi `/` secara otomatis).
+
+**Parameter:**
+- `url` — string URL WebSocket (`ws://…`).
+- `headers` — dict string→string, header HTTP custom yang dikirim saat handshake (opsional).
+- `timeout_sec` — int, opsional. Default: **30**. Batas waktu untuk TCP connect + HTTP handshake.
+
+**Return:** conn_handle jika berhasil; `null` jika:
+- URL tidak valid atau skema bukan `ws://`
+- TCP connect gagal (host tidak ada, port ditolak, timeout)
+- Server tidak merespons `101 Switching Protocols`
+- `Sec-WebSocket-Accept` tidak valid
+
+**Perilaku handshake (sisi client):**
+1. Generate 16-byte random nonce, base64-encode → `Sec-WebSocket-Key`.
+2. Kirim HTTP `GET /path HTTP/1.1` dengan header WebSocket upgrade.
+3. Baca respons server; verifikasi status `101`.
+4. Verifikasi `Sec-WebSocket-Accept` = base64(SHA1(key + GUID)).
+5. Inisialisasi wslay context mode **client** (dengan masking otomatis sesuai RFC 6455 §5.3).
+
+---
+
+### 17.4 Fungsi Bersama (Server & Client)
+
+Semua fungsi berikut bekerja identik pada conn_handle dari `ws.accept` **maupun** `ws.connect`.
+
+---
+
+#### 17.4.1 `ws.recv(conn [, timeout_sec])` → dict | null
+
+Menunggu dan menerima satu pesan WebSocket.
+
+```flux
+msg = ws.recv(conn)        # timeout default 30 detik
+msg = ws.recv(conn, 60)    # tunggu hingga 60 detik
+msg = ws.recv(conn, 0)     # non-blocking
+
+if msg == null:
+    # timeout atau koneksi ditutup
+else:
+    print(msg["type"])   # "text", "binary", "ping", "pong", atau "close"
+    print(msg["data"])   # isi pesan (string)
+```
+
+**Return:** dict dengan field berikut, atau `null` jika timeout/koneksi putus:
+
+| Field | Tipe | Keterangan |
+|-------|------|------------|
+| `type` | string | Jenis frame: `"text"`, `"binary"`, `"ping"`, `"pong"`, atau `"close"` |
+| `data` | string | Isi payload. Binary disajikan apa adanya (raw bytes). `"close"` mungkin punya payload kosong. |
+
+**Perilaku:**
+- Frame **ping** dibalas otomatis dengan **pong** oleh wslay — tidak perlu membalas manual.
+- Frame **close** dikembalikan ke Flux sebagai `{type: "close", data: "…"}`. Setelah ini, panggil `ws.close(conn)` untuk menyelesaikan closing handshake.
+- Pesan multi-frame (fragmented) dirakit ulang secara otomatis oleh wslay sebelum dikembalikan.
+
+---
+
+#### 17.4.2 `ws.send(conn, text)` → bool
+
+Mengirim pesan teks (UTF-8) sebagai satu WebSocket text frame.
+
+```flux
+ok = ws.send(conn, "Halo!")
+ok = ws.send(conn, '{"event": "update", "id": 42}')
+if ok == false:
+    print("Koneksi putus saat pengiriman")
+```
+
+**Parameter:**
+- `conn` — conn_handle dari `ws.accept` atau `ws.connect`.
+- `text` — string, isi pesan.
+
+**Return:** `true` jika frame terkirim penuh; `false` jika koneksi putus.
+
+---
+
+#### 17.4.3 `ws.send_binary(conn, data)` → bool
+
+Mengirim data biner sebagai satu WebSocket binary frame.
+
+```flux
+ok = ws.send_binary(conn, raw_bytes)
+```
+
+Identik dengan `ws.send` tetapi menggunakan opcode `binary` (0x02). Berguna untuk protokol biner di atas WebSocket.
+
+---
+
+#### 17.4.4 `ws.ping(conn [, data])` → bool
+
+Mengirim WebSocket ping frame.
+
+```flux
+ws.ping(conn)               # ping tanpa payload
+ws.ping(conn, "heartbeat")  # ping dengan payload (maks 125 byte)
+```
+
+**Parameter:**
+- `data` — string payload opsional, maks **125 byte** (batas RFC 6455 untuk control frame).
+
+**Return:** `true` jika ping terkirim; `false` jika koneksi putus.
+
+**Catatan:** Pong dari server akan dikembalikan oleh `ws.recv` sebagai `{type: "pong", data: "…"}`.
+
+---
+
+#### 17.4.5 `ws.close(conn [, code])` → bool
+
+Memulai WebSocket closing handshake dan menutup koneksi.
+
+```flux
+ws.close(conn)         # close normal (kode 1000)
+ws.close(conn, 1001)   # close "going away"
+ws.close(conn, 1008)   # close "policy violation"
+```
+
+**Parameter:**
+- `code` — int, WebSocket close status code (opsional). Default: **1000** (Normal Closure).
+
+**Kode close umum (RFC 6455 §7.4.1):**
+
+| Kode | Nama | Kapan digunakan |
+|------|------|----------------|
+| 1000 | Normal Closure | Sesi selesai secara normal |
+| 1001 | Going Away | Server shutdown atau client navigasi |
+| 1002 | Protocol Error | Pelanggaran protokol WebSocket |
+| 1003 | Unsupported Data | Tipe data tidak didukung |
+| 1008 | Policy Violation | Pelanggaran kebijakan aplikasi |
+| 1009 | Message Too Big | Pesan melebihi batas yang diizinkan |
+| 1011 | Internal Error | Kondisi tak terduga di server |
+
+**Perilaku:**
+1. Kirim close frame dengan kode yang ditentukan.
+2. Tunggu close frame balik dari peer (timeout 5 detik).
+3. Shutdown TCP dan tutup socket.
+4. Bebaskan semua resource wslay.
+
+**Return:** `true` jika closing handshake selesai dengan bersih; `false` jika timeout atau koneksi sudah putus sebelumnya.
+
+---
+
+#### 17.4.6 `ws.close_server(server)` → bool
+
+Menutup listening socket server dan membebaskan resource.
+
+```flux
+ws.close_server(srv)
+```
+
+**Return:** `true`.
+
+Setelah dipanggil, memanggil `ws.accept` dengan handle yang sama menghasilkan runtime error.
+
+---
+
+### 17.5 Referensi Fungsi Lengkap
+
+| Fungsi | Arah | Arity | Return |
+|--------|------|-------|--------|
+| `ws.listen(host, port)` | Server | 2 | server_handle |
+| `ws.accept(server [, timeout])` | Server | variadic | conn_handle \| null |
+| `ws.connect(url [, headers [, timeout]])` | Client | variadic | conn_handle \| null |
+| `ws.recv(conn [, timeout])` | Keduanya | variadic | dict \| null |
+| `ws.send(conn, text)` | Keduanya | 2 | bool |
+| `ws.send_binary(conn, data)` | Keduanya | 2 | bool |
+| `ws.ping(conn [, data])` | Keduanya | variadic | bool |
+| `ws.close(conn [, code])` | Keduanya | variadic | bool |
+| `ws.close_server(server)` | Server | 1 | bool |
+
+---
+
+### 17.6 Contoh Lengkap: Echo Server
+
+```flux
+import ws
+
+srv = ws.listen("0.0.0.0", 9001)
+print("Echo WS server di ws://0.0.0.0:9001")
+
+while true:
+    conn = ws.accept(srv, 30)
+    if conn == null:
+        continue
+
+    print("Client terhubung")
+
+    while true:
+        msg = ws.recv(conn, 60)
+
+        if msg == null:
+            print("Timeout atau koneksi putus")
+            break
+
+        if msg["type"] == "close":
+            print("Client menutup koneksi")
+            break
+
+        if msg["type"] == "text":
+            ws.send(conn, "Echo: " + msg["data"])
+
+        elif msg["type"] == "binary":
+            ws.send_binary(conn, msg["data"])
+
+        elif msg["type"] == "ping":
+            print("Ping diterima (pong otomatis dikirim)")
+
+    ws.close(conn)
+    print("Koneksi ditutup")
+
+ws.close_server(srv)
+```
+
+---
+
+### 17.7 Contoh Lengkap: Multi-Client Chat (menggunakan spawn)
+
+```flux
+import ws
+
+func handle_client(conn):
+    print("Client baru terhubung")
+    while true:
+        msg = ws.recv(conn, 120)
+        if msg == null or msg["type"] == "close":
+            break
+        if msg["type"] == "text":
+            print("Pesan: " + msg["data"])
+            ws.send(conn, "[server] Diterima: " + msg["data"])
+    ws.close(conn)
+    print("Client selesai")
+
+srv = ws.listen("0.0.0.0", 9001)
+print("Chat server di ws://0.0.0.0:9001")
+
+while true:
+    conn = ws.accept(srv, 60)
+    if conn == null:
+        continue
+    spawn handle_client(conn)   # setiap client di coroutine terpisah
+
+ws.close_server(srv)
+```
+
+---
+
+### 17.8 Contoh Lengkap: WebSocket Client
+
+```flux
+import ws
+
+# Koneksi ke echo server publik
+conn = ws.connect("ws://echo.websocket.events:80/", {}, 10)
+if conn == null:
+    print("Gagal terhubung ke server")
+else:
+    # Kirim beberapa pesan
+    ws.send(conn, "Halo dari Flux!")
+    ws.send(conn, '{"cmd": "ping", "id": 1}')
+
+    # Terima balasan
+    i = 0
+    while i < 2:
+        msg = ws.recv(conn, 10)
+        if msg == null:
+            print("Timeout menunggu balasan")
+            break
+        if msg["type"] == "text":
+            print("Balasan " + str(i + 1) + ": " + msg["data"])
+        i = i + 1
+
+    ws.close(conn)
+    print("Selesai")
+```
+
+---
+
+### 17.9 Contoh: Client dengan Header Autentikasi
+
+```flux
+import ws
+
+token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+
+conn = ws.connect(
+    "ws://api.example.com:9001/realtime",
+    {"Authorization": "Bearer " + token,
+     "X-App-Version": "1.0"},
+    15
+)
+
+if conn == null:
+    print("Autentikasi gagal atau server tidak tersedia")
+else:
+    ws.send(conn, '{"action": "subscribe", "channel": "updates"}')
+
+    while true:
+        msg = ws.recv(conn, 30)
+        if msg == null or msg["type"] == "close":
+            break
+        print(msg["data"])
+
+    ws.close(conn)
+```
+
+---
+
+## 18. FFI — Import dan Panggil Library C Native
 
 Modul `native` memungkinkan Flux memanggil fungsi dari shared library (`.so`) secara langsung.
 
@@ -2034,7 +2490,7 @@ close(libc)
 
 ---
 
-## 18. Ekstensi Native (.so Plugin)
+## 19. Ekstensi Native (.so Plugin)
 
 Ekstensi native adalah shared library C yang mengimplementasikan modul Flux. Contoh tersedia di `extension/postgresql/`.
 
@@ -2083,7 +2539,7 @@ Hasilnya: `extension/postgresql/libpostgresql.so`
 
 ---
 
-## 19. Embed libflux ke Program C
+## 20. Embed libflux ke Program C
 
 `libflux` tersedia sebagai static library (`libflux.a`) dan shared library (`libflux.so`).
 
@@ -2122,7 +2578,7 @@ gcc -Iinclude -o myapp myapp.c -L./build_make -lflux -lm -ldl -luv
 
 ---
 
-## 20. Struktur Proyek
+## 21. Struktur Proyek
 
 ```
 flux/
@@ -2165,7 +2621,8 @@ flux/
 │   └── native/             # FFI module (.so)
 │
 ├── extension/
-│   └── postgresql/         # PostgreSQL extension (.so)
+│   ├── postgresql/         # PostgreSQL extension (.so)
+│   └── ws/                 # WebSocket extension (.so, server + client)
 │
 ├── tests/                  # Test suite (.flx dan .c)
 │   ├── hello.flx
@@ -2180,7 +2637,7 @@ flux/
 
 ---
 
-## 21. Arsitektur Internal
+## 22. Arsitektur Internal
 
 Flux diimplementasikan sebagai **bytecode-compiled, stack-based virtual machine** dengan komponen berikut:
 

@@ -50,6 +50,7 @@
 #include <wslay/wslay.h>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 
 /* =========================================================================
  * Konstanta
@@ -371,6 +372,16 @@ static void wslay_on_msg_recv_cb(wslay_event_context_ptr ctx,
 }
 
 /* =========================================================================
+ * genmask_callback — wajib untuk wslay client context (RFC 6455 §5.3)
+ * ======================================================================= */
+static int wslay_genmask_cb(wslay_event_context_ptr ctx,
+                             uint8_t *buf, size_t len, void *user_data) {
+    (void)ctx; (void)user_data;
+    /* RAND_bytes dari OpenSSL — sudah di-link untuk handshake SHA1 */
+    return RAND_bytes(buf, (int)len) == 1 ? 0 : -1;
+}
+
+/* =========================================================================
  * WsConn constructor helper
  * ======================================================================= */
 static WsConn *wsconn_new(int fd) {
@@ -387,6 +398,28 @@ static WsConn *wsconn_new(int fd) {
     };
 
     if (wslay_event_context_server_init(&conn->ctx, &cbs, conn) != 0) {
+        free(conn);
+        return NULL;
+    }
+
+    wslay_event_config_set_max_recv_msg_length(conn->ctx, WS_MAX_MSG_LEN);
+    return conn;
+}
+
+static WsConn *wsconn_new_client(int fd) {
+    WsConn *conn = calloc(1, sizeof(WsConn));
+    if (!conn) return NULL;
+    conn->fd = fd;
+
+    static const struct wslay_event_callbacks cbs = {
+        wslay_recv_cb,
+        wslay_send_cb,
+        wslay_genmask_cb,   /* wajib untuk client — frame harus di-mask */
+        NULL, NULL, NULL,
+        wslay_on_msg_recv_cb,
+    };
+
+    if (wslay_event_context_client_init(&conn->ctx, &cbs, conn) != 0) {
         free(conn);
         return NULL;
     }
@@ -414,6 +447,331 @@ static Value make_recv_result(FluxVM *vm, const char *type,
     dict_set_str(vm, d, "data", data ? (const char *)data : "", (int)dlen);
     vm_pop(vm);
     return value_object((FluxObject *)d);
+}
+
+/* =========================================================================
+ * URL parser — ws://host:port/path
+ * Mengisi host, port_out, path. Return false jika format tidak valid.
+ * ======================================================================= */
+static bool parse_ws_url(const char *url,
+                          char *host, size_t host_sz,
+                          int  *port_out,
+                          char *path, size_t path_sz) {
+    /* Harus dimulai dengan "ws://" */
+    if (strncmp(url, "ws://", 5) != 0) return false;
+    const char *rest = url + 5;
+    if (!*rest) return false;
+
+    /* Cari "/" untuk memisahkan host:port dari path */
+    const char *slash = strchr(rest, '/');
+    size_t hostport_len = slash ? (size_t)(slash - rest) : strlen(rest);
+
+    char hostport[512];
+    if (hostport_len == 0 || hostport_len >= sizeof(hostport)) return false;
+    memcpy(hostport, rest, hostport_len);
+    hostport[hostport_len] = '\0';
+
+    /* Pisahkan host dan port */
+    char *colon = strrchr(hostport, ':');
+    if (colon) {
+        *colon = '\0';
+        *port_out = atoi(colon + 1);
+        if (*port_out <= 0 || *port_out > 65535) return false;
+    } else {
+        *port_out = 80;   /* default port WebSocket */
+    }
+
+    if (strlen(hostport) == 0 || strlen(hostport) >= host_sz) return false;
+    strncpy(host, hostport, host_sz - 1);
+    host[host_sz - 1] = '\0';
+
+    /* Path */
+    if (slash) {
+        strncpy(path, slash, path_sz - 1);
+        path[path_sz - 1] = '\0';
+    } else {
+        strncpy(path, "/", path_sz - 1);
+    }
+    if (path[0] == '\0') strncpy(path, "/", path_sz - 1);
+
+    return true;
+}
+
+/* =========================================================================
+ * TCP connect non-blocking dengan deadline
+ * ======================================================================= */
+static int tcp_connect_timeout(const char *host, int port,
+                                struct timespec *deadline) {
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%d", port);
+
+    struct addrinfo hints = {0}, *res = NULL, *rp;
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    if (getaddrinfo(host, port_str, &hints, &res) != 0) return -1;
+
+    int fd = -1;
+    for (rp = res; rp; rp = rp->ai_next) {
+        int sfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (sfd < 0) continue;
+
+        /* Non-blocking connect */
+        set_nonblocking(sfd);
+
+        int r = connect(sfd, rp->ai_addr, rp->ai_addrlen);
+        if (r == 0) {
+            /* Terhubung langsung (loopback) */
+            fd = sfd;
+            break;
+        }
+        if (errno != EINPROGRESS) { close(sfd); continue; }
+
+        /* Tunggu writable (connect selesai) */
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        long remain = deadline->tv_sec - now.tv_sec;
+        if (remain <= 0) { close(sfd); break; }
+
+        fd_set wfds, efds;
+        FD_ZERO(&wfds); FD_ZERO(&efds);
+        FD_SET(sfd, &wfds); FD_SET(sfd, &efds);
+        struct timeval tv = { remain, 0 };
+        int sel = select(sfd + 1, NULL, &wfds, &efds, &tv);
+        if (sel <= 0 || !FD_ISSET(sfd, &wfds)) { close(sfd); break; }
+
+        /* Cek apakah connect berhasil */
+        int err = 0; socklen_t elen = sizeof(err);
+        getsockopt(sfd, SOL_SOCKET, SO_ERROR, &err, &elen);
+        if (err != 0) { close(sfd); continue; }
+
+        fd = sfd;
+        break;
+    }
+    freeaddrinfo(res);
+    return fd;
+}
+
+/* =========================================================================
+ * HTTP Upgrade handshake — sisi CLIENT
+ *
+ * Kirim HTTP GET dengan header Upgrade, terima 101.
+ * custom_headers: baris "Key: Value\r\n" yang sudah diformat, atau "".
+ * ws_key_out: Sec-WebSocket-Key yang digunakan (untuk verifikasi Accept).
+ * ======================================================================= */
+static bool ws_client_handshake(int fd, const char *host, int port,
+                                 const char *path,
+                                 const char *custom_headers,
+                                 char *ws_key_out, size_t key_size,
+                                 struct timespec *deadline) {
+    /* Buat Sec-WebSocket-Key: base64(16 random bytes) */
+    unsigned char raw[16];
+    if (RAND_bytes(raw, sizeof(raw)) != 1) return false;
+    unsigned char b64[64];
+    int b64_len = EVP_EncodeBlock(b64, raw, sizeof(raw));
+    if (b64_len <= 0 || (size_t)b64_len >= key_size) return false;
+    memcpy(ws_key_out, b64, (size_t)b64_len + 1);
+
+    /* Bangun Host header — sertakan port hanya jika bukan 80 */
+    char host_hdr[512];
+    if (port == 80)
+        snprintf(host_hdr, sizeof(host_hdr), "%s", host);
+    else
+        snprintf(host_hdr, sizeof(host_hdr), "%s:%d", host, port);
+
+    /* Kirim HTTP request */
+    char req[4096];
+    int req_len = snprintf(req, sizeof(req),
+        "GET %s HTTP/1.1\r\n"
+        "Host: %s\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: %s\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "%s"
+        "\r\n",
+        path, host_hdr, ws_key_out,
+        custom_headers ? custom_headers : "");
+
+    if (req_len <= 0 || (size_t)req_len >= sizeof(req)) return false;
+
+    size_t sent = 0;
+    while ((size_t)req_len > sent) {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        long remain = deadline->tv_sec - now.tv_sec;
+        if (remain <= 0) return false;
+
+        fd_set wfds;
+        FD_ZERO(&wfds); FD_SET(fd, &wfds);
+        struct timeval tv = { remain, 0 };
+        if (select(fd + 1, NULL, &wfds, NULL, &tv) <= 0) return false;
+
+        ssize_t n = send(fd, req + sent, (size_t)req_len - sent, 0);
+        if (n <= 0) return false;
+        sent += (size_t)n;
+    }
+
+    /* Baca response hingga \r\n\r\n */
+    Buf resp;
+    buf_init(&resp);
+    char chunk[1024];
+
+    while (resp.len < WS_MAX_HDR_LEN) {
+        if (!wait_readable(fd, deadline)) { buf_free(&resp); return false; }
+        ssize_t n = recv(fd, chunk, sizeof(chunk), 0);
+        if (n <= 0) { buf_free(&resp); return false; }
+        if (!buf_append(&resp, chunk, (size_t)n)) { buf_free(&resp); return false; }
+        if (resp.len >= 4 && memmem(resp.data, resp.len, "\r\n\r\n", 4)) break;
+    }
+
+    /* Verifikasi "HTTP/1.1 101" */
+    if (resp.len < 12 || strncmp(resp.data, "HTTP/1.1 101", 12) != 0) {
+        buf_free(&resp);
+        return false;
+    }
+
+    /* Hitung expected Sec-WebSocket-Accept */
+    char expected[64];
+    if (!compute_ws_accept(ws_key_out, expected, sizeof(expected))) {
+        buf_free(&resp);
+        return false;
+    }
+
+    /* Cari Sec-WebSocket-Accept header dan verifikasi nilainya */
+    bool accept_ok = false;
+    const char *p = resp.data;
+    const char *end = p + resp.len;
+    while (p < end) {
+        const char *nl = memchr(p, '\n', (size_t)(end - p));
+        if (!nl) break;
+        size_t llen = (size_t)(nl - p);
+        if (llen > 0 && p[llen - 1] == '\r') llen--;
+
+        if (llen > 24) {
+            char kbuf[32] = {0};
+            size_t cmp = llen < 25 ? llen : 25;
+            for (size_t i = 0; i < cmp; i++)
+                kbuf[i] = (char)tolower((unsigned char)p[i]);
+            if (strncmp(kbuf, "sec-websocket-accept:", 21) == 0) {
+                const char *vs = p + 21;
+                size_t vlen = llen - 21;
+                while (vlen && (*vs == ' ' || *vs == '\t')) { vs++; vlen--; }
+                while (vlen && (vs[vlen-1] == ' ' || vs[vlen-1] == '\t')) vlen--;
+                /* bandingkan dengan expected */
+                if (vlen == strlen(expected) &&
+                    strncmp(vs, expected, vlen) == 0)
+                    accept_ok = true;
+                break;
+            }
+        }
+        p = nl + 1;
+    }
+
+    buf_free(&resp);
+    return accept_ok;
+}
+
+/* =========================================================================
+ * ws.connect(url [, headers [, timeout_sec]]) -> conn_handle | null
+ *
+ * Buat koneksi WebSocket ke server.
+ * url  : "ws://host:port/path"
+ * headers : dict string->string, header HTTP custom (opsional)
+ * timeout_sec : int, default 30 (opsional)
+ * ======================================================================= */
+static Value ws_connect(FluxVM *vm, int argc, Value *argv) {
+    if (argc < 1 || !IS_STRING(argv[0])) {
+        vm_runtime_error(vm, "ws.connect(url [, headers [, timeout_sec]])");
+        return value_null();
+    }
+    const char *url = AS_STRING(argv[0])->chars;
+
+    /* Timeout */
+    int timeout_sec = WS_DEFAULT_TIMEOUT;
+    if (argc >= 3 && value_is_int(argv[2]))
+        timeout_sec = (int)value_as_int(argv[2]);
+
+    /* Parse URL */
+    char host[256], path[1024];
+    int port;
+    if (!parse_ws_url(url, host, sizeof(host), &port, path, sizeof(path))) {
+        vm_runtime_error(vm, "ws.connect: URL tidak valid (harus 'ws://host:port/path'): %s", url);
+        return value_null();
+    }
+
+    /* Bangun string custom headers dari dict (opsional) */
+    Buf custom_hdrs;
+    buf_init(&custom_hdrs);
+
+    if (argc >= 2 && IS_DICT(argv[1])) {
+        FluxDict *hdict = AS_DICT(argv[1]);
+        /* Iterasi semua entry dict — gunakan internal Flux dict API */
+        for (int i = 0; i < hdict->capacity; i++) {
+            DictEntry *entry = &hdict->entries[i];
+            if (!entry->key) continue;
+            const char *k = entry->key->chars;
+            const char *v = IS_STRING(entry->value)
+                            ? AS_STRING(entry->value)->chars : "";
+            /* Jangan duplikasi header yang sudah ada di handshake */
+            char kl[128] = {0};
+            for (size_t j = 0; j < strlen(k) && j < sizeof(kl)-1; j++)
+                kl[j] = (char)tolower((unsigned char)k[j]);
+            if (strcmp(kl, "upgrade") == 0 ||
+                strcmp(kl, "connection") == 0 ||
+                strcmp(kl, "sec-websocket-key") == 0 ||
+                strcmp(kl, "sec-websocket-version") == 0 ||
+                strcmp(kl, "host") == 0) continue;
+
+            char line[1024];
+            int llen = snprintf(line, sizeof(line), "%s: %s\r\n", k, v);
+            if (llen > 0) buf_append(&custom_hdrs, line, (size_t)llen);
+        }
+    }
+
+    /* Deadline absolut */
+    struct timespec deadline;
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
+    deadline.tv_sec += timeout_sec;
+
+    /* TCP connect */
+    int fd = tcp_connect_timeout(host, port, &deadline);
+    if (fd < 0) {
+        buf_free(&custom_hdrs);
+        return value_null();   /* gagal terhubung — bukan runtime error */
+    }
+
+    /* TCP_NODELAY */
+    int yes = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
+
+    /* Kembalikan ke blocking untuk handshake (wait_readable menggunakan select) */
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
+
+    /* HTTP WebSocket handshake sisi client */
+    char ws_key[64];
+    bool ok = ws_client_handshake(fd, host, port, path,
+                                   custom_hdrs.len ? custom_hdrs.data : "",
+                                   ws_key, sizeof(ws_key), &deadline);
+    buf_free(&custom_hdrs);
+
+    if (!ok) {
+        close(fd);
+        return value_null();   /* handshake gagal */
+    }
+
+    /* Non-blocking untuk wslay */
+    set_nonblocking(fd);
+
+    WsConn *conn = wsconn_new_client(fd);
+    if (!conn) {
+        close(fd);
+        vm_runtime_error(vm, "ws.connect: out of memory");
+        return value_null();
+    }
+
+    return make_handle(vm, WS_CONN_TAG, conn);
 }
 
 /* =========================================================================
@@ -785,18 +1143,21 @@ bool flux_extension_init(FluxVM *vm, Value *out_module) {
     signal(SIGPIPE, SIG_IGN);
 
     static const char *names[] = {
-        "listen", "accept", "recv",
+        "listen", "accept", "connect",
+        "recv",
         "send", "send_binary", "ping",
         "close", "close_server",
     };
     typedef Value (*NativeFn)(FluxVM *, int, Value *);
     static NativeFn fns[] = {
-        ws_listen, ws_accept, ws_recv,
+        ws_listen, ws_accept, ws_connect,
+        ws_recv,
         ws_send_text, ws_send_binary, ws_ping,
         ws_close_conn, ws_close_server,
     };
     static int arities[] = {
         2, -1, -1,
+        -1,
         2,  2, -1,
         -1, 1,
     };

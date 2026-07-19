@@ -7,8 +7,9 @@ CC           ?= gcc
 FLUX_INCLUDE ?= ../../include
 
 CFLAGS  := -std=gnu17 -D_GNU_SOURCE -Wall -Wextra -Wno-unused-parameter \
-           -fPIC -I$(FLUX_INCLUDE) -g -O2 -U_FORTIFY_SOURCE -Wno-cpp
-LDFLAGS := -shared -lssl -lcrypto
+           -fPIC -I$(FLUX_INCLUDE) -g -O2 -U_FORTIFY_SOURCE -Wno-cpp \
+           $(shell pkg-config --cflags libcurl 2>/dev/null)
+LDFLAGS := -shared $(shell pkg-config --libs libcurl 2>/dev/null || echo '-lcurl')
 
 TARGET := libhttp.so
 

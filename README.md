@@ -1438,11 +1438,14 @@ mysql.close(conn)
 
 ## 16. Modul HTTP
 
-Modul `http` menyediakan **HTTP/1.1 client** dan **HTTP server** berbasis raw POSIX socket — tanpa dependensi libcurl atau library eksternal apapun.
+Modul `http` menyediakan **HTTP/1.1 client** (via libcurl) dan **HTTP server** (raw POSIX socket).
 
 ```flux
 import http
 ```
+
+> **v3** — Client ditulis ulang dengan libcurl; server mendapat perbaikan keamanan penuh.
+> Semua kekurangan v2 yang bisa menyebabkan *killed* (OOM), *hang*, atau *segfault* telah diatasi.
 
 ---
 
@@ -1450,15 +1453,16 @@ import http
 
 | # | Aturan |
 |---|--------|
-| 1 | **HTTPS didukung** via OpenSSL (TLS 1.2+). Verifikasi sertifikat aktif secara default. Gunakan `https://` langsung di URL. |
+| 1 | **HTTPS didukung** via libcurl + OpenSSL (TLS 1.2+). Verifikasi sertifikat aktif secara default. Gunakan `https://` langsung di URL. |
 | 2 | **Server single-threaded.** `http.accept` memblok sampai ada koneksi; hanya satu request ditangani sekaligus. Gunakan `spawn` Flux untuk konkurensi. |
 | 3 | **Satu respond per request.** Memanggil `http.respond` atau `http.close_conn` dua kali pada request yang sama adalah runtime error. |
 | 4 | **Selalu respond atau tutup.** Setiap `req` dari `http.accept` **harus** direspons dengan `http.respond` atau ditutup dengan `http.close_conn`. Jika tidak, koneksi client akan menggantung. |
-| 5 | **Ukuran header dibatasi 64 KB.** Jika melebihi, koneksi ditutup dan `http.accept` melanjutkan ke koneksi berikutnya. |
+| 5 | **Ukuran header request dibatasi 64 KB.** Jika melebihi, koneksi ditutup dan `http.accept` melanjutkan ke koneksi berikutnya. |
 | 6 | **Ukuran body dibatasi 64 MB** (client dan server). |
 | 7 | **Koneksi TCP non-HTTP diabaikan otomatis** — server menutupnya dan menunggu koneksi berikutnya tanpa mengembalikan `null`. |
 | 8 | **`http.close` harus dipanggil** saat server sudah tidak diperlukan untuk melepas file descriptor. |
-| 9 | **URL harus dimulai dengan `http://`.** Skema lain mengembalikan `ok=false`. |
+| 9 | **URL client mendukung `http://` dan `https://`.** Skema lain mengembalikan `ok=false`. |
+| 10 | **Content-Length request > 64 MB ditolak langsung** — koneksi ditutup, `http.accept` lanjut ke koneksi berikutnya. |
 
 ---
 

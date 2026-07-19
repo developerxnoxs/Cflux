@@ -166,6 +166,7 @@ static Value native_print(FluxVM *vm, int argc, Value *argv) {
         printf("%s", s->chars);
     }
     printf("\n");
+    fflush(stdout);
     return value_null();
 }
 

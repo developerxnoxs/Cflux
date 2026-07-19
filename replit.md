@@ -52,6 +52,10 @@ make clean
 
 ## Perubahan Terbaru
 
+- **Fix print() buffering** (`src/stdlib/stdlib_core.c`): Tambah `fflush(stdout)` di `native_print` sehingga output `print()` langsung muncul bahkan saat stdout bukan TTY (misalnya saat server HTTP menunggu koneksi). Sebelumnya hanya `write()` yang flush, `print()` tidak.
+
+
+
 - **Modul HTTP v3** (`extension/http/http_ext.c`): Upgrade keamanan dan stabilitas — lihat detail di bawah.
 - **Sintaksis class**: Konstruktor kini menggunakan `func __init__(...)` (Python-style). Compiler juga menerima `func init(...)` sebagai alias untuk kompatibilitas mundur.
 - **Stack overflow protection**: `FLUX_FRAMES_MAX` dikurangi dari 6000 → 500 untuk mencegah segfault di Replit; ditambahkan bounds check pada `vm_push` dan `call_closure`.

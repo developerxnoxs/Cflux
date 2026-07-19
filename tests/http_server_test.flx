@@ -1,0 +1,18 @@
+import http
+
+print("Starting HTTP server on port 8081...")
+
+server = http.listen("0.0.0.0", 8081)
+
+print("Server listening. Waiting for request...")
+
+req = http.accept(server, 5)
+
+if req == null:
+    print("Timeout — no request received.")
+else:
+    print("Got request: " + req["method"] + " " + req["path"])
+    http.respond(req, 200, {"Content-Type": "text/plain"}, "Hello from Flux!\n")
+    print("Response sent. Done.")
+
+http.close(server)

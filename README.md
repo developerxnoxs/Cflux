@@ -36,11 +36,12 @@ Flux adalah bahasa pemrograman modern yang diimplementasikan dalam C. Flux memil
 13. [Standard Library](#13-standard-library)
 14. [Modul Socket](#14-modul-socket)
 15. [Modul MySQL](#15-modul-mysql)
-16. [FFI — Import dan Panggil Library C Native](#16-ffi--import-dan-panggil-library-c-native)
-17. [Ekstensi Native (.so Plugin)](#17-ekstensi-native-so-plugin)
-18. [Embed libflux ke Program C](#18-embed-libflux-ke-program-c)
-19. [Struktur Proyek](#19-struktur-proyek)
-20. [Arsitektur Internal](#20-arsitektur-internal)
+16. [Modul HTTP](#16-modul-http)
+17. [FFI — Import dan Panggil Library C Native](#17-ffi--import-dan-panggil-library-c-native)
+18. [Ekstensi Native (.so Plugin)](#18-ekstensi-native-so-plugin)
+19. [Embed libflux ke Program C](#19-embed-libflux-ke-program-c)
+20. [Struktur Proyek](#20-struktur-proyek)
+21. [Arsitektur Internal](#21-arsitektur-internal)
 
 ---
 
@@ -1435,7 +1436,143 @@ mysql.close(conn)
 
 ---
 
-## 16. FFI — Import dan Panggil Library C Native
+## 16. Modul HTTP
+
+Modul `http` menyediakan **HTTP/1.1 client** dan **HTTP server** dari raw POSIX socket — tanpa dependensi libcurl atau library eksternal apapun.
+
+> **Catatan:** HTTPS belum didukung. Gunakan reverse proxy (nginx, caddy) di depan server Flux untuk SSL.
+
+### HTTP Client
+
+```flux
+import http
+
+# GET
+r = http.get("http://api.example.com/data")
+print(r["status"])   # 200
+print(r["body"])     # response body (string)
+print(r["headers"]["content-type"])
+
+# POST dengan JSON
+r = http.post("http://api.example.com/users",
+    '{"nama": "Budi", "umur": 25}',
+    {"Content-Type": "application/json"})
+print(r["status"])   # 201
+
+# PUT
+r = http.put("http://api.example.com/users/1",
+    '{"nama": "Budi Santoso"}',
+    {"Content-Type": "application/json", "Authorization": "Bearer token123"})
+
+# DELETE
+r = http.delete("http://api.example.com/users/1",
+    {"Authorization": "Bearer token123"})
+
+# PATCH
+r = http.patch("http://api.example.com/users/1", '{"aktif": false}')
+
+# Generic — method apa saja
+r = http.request("OPTIONS", "http://api.example.com/", "", {})
+```
+
+**Semua fungsi client mengembalikan:**
+```flux
+{
+    "ok":      true/false,          # true jika koneksi berhasil (termasuk 4xx/5xx)
+    "status":  200,                 # HTTP status code (0 jika koneksi gagal)
+    "headers": {"content-type": "application/json", ...},
+    "body":    "...",               # response body
+    "error":   ""                   # pesan error jika ok=false
+}
+```
+
+**Fitur client:**
+- Redirect otomatis hingga 5 hop (301, 302, 307, 308)
+- Chunked transfer encoding didecode otomatis
+- Header custom per request
+- Timeout koneksi 15 detik, recv 30 detik
+
+### HTTP Server
+
+```flux
+import http
+
+# Buat server di port 8080
+srv = http.listen("0.0.0.0", 8080)
+
+while true:
+    # Tunggu request masuk (timeout 30 detik, null jika tidak ada)
+    req = http.accept(srv, 30)
+    if req == null:
+        break
+
+    method = req["method"]       # "GET", "POST", "PUT", dll
+    path   = req["path"]         # "/api/users"
+    query  = req["query"]        # "page=1&limit=10"
+    body   = req["body"]         # request body (string)
+    remote = req["remote_addr"]  # IP client "192.168.1.1"
+    hdrs   = req["headers"]      # dict header request
+
+    if path == "/" and method == "GET":
+        http.respond(req, 200,
+            {"Content-Type": "text/html"},
+            "<html><body><h1>Halo dari Flux!</h1></body></html>")
+
+    elif path == "/api/hello":
+        http.respond(req, 200,
+            {"Content-Type": "application/json"},
+            '{"pesan": "Halo!", "method": "' + method + '"}')
+
+    elif path == "/api/echo":
+        http.respond(req, 200,
+            {"Content-Type": "application/json"},
+            '{"body": "' + body + '", "query": "' + query + '"}')
+
+    else:
+        http.respond(req, 404,
+            {"Content-Type": "application/json"},
+            '{"error": "Not Found", "path": "' + path + '"}')
+
+http.close(srv)
+```
+
+**Field request dict dari `http.accept`:**
+| Field | Tipe | Keterangan |
+|-------|------|------------|
+| `ok` | bool | Selalu true jika bukan null |
+| `method` | string | "GET", "POST", "PUT", "DELETE", dll |
+| `path` | string | Path URL, misal "/api/users" |
+| `query` | string | Query string, misal "page=1&limit=10" |
+| `body` | string | Request body |
+| `headers` | dict | Header request (lowercase key) |
+| `remote_addr` | string | IP address client |
+| `remote_port` | int | Port client |
+
+### Referensi Fungsi
+
+**Client:**
+
+| Fungsi | Deskripsi |
+|--------|-----------|
+| `get(url [, headers])` | HTTP GET |
+| `post(url, body [, headers])` | HTTP POST |
+| `put(url, body [, headers])` | HTTP PUT |
+| `delete(url [, headers])` | HTTP DELETE |
+| `patch(url, body [, headers])` | HTTP PATCH |
+| `request(method, url, body, headers)` | Method bebas |
+
+**Server:**
+
+| Fungsi | Deskripsi |
+|--------|-----------|
+| `listen(host, port)` | Buat server, return handle |
+| `accept(server [, timeout_sec])` | Tunggu request, return dict atau null |
+| `respond(req, status, headers, body)` | Kirim response, return bool |
+| `close(server)` | Tutup server |
+
+---
+
+## 17. FFI — Import dan Panggil Library C Native
 
 Modul `native` memungkinkan Flux memanggil fungsi dari shared library (`.so`) secara langsung.
 
@@ -1471,7 +1608,7 @@ close(libc)
 
 ---
 
-## 17. Ekstensi Native (.so Plugin)
+## 18. Ekstensi Native (.so Plugin)
 
 Ekstensi native adalah shared library C yang mengimplementasikan modul Flux. Contoh tersedia di `extension/postgresql/`.
 
@@ -1520,7 +1657,7 @@ Hasilnya: `extension/postgresql/libpostgresql.so`
 
 ---
 
-## 18. Embed libflux ke Program C
+## 19. Embed libflux ke Program C
 
 `libflux` tersedia sebagai static library (`libflux.a`) dan shared library (`libflux.so`).
 
@@ -1559,7 +1696,7 @@ gcc -Iinclude -o myapp myapp.c -L./build_make -lflux -lm -ldl -luv
 
 ---
 
-## 19. Struktur Proyek
+## 20. Struktur Proyek
 
 ```
 flux/
@@ -1617,7 +1754,7 @@ flux/
 
 ---
 
-## 20. Arsitektur Internal
+## 21. Arsitektur Internal
 
 Flux diimplementasikan sebagai **bytecode-compiled, stack-based virtual machine** dengan komponen berikut:
 

@@ -48,6 +48,7 @@ make clean
 - **Operator ternary**: `kondisi ? nilai_jika_benar : nilai_jika_salah`
 - **Modul socket** (`stdlib/socket/`): TCP client/server, UDP, raw socket, DNS resolve, select — semua fungsi kembalikan `{ok, error, ...}` sehingga error tidak pernah diam-diam hilang
 - **Modul mysql** (`extension/mysql/`): koneksi ke MySQL/MariaDB, query/exec/insert_id/escape/ping/close — tipe data kolom dikonversi otomatis (INT→int, FLOAT→float, NULL→null)
+- **Modul http** (`extension/http/`): HTTP/1.1 client (GET/POST/PUT/DELETE/PATCH/request, redirect otomatis) + HTTP server (listen/accept/respond/close) — murni POSIX socket, tanpa libcurl. HTTPS belum didukung.
 
 ## Perubahan Terbaru
 

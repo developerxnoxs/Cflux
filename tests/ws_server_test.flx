@@ -1,0 +1,35 @@
+import ws
+
+print("=== Flux WebSocket Server Test ===")
+print("Listening on ws://0.0.0.0:9001 ...")
+
+server = ws.listen("0.0.0.0", 9001)
+print("Menunggu koneksi WebSocket...")
+
+conn = ws.accept(server, 10)
+
+if conn == null:
+    print("Timeout — tidak ada koneksi masuk.")
+else:
+    print("Client terhubung!")
+
+    # Terima pesan dari client
+    msg = ws.recv(conn, 10)
+
+    if msg == null:
+        print("Timeout menunggu pesan.")
+    else:
+        print("Pesan diterima:")
+        print("  type : " + msg["type"])
+        print("  data : " + msg["data"])
+
+        # Kirim balasan
+        reply = "Echo: " + msg["data"]
+        ws.send(conn, reply)
+        print("Balasan dikirim: " + reply)
+
+    ws.close(conn)
+    print("Koneksi ditutup.")
+
+ws.close_server(server)
+print("Server selesai.")

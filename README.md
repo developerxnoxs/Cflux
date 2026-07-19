@@ -1450,7 +1450,7 @@ import http
 
 | # | Aturan |
 |---|--------|
-| 1 | **HTTPS tidak didukung.** Hanya `http://`. URL `https://` langsung mengembalikan `ok=false`. Gunakan reverse proxy (nginx, caddy) untuk SSL. |
+| 1 | **HTTPS didukung** via OpenSSL (TLS 1.2+). Verifikasi sertifikat aktif secara default. Gunakan `https://` langsung di URL. |
 | 2 | **Server single-threaded.** `http.accept` memblok sampai ada koneksi; hanya satu request ditangani sekaligus. Gunakan `spawn` Flux untuk konkurensi. |
 | 3 | **Satu respond per request.** Memanggil `http.respond` atau `http.close_conn` dua kali pada request yang sama adalah runtime error. |
 | 4 | **Selalu respond atau tutup.** Setiap `req` dari `http.accept` **harus** direspons dengan `http.respond` atau ditutup dengan `http.close_conn`. Jika tidak, koneksi client akan menggantung. |
@@ -1578,7 +1578,7 @@ Client mengikuti redirect **301, 302, 307, 308** secara otomatis:
 | 307, 308 | Lanjutkan dengan **method dan body asli** (sesuai RFC 7231) |
 
 - Redirect relatif (`/new-path`) dikonversi ke URL absolut menggunakan host asal.
-- Redirect ke `https://` akan gagal karena HTTPS tidak didukung.
+- Redirect ke `https://` ditangani dengan benar — skema dipertahankan pada redirect relatif.
 - Fragment URL (`#...`) selalu di-strip sebelum request dikirim.
 
 ---

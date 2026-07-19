@@ -8,7 +8,7 @@ FLUX_INCLUDE ?= ../../include
 
 CFLAGS  := -std=gnu17 -D_GNU_SOURCE -Wall -Wextra -Wno-unused-parameter \
            -fPIC -I$(FLUX_INCLUDE) -g -O2 -U_FORTIFY_SOURCE -Wno-cpp
-LDFLAGS := -shared
+LDFLAGS := -shared -lssl -lcrypto
 
 TARGET := libhttp.so
 

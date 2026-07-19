@@ -59,7 +59,8 @@
  *   - Fungsi baru: http.close_conn, http.url_encode, http.url_decode,
  *     http.parse_query
  *
- * Catatan: HTTPS belum didukung (hanya HTTP). Gunakan reverse proxy untuk SSL.
+ * Catatan: HTTPS didukung melalui OpenSSL (TLS 1.2+). Verifikasi sertifikat aktif
+ *          secara default. Gunakan http:// atau https:// sesuai kebutuhan.
  */
 
 #include "flux/extension.h"
@@ -82,6 +83,11 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>
+
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/x509v3.h>
+#include <limits.h>
 
 #ifdef IPV6_V6ONLY
 #  include <netinet/in.h>
@@ -318,12 +324,85 @@ static int tcp_connect(const char *host, int port, int conn_timeout_sec,
 }
 
 /* -------------------------------------------------------------------------
- * Send all bytes reliably
+ * SSL/TLS connection abstraction
+ * Wraps a plain fd + optional SSL* so send/recv can be uniform.
  * ---------------------------------------------------------------------- */
-static bool send_all(int fd, const char *buf, size_t len) {
+typedef struct {
+    int   fd;
+    SSL  *ssl;   /* NULL → plain HTTP; non-NULL → HTTPS */
+} Conn;
+
+/* Lazily-initialised client SSL_CTX: TLS 1.2+, peer verification, SNI */
+static SSL_CTX *g_ssl_ctx = NULL;
+
+static bool ssl_init_ctx(void) {
+    if (g_ssl_ctx) return true;
+    SSL_library_init();
+    SSL_load_error_strings();
+    OpenSSL_add_all_algorithms();
+    g_ssl_ctx = SSL_CTX_new(TLS_client_method());
+    if (!g_ssl_ctx) return false;
+    SSL_CTX_set_verify(g_ssl_ctx, SSL_VERIFY_PEER, NULL);
+    if (SSL_CTX_set_default_verify_paths(g_ssl_ctx) != 1) {
+        SSL_CTX_free(g_ssl_ctx);
+        g_ssl_ctx = NULL;
+        return false;
+    }
+    return true;
+}
+
+/* Upgrade a connected fd to TLS.  Returns false on handshake failure. */
+static bool ssl_upgrade(Conn *c, const char *hostname) {
+    if (!ssl_init_ctx()) return false;
+    SSL *ssl = SSL_new(g_ssl_ctx);
+    if (!ssl) return false;
+    SSL_set_fd(ssl, c->fd);
+    SSL_set_tlsext_host_name(ssl, hostname);   /* SNI */
+    SSL_set1_host(ssl, hostname);              /* hostname verification */
+    if (SSL_connect(ssl) != 1) {
+        SSL_free(ssl);
+        return false;
+    }
+    c->ssl = ssl;
+    return true;
+}
+
+static ssize_t conn_recv(Conn *c, void *buf, size_t len) {
+    if (c->ssl) {
+        int want = (len > INT_MAX) ? INT_MAX : (int)len;
+        int n = SSL_read(c->ssl, buf, want);
+        if (n <= 0) {
+            int err = SSL_get_error(c->ssl, n);
+            if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE)
+                errno = EINTR;
+            return -1;
+        }
+        return (ssize_t)n;
+    }
+    return recv(c->fd, buf, len, 0);
+}
+
+static ssize_t conn_send(Conn *c, const void *buf, size_t len) {
+    if (c->ssl) {
+        int want = (len > INT_MAX) ? INT_MAX : (int)len;
+        int n = SSL_write(c->ssl, buf, want);
+        return (n <= 0) ? -1 : (ssize_t)n;
+    }
+    return send(c->fd, buf, len, MSG_NOSIGNAL);
+}
+
+static void conn_close(Conn *c) {
+    if (c->ssl) { SSL_shutdown(c->ssl); SSL_free(c->ssl); c->ssl = NULL; }
+    if (c->fd >= 0) { close(c->fd); c->fd = -1; }
+}
+
+/* -------------------------------------------------------------------------
+ * Send all bytes reliably over a Conn (plain or TLS)
+ * ---------------------------------------------------------------------- */
+static bool send_all(Conn *c, const char *buf, size_t len) {
     size_t sent = 0;
     while (sent < len) {
-        ssize_t n = send(fd, buf + sent, len - sent, MSG_NOSIGNAL);
+        ssize_t n = conn_send(c, buf + sent, len - sent);
         if (n <= 0) {
             if (n < 0 && errno == EINTR) continue;
             return false;
@@ -336,10 +415,10 @@ static bool send_all(int fd, const char *buf, size_t len) {
 /* -------------------------------------------------------------------------
  * Receive until CRLFCRLF (headers end). Returns full initial response in buf.
  * ---------------------------------------------------------------------- */
-static bool recv_headers(int fd, Buf *buf) {
+static bool recv_headers(Conn *c, Buf *buf) {
     char tmp[4096];
     while (buf->len < HTTP_MAX_HEADER_LEN) {
-        ssize_t n = recv(fd, tmp, sizeof(tmp), 0);
+        ssize_t n = conn_recv(c, tmp, sizeof(tmp));
         if (n <= 0) {
             if (n < 0 && errno == EINTR) continue;
             break;
@@ -351,11 +430,11 @@ static bool recv_headers(int fd, Buf *buf) {
 }
 
 /* -------------------------------------------------------------------------
- * Read all chunked body from socket.
+ * Read all chunked body from a Conn (plain or TLS).
  * `initial`/`initial_len` — bytes already read past the headers.
  * Decoded data appended to `out`.
  * ---------------------------------------------------------------------- */
-static bool recv_chunked_full(int fd, const char *initial, size_t initial_len,
+static bool recv_chunked_full(Conn *c, const char *initial, size_t initial_len,
                                Buf *out) {
     Buf pending;
     buf_init(&pending);
@@ -371,7 +450,7 @@ static bool recv_chunked_full(int fd, const char *initial, size_t initial_len,
         /* Need at least one CRLF to parse the chunk-size line */
         while (!memmem(pending.data, pending.len, "\r\n", 2)) {
             if (pending.len >= HTTP_MAX_HEADER_LEN) { buf_free(&pending); return false; }
-            ssize_t n = recv(fd, tmp, sizeof(tmp), 0);
+            ssize_t n = conn_recv(c, tmp, sizeof(tmp));
             if (n <= 0) { if (n < 0 && errno == EINTR) continue; buf_free(&pending); return false; }
             if (!buf_append(&pending, tmp, (size_t)n)) { buf_free(&pending); return false; }
         }
@@ -391,7 +470,7 @@ static bool recv_chunked_full(int fd, const char *initial, size_t initial_len,
         /* Read chunk data + trailing CRLF */
         size_t need = chunk_size + 2;
         while (pending.len < need) {
-            ssize_t n = recv(fd, tmp, sizeof(tmp), 0);
+            ssize_t n = conn_recv(c, tmp, sizeof(tmp));
             if (n <= 0) { if (n < 0 && errno == EINTR) continue; buf_free(&pending); return false; }
             if (!buf_append(&pending, tmp, (size_t)n)) { buf_free(&pending); return false; }
         }
@@ -569,10 +648,18 @@ static bool do_http_request(const char *method, const ParsedURL *url,
                              int conn_timeout, int recv_timeout,
                              int *out_status, Buf *out_headers_raw,
                              Buf *out_body) {
-    if (url->is_https) return false;
+    int raw_fd = tcp_connect(url->host, url->port, conn_timeout, recv_timeout);
+    if (raw_fd < 0) return false;
 
-    int fd = tcp_connect(url->host, url->port, conn_timeout, recv_timeout);
-    if (fd < 0) return false;
+    Conn conn = { raw_fd, NULL };
+
+    /* Upgrade to TLS for https:// URLs */
+    if (url->is_https) {
+        if (!ssl_upgrade(&conn, url->host)) {
+            conn_close(&conn);
+            return false;
+        }
+    }
 
     /* Build request */
     Buf req;
@@ -582,9 +669,9 @@ static bool do_http_request(const char *method, const ParsedURL *url,
     snprintf(line, sizeof(line), "%s %s HTTP/1.1\r\n", method, url->path);
     buf_appends(&req, line);
 
-    /* Host header */
-    if ((url->port == 80 && !url->is_https) ||
-        (url->port == 443 && url->is_https)) {
+    /* Host header — omit port when it is the scheme default */
+    if ((url->port == 80  && !url->is_https) ||
+        (url->port == 443 &&  url->is_https)) {
         snprintf(line, sizeof(line), "Host: %s\r\n", url->host);
     } else {
         snprintf(line, sizeof(line), "Host: %s:%d\r\n", url->host, url->port);
@@ -619,17 +706,17 @@ static bool do_http_request(const char *method, const ParsedURL *url,
     if (req_body && req_body_len > 0)
         buf_append(&req, req_body, req_body_len);
 
-    bool ok = send_all(fd, req.data, req.len);
+    bool ok = send_all(&conn, req.data, req.len);
     buf_free(&req);
-    if (!ok) { close(fd); return false; }
+    if (!ok) { conn_close(&conn); return false; }
 
     /* Receive response headers */
     Buf raw;
     buf_init(&raw);
-    if (!recv_headers(fd, &raw)) { buf_free(&raw); close(fd); return false; }
+    if (!recv_headers(&conn, &raw)) { buf_free(&raw); conn_close(&conn); return false; }
 
     ParsedResponse pr;
-    if (!parse_response_headers(&raw, &pr)) { buf_free(&raw); close(fd); return false; }
+    if (!parse_response_headers(&raw, &pr)) { buf_free(&raw); conn_close(&conn); return false; }
     *out_status = pr.status;
 
     /* Copy raw header section for caller */
@@ -653,10 +740,10 @@ static bool do_http_request(const char *method, const ParsedURL *url,
     if (!response_has_no_body(method, pr.status)) {
         if (pr.chunked) {
             /* Proper streaming chunked decode from socket + pre-buffered tail */
-            bool ok2 = recv_chunked_full(fd, already_copy, already, out_body);
+            bool ok2 = recv_chunked_full(&conn, already_copy, already, out_body);
             free(already_copy);
             already_copy = NULL;
-            if (!ok2) { close(fd); return false; }
+            if (!ok2) { conn_close(&conn); return false; }
         } else if (pr.content_length >= 0) {
             /* Known length */
             size_t need = (size_t)pr.content_length;
@@ -671,7 +758,7 @@ static bool do_http_request(const char *method, const ParsedURL *url,
             while (out_body->len < need) {
                 size_t want = need - out_body->len;
                 if (want > sizeof(tmp)) want = sizeof(tmp);
-                ssize_t n = recv(fd, tmp, want, 0);
+                ssize_t n = conn_recv(&conn, tmp, want);
                 if (n <= 0) { if (n < 0 && errno == EINTR) continue; break; }
                 buf_append(out_body, tmp, (size_t)n);
             }
@@ -684,7 +771,7 @@ static bool do_http_request(const char *method, const ParsedURL *url,
 
             char tmp[HTTP_CHUNK_SIZE];
             for (;;) {
-                ssize_t n = recv(fd, tmp, sizeof(tmp), 0);
+                ssize_t n = conn_recv(&conn, tmp, sizeof(tmp));
                 if (n <= 0) { if (n < 0 && errno == EINTR) continue; break; }
                 if (!buf_append(out_body, tmp, (size_t)n)) break;
             }
@@ -692,7 +779,7 @@ static bool do_http_request(const char *method, const ParsedURL *url,
     }
     free(already_copy);   /* no-op if already freed above */
 
-    close(fd);
+    conn_close(&conn);
     return true;
 }
 
@@ -725,11 +812,7 @@ static Value http_do(FluxVM *vm, const char *method,
         ParsedURL purl;
         if (!parse_url(cur_url, &purl)) {
             return make_client_result(vm, false, 0, empty_headers, NULL, 0,
-                "URL tidak valid atau skema tidak didukung (gunakan http://)");
-        }
-        if (purl.is_https) {
-            return make_client_result(vm, false, 0, empty_headers, NULL, 0,
-                "HTTPS belum didukung. Gunakan http:// atau reverse proxy (nginx/caddy).");
+                "URL tidak valid atau skema tidak didukung (gunakan http:// atau https://)");
         }
 
         int status = 0;
@@ -759,9 +842,10 @@ static Value http_do(FluxVM *vm, const char *method,
             if (dict_get(hd, loc_key, &loc_val) && IS_STRING(loc_val)) {
                 const char *loc = AS_STRING(loc_val)->chars;
 
-                /* Relative redirect: prepend scheme+host */
+                /* Relative redirect: prepend scheme+host, preserving https */
                 if (loc[0] == '/') {
-                    snprintf(cur_url, sizeof(cur_url), "http://%s:%d%s",
+                    snprintf(cur_url, sizeof(cur_url), "%s://%s:%d%s",
+                             purl.is_https ? "https" : "http",
                              purl.host, purl.port, loc);
                 } else {
                     snprintf(cur_url, sizeof(cur_url), "%s", loc);
@@ -1093,9 +1177,12 @@ static bool parse_http_request(int fd,
     Buf body_buf;
     buf_init(&body_buf);
 
+    /* Wrap the plain server client fd in a Conn (no TLS on server side) */
+    Conn srv_conn = { fd, NULL };
+
     if (chunked) {
         /* Decode chunked request body using owned copy */
-        bool ok2 = recv_chunked_full(fd, already_copy, already, &body_buf);
+        bool ok2 = recv_chunked_full(&srv_conn, already_copy, already, &body_buf);
         free(already_copy);
         already_copy = NULL;
         if (!ok2) {
@@ -1114,7 +1201,7 @@ static bool parse_http_request(int fd,
         while ((long)body_buf.len < content_length) {
             size_t want = (size_t)content_length - body_buf.len;
             if (want > sizeof(tmp)) want = sizeof(tmp);
-            ssize_t n = recv(fd, tmp, want, 0);
+            ssize_t n = conn_recv(&srv_conn, tmp, want);
             if (n <= 0) { if (n < 0 && errno == EINTR) continue; break; }
             buf_append(&body_buf, tmp, (size_t)n);
         }
@@ -1446,7 +1533,8 @@ static Value http_respond(FluxVM *vm, int argc, Value *argv) {
     if (send_body && body && body_len > 0)
         buf_append(&resp, body, body_len);
 
-    bool ok = send_all(fd, resp.data, resp.len);
+    Conn resp_conn = { fd, NULL };
+    bool ok = send_all(&resp_conn, resp.data, resp.len);
     buf_free(&resp);
 
     close(fd);

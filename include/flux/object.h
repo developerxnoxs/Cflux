@@ -151,7 +151,9 @@ typedef struct {
 typedef struct {
     FluxObject  obj;
     FluxString *name;
-    FluxDict   *methods; /* method name → FluxClosure */
+    FluxDict   *methods;   /* method name → FluxClosure (or enum member Value) */
+    bool        is_struct; /* true if declared as `struct` */
+    bool        is_enum;   /* true if declared as `enum`   */
 } FluxClass;
 
 /* -------------------------------------------------------------------------

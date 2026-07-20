@@ -1029,7 +1029,19 @@ static AstNode *parse_enum_def(Parser *p) {
     return n;
 }
 
-/* Parse: match subject: cases */
+/* Parse: match subject: cases
+ *
+ * Each arm has the form:
+ *   pattern [if guard] :
+ *       body
+ *
+ * Special patterns:
+ *   _          → wildcard (catch-all); may also have [if guard]
+ *   identifier → when a simple identifier not followed by '(' or '.' appears
+ *                alone as the entire pattern, the COMPILER decides at compile
+ *                time whether it is a capture variable (unresolved name) or a
+ *                value equality check (resolved global/local).
+ */
 static AstNode *parse_match(Parser *p) {
     int line = p->previous.line, col = p->previous.column;
     AstNode *subject = parse_expr(p);
@@ -1038,10 +1050,12 @@ static AstNode *parse_match(Parser *p) {
     consume(p, TOK_INDENT,  "Expected indented match body");
 
     AstNode *n = ast_node_alloc(p->arena, AST_MATCH, line, col);
-    n->as.match_stmt.subject       = subject;
-    n->as.match_stmt.wildcard_body = NULL;
+    n->as.match_stmt.subject        = subject;
+    n->as.match_stmt.wildcard_body  = NULL;
+    n->as.match_stmt.wildcard_guard = NULL;
     ast_list_init(&n->as.match_stmt.patterns);
     ast_list_init(&n->as.match_stmt.bodies);
+    ast_list_init(&n->as.match_stmt.guards);
 
     while (!check(p, TOK_DEDENT) && !check(p, TOK_EOF)) {
         skip_newlines(p);
@@ -1060,14 +1074,22 @@ static AstNode *parse_match(Parser *p) {
             pattern = parse_expr(p);
         }
 
+        /* Optional guard: [if guard_expr] */
+        AstNode *guard = NULL;
+        if (match(p, TOK_IF)) {
+            guard = parse_expr(p);
+        }
+
         consume(p, TOK_COLON, "Expected ':' after match pattern");
         AstNode *body = parse_block(p);
 
         if (is_wildcard) {
-            n->as.match_stmt.wildcard_body = body;
+            n->as.match_stmt.wildcard_body  = body;
+            n->as.match_stmt.wildcard_guard = guard;
         } else {
             ast_list_push(&n->as.match_stmt.patterns, pattern);
-            ast_list_push(&n->as.match_stmt.bodies, body);
+            ast_list_push(&n->as.match_stmt.bodies,   body);
+            ast_list_push(&n->as.match_stmt.guards,   guard); /* NULL if no guard */
         }
 
         while (check(p, TOK_NEWLINE)) advance(p);

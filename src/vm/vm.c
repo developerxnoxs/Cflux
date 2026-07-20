@@ -1899,8 +1899,10 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                 Value super_val = vm_peek(vm, 1);
                 if (!IS_CLASS(super_val))
                     RUNTIME_ERROR("Superclass must be a class");
-                FluxClass *sub   = AS_CLASS(vm_peek(vm, 0));
                 FluxClass *super = AS_CLASS(super_val);
+                if (super->is_struct)
+                    RUNTIME_ERROR("Cannot inherit from a struct '%s'", super->name->chars);
+                FluxClass *sub   = AS_CLASS(vm_peek(vm, 0));
                 /* Copy methods from superclass */
                 for (int i = 0; i < super->methods->capacity; i++) {
                     DictEntry *e = &super->methods->entries[i];
@@ -1914,6 +1916,39 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                  * the enclosing scope. */
                 vm_pop(vm); /* pop subclass */
                 vm_pop(vm); /* pop superclass */
+                break;
+            }
+
+            case OP_MARK_STRUCT: {
+                /* TOS = class (peek, do not pop) — set is_struct flag */
+                Value v = vm_peek(vm, 0);
+                if (!IS_CLASS(v)) RUNTIME_ERROR("MARK_STRUCT: TOS is not a class");
+                AS_CLASS(v)->is_struct = true;
+                break;
+            }
+
+            case OP_MARK_ENUM: {
+                /* TOS = class (peek, do not pop) — set is_enum flag */
+                Value v = vm_peek(vm, 0);
+                if (!IS_CLASS(v)) RUNTIME_ERROR("MARK_ENUM: TOS is not a class");
+                AS_CLASS(v)->is_enum = true;
+                break;
+            }
+
+            case OP_ISINSTANCE: {
+                /* TOS = class, TOS-1 = object; pops both, pushes bool */
+                Value klass_val = vm_pop(vm);
+                Value obj_val   = vm_pop(vm);
+                if (!IS_CLASS(klass_val)) {
+                    vm_push(vm, value_bool(false));
+                    break;
+                }
+                FluxClass *klass = AS_CLASS(klass_val);
+                bool result = false;
+                if (IS_INSTANCE(obj_val)) {
+                    result = (AS_INSTANCE(obj_val)->klass == klass);
+                }
+                vm_push(vm, value_bool(result));
                 break;
             }
 

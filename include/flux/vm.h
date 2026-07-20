@@ -108,6 +108,7 @@ struct FluxVM {
     FluxClass *class_int;
     FluxClass *class_float;
     FluxClass *class_bool;
+    FluxClass *class_enum_member; /* hidden class for enum member instances */
 
     /* Coroutine scheduler */
     FluxCoroutine **ready_queue;

@@ -230,9 +230,11 @@ struct AstNode {
         /* AST_MATCH */
         struct {
             AstNode *subject;
-            AstList  patterns;      /* list of pattern expressions */
-            AstList  bodies;        /* list of body blocks (parallel to patterns) */
-            AstNode *wildcard_body; /* _ case; NULL if absent */
+            AstList  patterns;       /* list of pattern expressions */
+            AstList  bodies;         /* list of body blocks (parallel to patterns) */
+            AstList  guards;         /* optional guard exprs per arm (NULL entry = no guard) */
+            AstNode *wildcard_body;  /* _ case; NULL if absent */
+            AstNode *wildcard_guard; /* guard on wildcard arm; NULL if absent */
         } match_stmt;
 
         /* AST_FUNC_DEF / AST_ASYNC_FUNC_DEF */

@@ -259,6 +259,9 @@ int chunk_disassemble_instruction(const Chunk *chunk, int offset) {
         case OP_CLASS:          return uint16_instr("CLASS",         chunk, offset);
         case OP_METHOD:         return uint16_instr("METHOD",        chunk, offset);
         case OP_INHERIT:        return simple_instr("INHERIT",       offset);
+        case OP_MARK_STRUCT:    return simple_instr("MARK_STRUCT",   offset);
+        case OP_MARK_ENUM:      return simple_instr("MARK_ENUM",     offset);
+        case OP_ISINSTANCE:     return simple_instr("ISINSTANCE",    offset);
         case OP_GET_SUPER:      return uint16_instr("GET_SUPER",     chunk, offset);
         case OP_INVOKE: {
             uint16_t name_idx = (uint16_t)(chunk->code[offset+1]|(chunk->code[offset+2]<<8));

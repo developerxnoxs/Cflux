@@ -98,6 +98,21 @@ void value_print(Value v) {
     }
 }
 
+/* Helper: find a string field value in an instance's fields dict by key name.
+ * Returns the chars ptr if found and is a string, else NULL. */
+static const char *instance_get_str_field(FluxInstance *inst, const char *key) {
+    for (int i = 0; i < inst->fields->capacity; i++) {
+        DictEntry *e = &inst->fields->entries[i];
+        if (!e->key) continue;
+        if (strcmp(e->key->chars, key) == 0) {
+            if (value_is_object(e->value) &&
+                value_as_object(e->value)->type == OBJ_STRING)
+                return ((FluxString *)value_as_object(e->value))->chars;
+        }
+    }
+    return NULL;
+}
+
 const char *value_type_name(Value v) {
     switch (v.type) {
         case VAL_INT:    return "int";
@@ -114,7 +129,12 @@ const char *value_type_name(Value v) {
                 case OBJ_CLOSURE:      return "closure";
                 case OBJ_UPVALUE:      return "upvalue";
                 case OBJ_CLASS:        return "class";
-                case OBJ_INSTANCE:     return "instance";
+                case OBJ_INSTANCE: {
+                    FluxInstance *inst = (FluxInstance *)value_as_object(v);
+                    if (inst->klass->is_enum)   return "enum";
+                    if (inst->klass->is_struct)  return "struct";
+                    return "instance";
+                }
                 case OBJ_BOUND_METHOD: return "bound_method";
                 case OBJ_COROUTINE:    return "coroutine";
                 case OBJ_FUTURE:       return "future";
@@ -176,12 +196,42 @@ void object_print(Value v) {
                 printf("<script>");
             break;
         }
-        case OBJ_CLASS:
-            printf("<class %s>", AS_CLASS(v)->name->chars);
+        case OBJ_CLASS: {
+            FluxClass *k = AS_CLASS(v);
+            if (k->is_enum)   printf("<enum %s>",   k->name->chars);
+            else if (k->is_struct) printf("<struct %s>", k->name->chars);
+            else               printf("<class %s>",  k->name->chars);
             break;
-        case OBJ_INSTANCE:
-            printf("<%s instance>", AS_INSTANCE(v)->klass->name->chars);
+        }
+        case OBJ_INSTANCE: {
+            FluxInstance *inst = AS_INSTANCE(v);
+            if (inst->klass->is_enum) {
+                /* Print as EnumName.MemberName */
+                const char *member_name = instance_get_str_field(inst, "name");
+                if (member_name)
+                    printf("%s.%s", inst->klass->name->chars, member_name);
+                else
+                    printf("<%s member>", inst->klass->name->chars);
+                break;
+            }
+            if (inst->klass->is_struct) {
+                /* Print as StructName{field=value, ...} */
+                printf("%s{", inst->klass->name->chars);
+                bool first = true;
+                for (int i = 0; i < inst->fields->capacity; i++) {
+                    DictEntry *e = &inst->fields->entries[i];
+                    if (!e->key) continue;
+                    if (!first) printf(", ");
+                    first = false;
+                    printf("%s=", e->key->chars);
+                    value_print(e->value);
+                }
+                printf("}");
+                break;
+            }
+            printf("<%s instance>", inst->klass->name->chars);
             break;
+        }
         case OBJ_BOUND_METHOD:
             printf("<bound method>");
             break;
@@ -509,6 +559,8 @@ FluxClass *object_class_new(FluxVM *vm, FluxString *name) {
     FluxClass *k = ALLOC_OBJ(vm, FluxClass, OBJ_CLASS);
     k->name      = name;
     k->methods   = NULL; /* safe sentinel before second allocation */
+    k->is_struct = false;
+    k->is_enum   = false;
     /* Push k onto the VM stack so the GC can reach it if object_dict_new()
      * triggers a collection cycle.  Without this, k is live in C but not
      * reachable from any GC root and would be swept. */

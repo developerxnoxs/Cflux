@@ -100,6 +100,8 @@ static void mark_roots(FluxVM *vm) {
     gc_mark_object(vm, (FluxObject *)vm->class_int);
     gc_mark_object(vm, (FluxObject *)vm->class_float);
     gc_mark_object(vm, (FluxObject *)vm->class_bool);
+    if (vm->class_enum_member)
+        gc_mark_object(vm, (FluxObject *)vm->class_enum_member);
 
     /* Coroutine ready queue */
     for (int i = 0; i < vm->ready_count; i++)

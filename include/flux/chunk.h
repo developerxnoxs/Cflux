@@ -93,6 +93,9 @@ typedef enum {
     OP_METHOD,           /* operand: uint16 constant (name)    */
     OP_INVOKE,           /* operand: uint16 name + uint8 argc  */
     OP_INHERIT,
+    OP_MARK_STRUCT,      /* TOS must be class; sets klass->is_struct = true (no operand) */
+    OP_MARK_ENUM,        /* TOS must be class; sets klass->is_enum   = true (no operand) */
+    OP_ISINSTANCE,       /* pops class (TOS), pops obj (TOS-1), pushes bool result       */
     OP_GET_SUPER,        /* operand: uint16 constant (name)    */
 
     /* Protocol helpers */

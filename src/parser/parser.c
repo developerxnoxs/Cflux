@@ -395,73 +395,6 @@ static AstNode *parse_lambda(Parser *p) {
  * Primary expressions
  * ---------------------------------------------------------------------- */
 
-/* -------------------------------------------------------------------------
- * Comprehension tail: for var in iter [if cond]
- * Called after we've parsed the element expression and seen TOK_FOR.
- * Returns AST_LIST_COMP or AST_DICT_COMP.
- * ---------------------------------------------------------------------- */
-static AstNode *parse_comp_tail(Parser *p, AstNode *element, AstNode *value,
-                                 int line, int col) {
-    consume(p, TOK_FOR, "Expected 'for' in comprehension");
-
-    /* Parse loop variable(s): for a or for a, b */
-    char  *single_var = NULL;
-    char **var_names  = NULL;
-    int    var_count  = 0;
-
-    consume(p, TOK_IDENT, "Expected variable after 'for' in comprehension");
-    int   vlen = p->previous.length;
-    char *vbuf = FLUX_ALLOC(char, vlen + 1);
-    memcpy(vbuf, p->previous.start, (size_t)vlen);
-    vbuf[vlen] = '\0';
-
-    if (check(p, TOK_COMMA)) {
-        /* tuple unpacking: for a, b in ... */
-        int cap = 8;
-        var_names = FLUX_ALLOC(char *, cap);
-        var_names[0] = vbuf;
-        var_count = 1;
-        while (match(p, TOK_COMMA)) {
-            if (check(p, TOK_IN)) break;
-            consume(p, TOK_IDENT, "Expected variable name");
-            int   nlen = p->previous.length;
-            char *nbuf = FLUX_ALLOC(char, nlen + 1);
-            memcpy(nbuf, p->previous.start, (size_t)nlen);
-            nbuf[nlen] = '\0';
-            if (var_count >= cap) {
-                cap *= 2;
-                char **tmp = FLUX_ALLOC(char *, cap);
-                memcpy(tmp, var_names, (size_t)var_count * sizeof(char *));
-                var_names = tmp;
-            }
-            var_names[var_count++] = nbuf;
-        }
-    } else {
-        single_var = vbuf;
-        var_count  = 1;
-    }
-
-    consume(p, TOK_IN, "Expected 'in' in comprehension");
-    AstNode *iterable = parse_or(p); /* don't call parse_expr to avoid conflicts */
-
-    AstNode *filter = NULL;
-    if (check(p, TOK_IF)) {
-        advance(p); /* consume 'if' */
-        filter = parse_or(p);
-    }
-
-    AstKind kind = value ? AST_DICT_COMP : AST_LIST_COMP;
-    AstNode *n   = ast_node_alloc(p->arena, kind, line, col);
-    n->as.comp.element   = element;
-    n->as.comp.value     = value;
-    n->as.comp.var       = single_var ? single_var : var_names[0];
-    n->as.comp.iterable  = iterable;
-    n->as.comp.filter    = filter;
-    n->as.comp.var_names = (var_count > 1) ? var_names : NULL;
-    n->as.comp.var_count = var_count;
-    return n;
-}
-
 static AstNode *parse_primary(Parser *p) {
     int line = p->current.line, col = p->current.column;
 
@@ -499,64 +432,21 @@ static AstNode *parse_primary(Parser *p) {
                          p->previous.start, p->previous.length);
     }
 
-    /* Grouped expression or tuple: (expr) or (a, b, ...) */
+    /* Grouped expression */
     if (match(p, TOK_LPAREN)) {
-        skip_newlines(p);
-        /* Empty tuple: () */
-        if (check(p, TOK_RPAREN)) {
-            advance(p);
-            AstNode *tup = ast_node_alloc(p->arena, AST_LIST, line, col);
-            ast_list_init(&tup->as.list.elements);
-            return tup;
-        }
-        AstNode *first = parse_expr(p);
-        skip_newlines(p);
-        /* Tuple: (a, b, ...) */
-        if (check(p, TOK_COMMA)) {
-            AstNode *tup = ast_node_alloc(p->arena, AST_LIST, line, col);
-            ast_list_init(&tup->as.list.elements);
-            ast_list_push(&tup->as.list.elements, first);
-            while (match(p, TOK_COMMA)) {
-                skip_newlines(p);
-                if (check(p, TOK_RPAREN)) break; /* trailing comma */
-                ast_list_push(&tup->as.list.elements, parse_expr(p));
-                skip_newlines(p);
-            }
-            consume(p, TOK_RPAREN, "Expected ')' after tuple");
-            return tup;
-        }
-        skip_newlines(p);
+        AstNode *expr = parse_expr(p);
         consume(p, TOK_RPAREN, "Expected ')' after expression");
-        return first;
+        return expr;
     }
 
-    /* List literal or list comprehension: [expr] or [expr for var in iter] */
+    /* List literal */
     if (match(p, TOK_LBRACKET)) {
-        skip_newlines(p);
-        /* Empty list */
-        if (check(p, TOK_RBRACKET)) {
-            advance(p);
-            AstNode *node = ast_node_alloc(p->arena, AST_LIST, line, col);
-            ast_list_init(&node->as.list.elements);
-            return node;
-        }
-        AstNode *first_elem = parse_expr(p);
-        skip_newlines(p);
-        /* List comprehension: [elem for var in iter] */
-        if (check(p, TOK_FOR)) {
-            AstNode *comp = parse_comp_tail(p, first_elem, NULL, line, col);
-            skip_newlines(p);
-            consume(p, TOK_RBRACKET, "Expected ']' after list comprehension");
-            return comp;
-        }
-        /* Regular list */
         AstNode *node = ast_node_alloc(p->arena, AST_LIST, line, col);
         ast_list_init(&node->as.list.elements);
-        ast_list_push(&node->as.list.elements, first_elem);
-        while (match(p, TOK_COMMA)) {
-            skip_newlines(p);
-            if (check(p, TOK_RBRACKET)) break; /* trailing comma */
+        skip_newlines(p);
+        while (!check(p, TOK_RBRACKET) && !check(p, TOK_EOF)) {
             ast_list_push(&node->as.list.elements, parse_expr(p));
+            if (!match(p, TOK_COMMA)) break;
             skip_newlines(p);
         }
         skip_newlines(p);
@@ -564,40 +454,17 @@ static AstNode *parse_primary(Parser *p) {
         return node;
     }
 
-    /* Dict literal or dict comprehension: {k:v} or {k:v for var in iter} */
+    /* Dict literal */
     if (match(p, TOK_LBRACE)) {
-        skip_newlines(p);
-        /* Empty dict */
-        if (check(p, TOK_RBRACE)) {
-            advance(p);
-            AstNode *node = ast_node_alloc(p->arena, AST_DICT, line, col);
-            ast_list_init(&node->as.dict.keys);
-            ast_list_init(&node->as.dict.values);
-            return node;
-        }
-        AstNode *first_key = parse_expr(p);
-        consume(p, TOK_COLON, "Expected ':' in dict literal");
-        AstNode *first_val = parse_expr(p);
-        skip_newlines(p);
-        /* Dict comprehension: {k: v for var in iter} */
-        if (check(p, TOK_FOR)) {
-            AstNode *comp = parse_comp_tail(p, first_key, first_val, line, col);
-            skip_newlines(p);
-            consume(p, TOK_RBRACE, "Expected '}' after dict comprehension");
-            return comp;
-        }
-        /* Regular dict */
         AstNode *node = ast_node_alloc(p->arena, AST_DICT, line, col);
         ast_list_init(&node->as.dict.keys);
         ast_list_init(&node->as.dict.values);
-        ast_list_push(&node->as.dict.keys,   first_key);
-        ast_list_push(&node->as.dict.values, first_val);
-        while (match(p, TOK_COMMA)) {
-            skip_newlines(p);
-            if (check(p, TOK_RBRACE)) break; /* trailing comma */
+        skip_newlines(p);
+        while (!check(p, TOK_RBRACE) && !check(p, TOK_EOF)) {
             ast_list_push(&node->as.dict.keys,   parse_expr(p));
             consume(p, TOK_COLON, "Expected ':' in dict literal");
             ast_list_push(&node->as.dict.values, parse_expr(p));
+            if (!match(p, TOK_COMMA)) break;
             skip_newlines(p);
         }
         skip_newlines(p);
@@ -734,32 +601,10 @@ static AstNode *parse_comparison(Parser *p) {
         TokenKind op = p->current.kind;
         if (op == TOK_EQ || op == TOK_NEQ ||
             op == TOK_LT || op == TOK_LTE ||
-            op == TOK_GT || op == TOK_GTE) {
+            op == TOK_GT || op == TOK_GTE || op == TOK_IS) {
             advance(p);
             AstNode *right = parse_bitor(p);
             left = ast_binary(p->arena, line, col, op, left, right);
-        } else if (op == TOK_IS) {
-            advance(p); /* consume 'is' */
-            bool negated = match(p, TOK_NOT); /* 'is not' */
-            AstNode *right = parse_bitor(p);
-            AstNode *cmp = ast_binary(p->arena, line, col, TOK_IS, left, right);
-            left = negated ? ast_unary(p->arena, line, col, TOK_NOT, cmp) : cmp;
-        } else if (op == TOK_IN) {
-            advance(p); /* consume 'in' */
-            AstNode *right = parse_bitor(p);
-            left = ast_binary(p->arena, line, col, TOK_IN, left, right);
-        } else if (op == TOK_NOT) {
-            /* 'not in' — peek at the next token */
-            Token next = lexer_peek(p->lex);
-            if (next.kind == TOK_IN) {
-                advance(p); /* consume 'not' */
-                advance(p); /* consume 'in' */
-                AstNode *right = parse_bitor(p);
-                AstNode *contains = ast_binary(p->arena, line, col, TOK_IN, left, right);
-                left = ast_unary(p->arena, line, col, TOK_NOT, contains);
-            } else {
-                break; /* standalone 'not' — leave for parse_not */
-            }
         } else {
             break;
         }
@@ -831,46 +676,29 @@ static AstNode *parse_pipeline(Parser *p) {
  * ---------------------------------------------------------------------- */
 
 static AstNode *parse_ternary(Parser *p) {
-    AstNode *first = parse_pipeline(p);
+    AstNode *cond = parse_pipeline(p);
+    if (!check(p, TOK_QUESTION)) return cond;
 
-    /* C-style ternary: cond ? then : else */
-    if (check(p, TOK_QUESTION)) {
-        int line = p->current.line, col = p->current.column;
-        advance(p); /* consume '?' */
-        AstNode *then_expr = parse_ternary(p);
-        if (!check(p, TOK_COLON)) {
-            parser_error(p, "expected ':' in ternary expression");
-            return first;
-        }
-        advance(p); /* consume ':' */
-        AstNode *else_expr = parse_ternary(p); /* right-assoc */
-        AstNode *n = ast_node_alloc(p->arena, AST_TERNARY, line, col);
-        n->as.ternary.condition = first;
-        n->as.ternary.then_expr = then_expr;
-        n->as.ternary.else_expr = else_expr;
-        return n;
+    int line = p->current.line, col = p->current.column;
+    advance(p); /* consume '?' */
+
+    AstNode *then_expr = parse_ternary(p);
+
+    if (!check(p, TOK_COLON)) {
+        /* TOK_COLON is also used by dict literals and slices; if it's
+         * missing here it's a syntax error. */
+        parser_error(p, "expected ':' in ternary expression");
+        return cond;
     }
+    advance(p); /* consume ':' */
 
-    /* Python-style ternary: value if cond else fallback
-     * Only triggers when 'if' is on the same line (no NEWLINE between). */
-    if (check(p, TOK_IF)) {
-        int line = p->current.line, col = p->current.column;
-        advance(p); /* consume 'if' */
-        AstNode *cond = parse_or(p); /* parse the condition */
-        if (!check(p, TOK_ELSE)) {
-            parser_error(p, "expected 'else' in Python-style ternary expression");
-            return first;
-        }
-        advance(p); /* consume 'else' */
-        AstNode *fallback = parse_ternary(p); /* right-assoc */
-        AstNode *n = ast_node_alloc(p->arena, AST_TERNARY, line, col);
-        n->as.ternary.condition = cond;
-        n->as.ternary.then_expr = first;   /* the expression before 'if' */
-        n->as.ternary.else_expr = fallback;
-        return n;
-    }
+    AstNode *else_expr = parse_ternary(p); /* right-assoc */
 
-    return first;
+    AstNode *n = ast_node_alloc(p->arena, AST_TERNARY, line, col);
+    n->as.ternary.condition = cond;
+    n->as.ternary.then_expr = then_expr;
+    n->as.ternary.else_expr = else_expr;
+    return n;
 }
 
 /* -------------------------------------------------------------------------
@@ -893,10 +721,7 @@ static AstNode *parse_expr(Parser *p) {
     /* Augmented assignment */
     TokenKind aug_ops[] = {
         TOK_PLUS_ASSIGN, TOK_MINUS_ASSIGN,
-        TOK_STAR_ASSIGN, TOK_SLASH_ASSIGN, TOK_PERCENT_ASSIGN,
-        TOK_STAR_STAR_ASSIGN, TOK_SLASH_SLASH_ASSIGN,
-        TOK_AMP_ASSIGN, TOK_PIPE_ASSIGN, TOK_CARET_ASSIGN,
-        TOK_LSHIFT_ASSIGN, TOK_RSHIFT_ASSIGN, (TokenKind)0
+        TOK_STAR_ASSIGN, TOK_SLASH_ASSIGN, TOK_PERCENT_ASSIGN, (TokenKind)0
     };
     for (int i = 0; aug_ops[i]; i++) {
         if (match(p, aug_ops[i])) {
@@ -989,16 +814,7 @@ static AstNode *parse_func_def(Parser *p, bool is_async) {
     }
 
     consume(p, TOK_COLON, "Expected ':' after function signature");
-    AstNode *body;
-    /* Support single-line function body: func f(x): return x */
-    if (!check(p, TOK_NEWLINE) && !check(p, TOK_EOF)) {
-        int bline = p->current.line, bcol = p->current.column;
-        body = ast_block(p->arena, bline, bcol);
-        AstNode *stmt = parse_stmt(p);
-        if (stmt) ast_list_push(&body->as.block.stmts, stmt);
-    } else {
-        body = parse_block(p);
-    }
+    AstNode *body = parse_block(p);
 
     AstKind kind = is_async ? AST_ASYNC_FUNC_DEF : AST_FUNC_DEF;
     AstNode *n   = ast_node_alloc(p->arena, kind, line, col);
@@ -1207,17 +1023,9 @@ static AstNode *parse_if(Parser *p) {
 static AstNode *parse_while(Parser *p) {
     int line = p->previous.line, col = p->previous.column;
     AstNode *n = ast_node_alloc(p->arena, AST_WHILE, line, col);
-    n->as.while_stmt.condition  = parse_expr(p);
-    consume(p, TOK_COLON,       "Expected ':' after while condition");
-    n->as.while_stmt.body       = parse_block(p);
-    n->as.while_stmt.else_body  = NULL;
-    /* Optional else clause: while cond: ... else: ... */
-    while (check(p, TOK_NEWLINE)) advance(p);
-    if (check(p, TOK_ELSE)) {
-        advance(p); /* consume 'else' */
-        consume(p, TOK_COLON, "Expected ':' after 'else'");
-        n->as.while_stmt.else_body = parse_block(p);
-    }
+    n->as.while_stmt.condition = parse_expr(p);
+    consume(p, TOK_COLON,      "Expected ':' after while condition");
+    n->as.while_stmt.body      = parse_block(p);
     return n;
 }
 
@@ -1229,52 +1037,15 @@ static AstNode *parse_for(Parser *p) {
     memcpy(vbuf, p->previous.start, (size_t)vlen);
     vbuf[vlen] = '\0';
 
-    /* Tuple unpacking: for a, b, c in iter */
-    char **var_names = NULL;
-    int    var_count = 1; /* at least 1 (single_var) */
-    if (check(p, TOK_COMMA)) {
-        int cap = 8;
-        var_names    = FLUX_ALLOC(char *, cap);
-        var_names[0] = vbuf;
-        var_count    = 1;
-        while (match(p, TOK_COMMA)) {
-            if (check(p, TOK_IN)) break; /* trailing comma */
-            consume(p, TOK_IDENT, "Expected variable name in tuple unpack");
-            int   nlen = p->previous.length;
-            char *nbuf = FLUX_ALLOC(char, nlen + 1);
-            memcpy(nbuf, p->previous.start, (size_t)nlen);
-            nbuf[nlen] = '\0';
-            if (var_count >= cap) {
-                cap *= 2;
-                char **tmp = FLUX_ALLOC(char *, cap);
-                memcpy(tmp, var_names, (size_t)var_count * sizeof(char *));
-                var_names = tmp;
-            }
-            var_names[var_count++] = nbuf;
-        }
-    }
-
     consume(p, TOK_IN,    "Expected 'in' after loop variable");
     AstNode *iterable = parse_expr(p);
     consume(p, TOK_COLON, "Expected ':' after for iterable");
     AstNode *body = parse_block(p);
 
-    /* Optional else clause */
-    AstNode *else_body = NULL;
-    while (check(p, TOK_NEWLINE)) advance(p);
-    if (check(p, TOK_ELSE)) {
-        advance(p); /* consume 'else' */
-        consume(p, TOK_COLON, "Expected ':' after 'else'");
-        else_body = parse_block(p);
-    }
-
     AstNode *n = ast_node_alloc(p->arena, AST_FOR, line, col);
-    n->as.for_stmt.var       = (var_names && var_count > 1) ? var_names[0] : vbuf;
-    n->as.for_stmt.iterable  = iterable;
-    n->as.for_stmt.body      = body;
-    n->as.for_stmt.else_body = else_body;
-    n->as.for_stmt.var_names = (var_count > 1) ? var_names : NULL;
-    n->as.for_stmt.var_count = var_count;
+    n->as.for_stmt.var      = vbuf;
+    n->as.for_stmt.iterable = iterable;
+    n->as.for_stmt.body     = body;
     return n;
 }
 

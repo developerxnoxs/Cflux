@@ -42,10 +42,6 @@ typedef enum {
     AST_TERNARY,         /* cond ? then : else */
     AST_SPAWN,           /* spawn expr       */
 
-    /* Comprehensions */
-    AST_LIST_COMP,       /* [expr for var in iter if cond] */
-    AST_DICT_COMP,       /* {k: v for var in iter if cond} */
-
     /* Control */
     AST_IF,
     AST_WHILE,
@@ -74,8 +70,6 @@ typedef enum {
 
     /* Scope declarations */
     AST_NONLOCAL,        /* nonlocal name1, name2, ... */
-    AST_GLOBAL,          /* global name1, name2, ...   */
-    AST_DEL,             /* del name1, name2, ...      */
 
     /* Error handling */
     AST_TRY,             /* try/catch/finally           */
@@ -189,7 +183,7 @@ struct AstNode {
         /* AST_PIPELINE: left |> right */
         struct { AstNode *left; AstNode *right; } pipeline;
 
-        /* AST_TERNARY: cond ? then_expr : else_expr  OR  then_expr if cond else else_expr */
+        /* AST_TERNARY: cond ? then_expr : else_expr */
         struct { AstNode *condition; AstNode *then_expr; AstNode *else_expr; } ternary;
 
         /* AST_IF */
@@ -202,33 +196,10 @@ struct AstNode {
         } if_stmt;
 
         /* AST_WHILE */
-        struct {
-            AstNode *condition;
-            AstNode *body;
-            AstNode *else_body; /* NULL if no else clause */
-        } while_stmt;
+        struct { AstNode *condition; AstNode *body; } while_stmt;
 
         /* AST_FOR */
-        struct {
-            char    *var;         /* single iteration variable (when var_count <= 1) */
-            AstNode *iterable;
-            AstNode *body;
-            AstNode *else_body;  /* NULL if no else clause */
-            /* Tuple unpacking: when var_count > 1, var_names is used */
-            char   **var_names;  /* array of variable names for tuple unpacking */
-            int      var_count;  /* 0 or 1 = single var; >1 = tuple unpack */
-        } for_stmt;
-
-        /* AST_LIST_COMP / AST_DICT_COMP */
-        struct {
-            AstNode *element;   /* expression for list element (or key for dict) */
-            AstNode *value;     /* dict comp value expr; NULL for list comp */
-            char    *var;       /* loop variable name */
-            char   **var_names; /* for tuple unpacking; NULL if single var */
-            int      var_count; /* 0/1 = single var; >1 = tuple unpack */
-            AstNode *iterable;
-            AstNode *filter;    /* optional 'if cond'; NULL if absent */
-        } comp;
+        struct { char *var; AstNode *iterable; AstNode *body; } for_stmt;
 
         /* AST_RETURN / AST_YIELD / AST_AWAIT / AST_SPAWN */
         struct { AstNode *value; /* NULL if bare return */ } ret;
@@ -269,7 +240,7 @@ struct AstNode {
         /* AST_FROM_IMPORT */
         struct { char *module; AstList names; AstList aliases; } from_import;
 
-        /* AST_BLOCK / AST_MODULE / AST_NONLOCAL / AST_GLOBAL / AST_DEL */
+        /* AST_BLOCK / AST_MODULE */
         struct { AstList stmts; } block;
 
         /* AST_EXPR_STMT */

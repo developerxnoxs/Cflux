@@ -109,10 +109,6 @@ typedef enum {
     OP_POP_EXCEPTION_HANDLER,  /* no operand: remove top exception handler                         */
     OP_RAISE,                  /* TOS = exception value; pops it and raises                        */
 
-    /* Container operations */
-    OP_CONTAINS,         /* TOS=element, TOS-1=container → pop both, push bool */
-    OP_LIST_APPEND,      /* TOS=element, TOS-1=list → append element to list, push list */
-
     /* Misc */
     OP_IMPORT,           /* operand: uint16 constant (module)  */
     OP_IMPORT_STAR,      /* no operand: pops module dict, defines all its entries as globals */

@@ -63,11 +63,6 @@ typedef struct CompilerFrame {
      * new local.                                                          */
     char nonlocal_names[FLUX_MAX_LOCALS][256];
     int  nonlocal_count;
-
-    /* Names declared 'global' in this frame — load/store always goes to
-     * the global scope, bypassing locals and upvalues.                    */
-    char global_decl_names[FLUX_MAX_LOCALS][256];
-    int  global_decl_count;
 } CompilerFrame;
 
 /* -------------------------------------------------------------------------

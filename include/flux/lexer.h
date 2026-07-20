@@ -60,8 +60,6 @@ typedef enum {
     TOK_CATCH,      /* catch    */
     TOK_FINALLY,    /* finally  */
     TOK_RAISE,      /* raise    */
-    TOK_DEL,        /* del      */
-    TOK_GLOBAL,     /* global   */
 
     /* Operators */
     TOK_PLUS,       /* +  */
@@ -83,19 +81,12 @@ typedef enum {
     TOK_QUESTION,   /* ?   */
 
     /* Assignment */
-    TOK_ASSIGN,             /* =   */
-    TOK_PLUS_ASSIGN,        /* +=  */
-    TOK_MINUS_ASSIGN,       /* -=  */
-    TOK_STAR_ASSIGN,        /* *=  */
-    TOK_SLASH_ASSIGN,       /* /=  */
-    TOK_PERCENT_ASSIGN,     /* %=  */
-    TOK_STAR_STAR_ASSIGN,   /* **= */
-    TOK_SLASH_SLASH_ASSIGN, /* //= */
-    TOK_AMP_ASSIGN,         /* &=  */
-    TOK_PIPE_ASSIGN,        /* |=  */
-    TOK_CARET_ASSIGN,       /* ^=  */
-    TOK_LSHIFT_ASSIGN,      /* <<= */
-    TOK_RSHIFT_ASSIGN,      /* >>= */
+    TOK_ASSIGN,         /* =  */
+    TOK_PLUS_ASSIGN,    /* += */
+    TOK_MINUS_ASSIGN,   /* -= */
+    TOK_STAR_ASSIGN,    /* *= */
+    TOK_SLASH_ASSIGN,   /* /= */
+    TOK_PERCENT_ASSIGN, /* %= */
 
     /* Comparison */
     TOK_EQ,         /* == */
@@ -160,11 +151,6 @@ typedef struct {
     int  indent_depth;
     int  pending_dedents; /* number of DEDENT tokens to emit */
     bool at_line_start;
-
-    /* Bracket depth for implicit line continuation (Python-style).
-     * When paren_depth > 0, NEWLINE tokens are suppressed so that
-     * expressions can span multiple lines inside (, [, {. */
-    int  paren_depth;
 
     /* Pending token queue (for INDENT/DEDENT injection) */
     Token pending[4];

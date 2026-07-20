@@ -1,0 +1,9 @@
+enum Color:
+    Red
+
+class Child(Color):
+    fn init(self):
+        pass
+
+let c = Child()
+print(c.Red)

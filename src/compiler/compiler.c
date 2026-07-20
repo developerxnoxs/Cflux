@@ -2125,8 +2125,11 @@ static void compile_node(Compiler *c, AstNode *node) {
             int  end_count  = 0;
 
             for (int i = 0; i < n_patterns; i++) {
-                AstNode *pat  = node->as.match_stmt.patterns.data[i];
-                AstNode *body = node->as.match_stmt.bodies.data[i];
+                AstNode *pat   = node->as.match_stmt.patterns.data[i];
+                AstNode *body  = node->as.match_stmt.bodies.data[i];
+                AstNode *guard = (i < node->as.match_stmt.guards.count)
+                                 ? node->as.match_stmt.guards.data[i]
+                                 : NULL;
 
                 /* Condition: subject == pattern */
                 emit_byte(c, OP_LOAD_LOCAL, line);
@@ -2134,24 +2137,60 @@ static void compile_node(Compiler *c, AstNode *node) {
                 compile_expr(c, pat);
                 emit_byte(c, OP_EQ, line);
 
-                int skip = emit_jump(c, OP_JUMP_IF_FALSE, line);
-                emit_byte(c, OP_POP, line); /* pop true */
+                int eq_fail = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                emit_byte(c, OP_POP, line); /* pop true eq result */
 
-                /* Inner scope: contains `let` locals for this arm only */
-                scope_begin(c);
-                compile_node(c, body);
-                scope_end(c, line); /* pop arm-local `let` vars before jumping */
+                if (guard) {
+                    /* Evaluate guard; if false, this arm is skipped */
+                    compile_expr(c, guard);
+                    int guard_fail = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                    emit_byte(c, OP_POP, line); /* pop true guard result */
 
-                end_jumps[end_count++] = emit_jump(c, OP_JUMP, line);
-                patch_jump(c, skip);
-                emit_byte(c, OP_POP, line); /* pop false */
+                    /* Arm body */
+                    scope_begin(c);
+                    compile_node(c, body);
+                    scope_end(c, line);
+                    end_jumps[end_count++] = emit_jump(c, OP_JUMP, line);
+
+                    /* Guard failed: pop false guard, then skip eq_fail's own pop */
+                    patch_jump(c, guard_fail);
+                    emit_byte(c, OP_POP, line); /* pop false guard result */
+                    int skip_eq_pop = emit_jump(c, OP_JUMP, line);
+
+                    /* Eq failed: pop false eq result, then fall through to next arm */
+                    patch_jump(c, eq_fail);
+                    emit_byte(c, OP_POP, line); /* pop false eq result */
+                    patch_jump(c, skip_eq_pop); /* guard-fail path rejoins here */
+                } else {
+                    /* No guard: simple equality match */
+                    scope_begin(c);
+                    compile_node(c, body);
+                    scope_end(c, line);
+                    end_jumps[end_count++] = emit_jump(c, OP_JUMP, line);
+                    patch_jump(c, eq_fail);
+                    emit_byte(c, OP_POP, line); /* pop false eq result */
+                }
             }
 
-            /* Default / wildcard _ */
+            /* Default / wildcard _ (with optional guard) */
             if (node->as.match_stmt.wildcard_body) {
-                scope_begin(c);
-                compile_node(c, node->as.match_stmt.wildcard_body);
-                scope_end(c, line);
+                AstNode *wguard = node->as.match_stmt.wildcard_guard;
+                if (wguard) {
+                    compile_expr(c, wguard);
+                    int wg_fail = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                    emit_byte(c, OP_POP, line); /* pop true guard result */
+                    scope_begin(c);
+                    compile_node(c, node->as.match_stmt.wildcard_body);
+                    scope_end(c, line);
+                    int wg_end = emit_jump(c, OP_JUMP, line);
+                    patch_jump(c, wg_fail);
+                    emit_byte(c, OP_POP, line); /* pop false guard result */
+                    patch_jump(c, wg_end);
+                } else {
+                    scope_begin(c);
+                    compile_node(c, node->as.match_stmt.wildcard_body);
+                    scope_end(c, line);
+                }
             }
 
             /* Patch all end-of-case jumps */
@@ -2199,6 +2238,9 @@ static void compile_node(Compiler *c, AstNode *node) {
 
             /* Load the class for method attachment */
             emit_load_var(c, name, line);
+
+            /* Mark as struct so the VM can distinguish it from a plain class */
+            emit_byte(c, OP_MARK_STRUCT, line);
 
             /* Auto-generate init(field1, field2, …) when fields present */
             if (n_fields > 0) {
@@ -2290,32 +2332,47 @@ static void compile_node(Compiler *c, AstNode *node) {
 
         /* ----------------------------------------------------------------
          * enum Name: Red, Green, Blue
-         * Compiled as a dict: {"Red": 0, "Green": 1, "Blue": 2}
-         * Color.Red works because OP_GET_ATTR on dicts does key lookup.
+         * Compiled as a class with is_enum=true.  Each member is stored
+         * as a class attribute (in the methods dict) with its integer
+         * ordinal as the value.  Color.Red works via OP_GET_ATTR on the
+         * class, and the enum type tag enables isinstance() checks.
          * -------------------------------------------------------------- */
         case AST_ENUM_DEF: {
             const char *name  = node->as.enum_def.name;
             int         count = node->as.enum_def.members.count;
 
-            for (int i = 0; i < count; i++) {
-                AstNode    *m     = node->as.enum_def.members.data[i];
-                const char *mname = m->as.ident.name;
-                FluxString *key   = object_string_copy(c->vm, mname, (int)strlen(mname));
-                emit_byte(c, OP_PUSH_STRING, line);
-                emit_uint16(c, make_constant(c, value_object((FluxObject *)key), line), line);
-                emit_byte(c, OP_PUSH_INT, line);
-                chunk_write_int64(current_chunk(c), (int64_t)i, line);
-            }
-            emit_byte(c, OP_CREATE_DICT, line);
-            emit_uint16(c, (uint16_t)count, line);
+            /* Create the enum class */
+            uint16_t name_idx = identifier_constant(c, name, (int)strlen(name), line);
+            emit_byte(c, OP_CLASS, line);
+            emit_uint16(c, name_idx, line);
 
+            /* Define globally or locally */
             if (c->frame->scope_depth == 0) {
                 emit_byte(c, OP_DEFINE_GLOBAL, line);
-                emit_uint16(c, identifier_constant(c, name, (int)strlen(name), line), line);
+                emit_uint16(c, name_idx, line);
                 compiler_declare_global(c, name);
             } else {
                 add_local(c, name, line);
             }
+
+            /* Load the class for member attachment */
+            emit_load_var(c, name, line);
+
+            /* Mark as enum */
+            emit_byte(c, OP_MARK_ENUM, line);
+
+            /* Attach each member as a class attribute (integer ordinal) */
+            for (int i = 0; i < count; i++) {
+                AstNode    *m     = node->as.enum_def.members.data[i];
+                const char *mname = m->as.ident.name;
+                emit_byte(c, OP_PUSH_INT, line);
+                chunk_write_int64(current_chunk(c), (int64_t)i, line);
+                emit_byte(c, OP_METHOD, line);
+                emit_uint16(c, identifier_constant(c, mname, (int)strlen(mname), line), line);
+            }
+
+            /* Pop the class */
+            emit_byte(c, OP_POP, line);
             break;
         }
 

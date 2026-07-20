@@ -743,13 +743,30 @@ VMResult vm_call_value(FluxVM *vm, Value callee, int argc) {
                        ? VM_OK : VM_RUNTIME_ERROR;
 
             case OBJ_CLASS: {
-                FluxClass    *klass = AS_CLASS(callee);
+                FluxClass *klass = AS_CLASS(callee);
+
+                /* Enums are not callable — their members are accessed via attributes */
+                if (klass->is_enum) {
+                    vm_runtime_error(vm, "Enum '%s' is not callable; "
+                                     "access members with '%s.MemberName'",
+                                     klass->name->chars, klass->name->chars);
+                    return VM_RUNTIME_ERROR;
+                }
+
                 FluxInstance *inst  = object_instance_new(vm, klass);
                 vm->stack_top[-argc - 1] = value_object((FluxObject *)inst);
 
                 Value init;
                 FluxString *init_name = object_string_copy(vm, "init", 4);
                 if (dict_get(klass->methods, init_name, &init)) {
+                    /* Guard: init must be a closure — enum members stored here
+                     * are plain integers and must never be called as constructors. */
+                    if (!IS_CLOSURE(init)) {
+                        vm_runtime_error(vm, "Class '%s': 'init' attribute is not "
+                                         "a callable method",
+                                         klass->name->chars);
+                        return VM_RUNTIME_ERROR;
+                    }
                     return call_closure(vm, AS_CLOSURE(init), argc)
                            ? VM_OK : VM_RUNTIME_ERROR;
                 } else if (argc != 0) {

@@ -4,13 +4,17 @@
  * Handles:
  *  - All Flux token types
  *  - INDENT / DEDENT injection (Python-style)
- *  - Line continuation inside matched brackets
+ *  - Implicit line continuation inside (, [, { (paren_depth tracking)
+ *  - Explicit backslash line continuation
  *  - Single-line (#) comments
  *  - String escapes
  *  - f-strings: f"..." / f'...'
+ *  - Raw strings: r"..." / r'...'  (no escape processing)
+ *  - Byte strings: b"..." / b'...' (treated as regular strings)
  *  - Pipeline operator |>
  *  - Fat arrow =>
  *  - Question mark ?
+ *  - Extended augmented assigns: **=, //=, &=, |=, ^=, <<=, >>=
  */
 #include "flux/lexer.h"
 #include <stdio.h>
@@ -147,6 +151,8 @@ static const Keyword keywords[] = {
     {"catch",    TOK_CATCH},
     {"finally",  TOK_FINALLY},
     {"raise",    TOK_RAISE},
+    {"del",      TOK_DEL},
+    {"global",   TOK_GLOBAL},
     {NULL, 0},
 };
 
@@ -171,6 +177,18 @@ static Token scan_string(Lexer *lex) {
         advance(lex);
     }
     if (is_at_end(lex)) return error_token(lex, "Unterminated string literal");
+    advance(lex); /* closing quote */
+    return make_token(lex, TOK_STRING);
+}
+
+/* Scan raw string: r"..." or r'...' — no escape processing */
+static Token scan_raw_string(Lexer *lex) {
+    char quote = lex->current[-1]; /* ' or " — already consumed */
+    while (!is_at_end(lex) && peek(lex) != quote) {
+        if (peek(lex) == '\n') lex->line++;
+        advance(lex); /* do NOT skip escapes */
+    }
+    if (is_at_end(lex)) return error_token(lex, "Unterminated raw string literal");
     advance(lex); /* closing quote */
     return make_token(lex, TOK_STRING);
 }
@@ -247,6 +265,20 @@ static Token scan_raw_token(Lexer *lex) {
             return scan_fstring(lex);
         }
 
+        /* r-string: raw string — no escape processing */
+        if (len == 1 && lex->start[0] == 'r' && kind == TOK_IDENT &&
+            (peek(lex) == '"' || peek(lex) == '\'')) {
+            advance(lex); /* consume opening quote */
+            return scan_raw_string(lex);
+        }
+
+        /* b-string: byte string — treated as regular string in Flux */
+        if (len == 1 && lex->start[0] == 'b' && kind == TOK_IDENT &&
+            (peek(lex) == '"' || peek(lex) == '\'')) {
+            advance(lex); /* consume opening quote */
+            return scan_string(lex);
+        }
+
         return make_token(lex, kind);
     }
 
@@ -262,7 +294,19 @@ static Token scan_raw_token(Lexer *lex) {
     /* Strings */
     if (c == '"' || c == '\'') return scan_string(lex);
 
-    /* Newline – significant */
+    /* Backslash line continuation */
+    if (c == '\\') {
+        if (peek(lex) == '\n') {
+            advance(lex); /* consume the newline */
+            /* skip leading whitespace on the continuation line */
+            while (peek(lex) == ' ' || peek(lex) == '\t') advance(lex);
+            lex->start = lex->current;
+            return scan_raw_token(lex); /* recurse to get the real next token */
+        }
+        return error_token(lex, "Unexpected backslash (use \\ at end of line for continuation)");
+    }
+
+    /* Newline – significant (suppressed inside brackets in lexer_next) */
     if (c == '\n') return make_token(lex, TOK_NEWLINE);
 
     switch (c) {
@@ -287,28 +331,45 @@ static Token scan_raw_token(Lexer *lex) {
             if (match(lex, '=')) return make_token(lex, TOK_MINUS_ASSIGN);
             return make_token(lex, TOK_MINUS);
         case '*':
-            if (match(lex, '*')) return make_token(lex, TOK_STAR_STAR);
+            if (match(lex, '*')) {
+                if (match(lex, '=')) return make_token(lex, TOK_STAR_STAR_ASSIGN);
+                return make_token(lex, TOK_STAR_STAR);
+            }
             if (match(lex, '=')) return make_token(lex, TOK_STAR_ASSIGN);
             return make_token(lex, TOK_STAR);
         case '/':
-            if (match(lex, '/')) return make_token(lex, TOK_SLASH_SLASH);
+            if (match(lex, '/')) {
+                if (match(lex, '=')) return make_token(lex, TOK_SLASH_SLASH_ASSIGN);
+                return make_token(lex, TOK_SLASH_SLASH);
+            }
             if (match(lex, '=')) return make_token(lex, TOK_SLASH_ASSIGN);
             return make_token(lex, TOK_SLASH);
         case '%':
             if (match(lex, '=')) return make_token(lex, TOK_PERCENT_ASSIGN);
             return make_token(lex, TOK_PERCENT);
-        case '&': return make_token(lex, TOK_AMPERSAND);
+        case '&':
+            if (match(lex, '=')) return make_token(lex, TOK_AMP_ASSIGN);
+            return make_token(lex, TOK_AMPERSAND);
         case '|':
             if (match(lex, '>')) return make_token(lex, TOK_PIPE_ARROW);
+            if (match(lex, '=')) return make_token(lex, TOK_PIPE_ASSIGN);
             return make_token(lex, TOK_PIPE);
-        case '^': return make_token(lex, TOK_CARET);
+        case '^':
+            if (match(lex, '=')) return make_token(lex, TOK_CARET_ASSIGN);
+            return make_token(lex, TOK_CARET);
         case '~': return make_token(lex, TOK_TILDE);
         case '<':
-            if (match(lex, '<')) return make_token(lex, TOK_LSHIFT);
+            if (match(lex, '<')) {
+                if (match(lex, '=')) return make_token(lex, TOK_LSHIFT_ASSIGN);
+                return make_token(lex, TOK_LSHIFT);
+            }
             if (match(lex, '=')) return make_token(lex, TOK_LTE);
             return make_token(lex, TOK_LT);
         case '>':
-            if (match(lex, '>')) return make_token(lex, TOK_RSHIFT);
+            if (match(lex, '>')) {
+                if (match(lex, '=')) return make_token(lex, TOK_RSHIFT_ASSIGN);
+                return make_token(lex, TOK_RSHIFT);
+            }
             if (match(lex, '=')) return make_token(lex, TOK_GTE);
             return make_token(lex, TOK_GT);
         case '=':
@@ -340,6 +401,7 @@ void lexer_init(Lexer *lex, const char *source) {
     lex->indent_depth  = 1;
     lex->pending_dedents = 0;
     lex->at_line_start  = true;
+    lex->paren_depth    = 0;
     lex->pending_count  = 0;
     lex->pending_head   = 0;
     lex->error_msg      = NULL;
@@ -440,9 +502,20 @@ Token lexer_next(Lexer *lex) {
     }
 
     Token t = scan_raw_token(lex);
+
+    /* Track bracket/paren/brace depth for implicit line continuation */
+    if (t.kind == TOK_LPAREN || t.kind == TOK_LBRACKET || t.kind == TOK_LBRACE)
+        lex->paren_depth++;
+    else if ((t.kind == TOK_RPAREN || t.kind == TOK_RBRACKET || t.kind == TOK_RBRACE) &&
+             lex->paren_depth > 0)
+        lex->paren_depth--;
+
     if (t.kind == TOK_NEWLINE) {
+        if (lex->paren_depth > 0) {
+            /* Inside brackets: suppress newline for implicit line continuation */
+            return lexer_next(lex);
+        }
         lex->at_line_start = true;
-        return t;
     }
     return t;
 }
@@ -504,6 +577,12 @@ const char *token_kind_name(TokenKind kind) {
         case TOK_SPAWN:      return "spawn";
         case TOK_NONLOCAL:   return "nonlocal";
         case TOK_WITH:       return "with";
+        case TOK_TRY:        return "try";
+        case TOK_CATCH:      return "catch";
+        case TOK_FINALLY:    return "finally";
+        case TOK_RAISE:      return "raise";
+        case TOK_DEL:        return "del";
+        case TOK_GLOBAL:     return "global";
         case TOK_PLUS:       return "+";
         case TOK_MINUS:      return "-";
         case TOK_STAR:       return "*";
@@ -515,7 +594,19 @@ const char *token_kind_name(TokenKind kind) {
         case TOK_FAT_ARROW:  return "=>";
         case TOK_AT_ARROW:   return "@>";
         case TOK_QUESTION:   return "?";
-        case TOK_ASSIGN:     return "=";
+        case TOK_ASSIGN:             return "=";
+        case TOK_PLUS_ASSIGN:        return "+=";
+        case TOK_MINUS_ASSIGN:       return "-=";
+        case TOK_STAR_ASSIGN:        return "*=";
+        case TOK_SLASH_ASSIGN:       return "/=";
+        case TOK_PERCENT_ASSIGN:     return "%=";
+        case TOK_STAR_STAR_ASSIGN:   return "**=";
+        case TOK_SLASH_SLASH_ASSIGN: return "//=";
+        case TOK_AMP_ASSIGN:         return "&=";
+        case TOK_PIPE_ASSIGN:        return "|=";
+        case TOK_CARET_ASSIGN:       return "^=";
+        case TOK_LSHIFT_ASSIGN:      return "<<=";
+        case TOK_RSHIFT_ASSIGN:      return ">>=";
         case TOK_EQ:         return "==";
         case TOK_NEQ:        return "!=";
         case TOK_LT:         return "<";
@@ -541,5 +632,5 @@ const char *token_kind_name(TokenKind kind) {
 }
 
 bool token_is_keyword(TokenKind kind) {
-    return kind >= TOK_FUNC && kind <= TOK_NONLOCAL;
+    return kind >= TOK_FUNC && kind <= TOK_GLOBAL;
 }

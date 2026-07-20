@@ -323,11 +323,76 @@ static Value native_sleep(FluxVM *vm, int argc, Value *argv) {
 
 static Value native_assert(FluxVM *vm, int argc, Value *argv) {
     if (!value_is_truthy(argv[0])) {
-        if (argc > 1 && IS_STRING(argv[1]))
-            vm_runtime_error(vm, "Assertion failed: %s", AS_STRING(argv[1])->chars);
-        else
+        if (argc > 1) {
+            /* Convert message to string */
+            if (IS_STRING(argv[1]))
+                vm_runtime_error(vm, "Assertion failed: %s", AS_STRING(argv[1])->chars);
+            else
+                vm_runtime_error(vm, "Assertion failed");
+        } else {
             vm_runtime_error(vm, "Assertion failed");
+        }
     }
+    return value_null();
+}
+
+static Value native_list(FluxVM *vm, int argc, Value *argv) {
+    /* list() with no args → empty list
+     * list(iterable) → copy of list or conversion */
+    FluxList *result = object_list_new(vm);
+    if (argc == 0) {
+        return value_object((FluxObject *)result);
+    }
+    Value arg = argv[0];
+    if (IS_LIST(arg)) {
+        /* Copy list elements */
+        FluxList *src = AS_LIST(arg);
+        vm_push(vm, value_object((FluxObject *)result)); /* GC protect */
+        for (int i = 0; i < src->elements.count; i++)
+            gc_value_array_write(vm, &result->elements, src->elements.data[i]);
+        vm_pop(vm);
+        return value_object((FluxObject *)result);
+    }
+    if (IS_STRING(arg)) {
+        /* Convert string to list of single-char strings */
+        FluxString *str = AS_STRING(arg);
+        vm_push(vm, value_object((FluxObject *)result)); /* GC protect */
+        for (int i = 0; i < str->length; i++) {
+            char ch[2] = { str->chars[i], '\0' };
+            FluxString *cs = object_string_copy(vm, ch, 1);
+            gc_value_array_write(vm, &result->elements,
+                                 value_object((FluxObject *)cs));
+        }
+        vm_pop(vm);
+        return value_object((FluxObject *)result);
+    }
+    /* Fallback: wrap in a list */
+    vm_push(vm, value_object((FluxObject *)result));
+    gc_value_array_write(vm, &result->elements, arg);
+    vm_pop(vm);
+    return value_object((FluxObject *)result);
+}
+
+static Value native_next(FluxVM *vm, int argc, Value *argv) {
+    (void)argc;
+    /* For lists used as iterators: advance an index.
+     * Since Flux doesn't have true Python iterators yet, we accept a list
+     * and signal StopIteration on exhaustion via error. */
+    if (IS_LIST(argv[0])) {
+        FluxList *list = AS_LIST(argv[0]);
+        if (list->elements.count == 0) {
+            vm_runtime_error(vm, "StopIteration");
+            return value_null();
+        }
+        /* Return first element (crude — generators need full coroutine support) */
+        Value first = list->elements.data[0];
+        /* Shift remaining elements */
+        for (int i = 0; i < list->elements.count - 1; i++)
+            list->elements.data[i] = list->elements.data[i + 1];
+        list->elements.count--;
+        return first;
+    }
+    vm_runtime_error(vm, "next() requires an iterable");
     return value_null();
 }
 
@@ -854,6 +919,13 @@ void flux_stdlib_load_core(FluxVM *vm) {
     vm_register_native(vm, "reversed",    native_reversed,          1);
     vm_register_native(vm, "abs",         native_abs,               1);
     vm_register_native(vm, "round",       native_round,            -1);
+
+    /* Python-compatible aliases */
+    vm_register_native(vm, "list",        native_list,             -1);
+    vm_register_native(vm, "next",        native_next,             -1);
+    vm_register_native(vm, "hasattr",     native_has_attr,          2);
+    vm_register_native(vm, "getattr",     native_get_attr,         -1);
+    vm_register_native(vm, "setattr",     native_set_attr,          3);
 
     /* Introspection */
     vm_register_native(vm, "has_attr",    native_has_attr,          2);

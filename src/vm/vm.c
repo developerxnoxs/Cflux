@@ -2189,6 +2189,66 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                 break;
             }
 
+            case OP_CONTAINS: {
+                /* TOS = element, TOS-1 = container → pop both, push bool */
+                Value element   = vm_pop(vm);
+                Value container = vm_pop(vm);
+                bool found = false;
+                if (IS_LIST(container)) {
+                    FluxList *list = AS_LIST(container);
+                    for (int i = 0; i < list->elements.count; i++) {
+                        Value item = list->elements.data[i];
+                        /* Simple equality check */
+                        if (value_is_int(element) && value_is_int(item))
+                            found = (value_as_int(element) == value_as_int(item));
+                        else if (value_is_float(element) && value_is_float(item))
+                            found = (value_as_float(element) == value_as_float(item));
+                        else if (value_is_bool(element) && value_is_bool(item))
+                            found = (value_as_bool(element) == value_as_bool(item));
+                        else if (value_is_null(element) && value_is_null(item))
+                            found = true;
+                        else if (IS_STRING(element) && IS_STRING(item)) {
+                            FluxString *sa = AS_STRING(element);
+                            FluxString *sb = AS_STRING(item);
+                            found = (sa->length == sb->length &&
+                                     memcmp(sa->chars, sb->chars, (size_t)sa->length) == 0);
+                        } else if (value_is_object(element) && value_is_object(item))
+                            found = (value_as_object(element) == value_as_object(item));
+                        if (found) break;
+                    }
+                } else if (IS_STRING(container) && IS_STRING(element)) {
+                    FluxString *haystack = AS_STRING(container);
+                    FluxString *needle   = AS_STRING(element);
+                    if (needle->length == 0) { found = true; }
+                    else if (needle->length <= haystack->length) {
+                        for (int i = 0; i <= haystack->length - needle->length; i++) {
+                            if (memcmp(haystack->chars + i, needle->chars,
+                                       (size_t)needle->length) == 0) {
+                                found = true; break;
+                            }
+                        }
+                    }
+                } else if (IS_DICT(container) && IS_STRING(element)) {
+                    Value dummy;
+                    found = dict_get(AS_DICT(container), AS_STRING(element), &dummy);
+                } else {
+                    RUNTIME_ERROR("'in' operator requires a list, string, or dict");
+                }
+                vm_push(vm, value_bool(found));
+                break;
+            }
+
+            case OP_LIST_APPEND: {
+                /* TOS = element, TOS-1 = list → append, leave list on stack */
+                Value element  = vm_pop(vm);
+                Value list_val = vm_peek(vm, 0); /* keep list on stack */
+                if (!IS_LIST(list_val))
+                    RUNTIME_ERROR("LIST_APPEND: expected list");
+                gc_value_array_write(vm, &AS_LIST(list_val)->elements, element);
+                /* list_val remains on stack */
+                break;
+            }
+
             case OP_HALT:
                 return VM_OK;
 

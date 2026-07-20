@@ -1,0 +1,170 @@
+# ws_multi_handle_test.flx
+# Test WebSocket multi-handle: beberapa koneksi aktif sekaligus.
+import ws
+import shell
+import time
+
+print("=== Flux WebSocket Multi-Handle Test ===")
+
+# --------------------------------------------------------------------------
+# Test 1: 3 handle aktif bersamaan — isolasi antar koneksi
+# --------------------------------------------------------------------------
+print("")
+print("-- Test 1: 3 handle aktif bersamaan (isolasi pesan) --")
+
+shell.exec("./build_make/flux tests/ws_generic_echo_server.flx -- 20001 > /dev/null 2>&1 &")
+shell.exec("./build_make/flux tests/ws_generic_echo_server.flx -- 20002 > /dev/null 2>&1 &")
+shell.exec("./build_make/flux tests/ws_generic_echo_server.flx -- 20003 > /dev/null 2>&1 &")
+time.sleep(0.4)
+
+conn1 = ws.connect("ws://127.0.0.1:20001/", {}, 5)
+conn2 = ws.connect("ws://127.0.0.1:20002/", {}, 5)
+conn3 = ws.connect("ws://127.0.0.1:20003/", {}, 5)
+
+all_connected = conn1 != null and conn2 != null and conn3 != null
+if all_connected:
+    print("[PASS] 3 handle berhasil dibuka bersamaan")
+else:
+    print("[FAIL] gagal buka 3 koneksi: conn1=" + str(conn1 != null) + " conn2=" + str(conn2 != null) + " conn3=" + str(conn3 != null))
+
+if all_connected:
+    ws.send(conn1, "dari-conn1")
+    ws.send(conn2, "dari-conn2")
+    ws.send(conn3, "dari-conn3")
+
+    r1 = ws.recv(conn1, 5)
+    r2 = ws.recv(conn2, 5)
+    r3 = ws.recv(conn3, 5)
+
+    ok1 = r1 != null and r1["data"] == "ECHO:dari-conn1"
+    ok2 = r2 != null and r2["data"] == "ECHO:dari-conn2"
+    ok3 = r3 != null and r3["data"] == "ECHO:dari-conn3"
+
+    if ok1:
+        print("[PASS] conn1 terima balasan benar: " + r1["data"])
+    else:
+        print("[FAIL] conn1 salah: " + str(r1))
+    if ok2:
+        print("[PASS] conn2 terima balasan benar: " + r2["data"])
+    else:
+        print("[FAIL] conn2 salah: " + str(r2))
+    if ok3:
+        print("[PASS] conn3 terima balasan benar: " + r3["data"])
+    else:
+        print("[FAIL] conn3 salah: " + str(r3))
+
+    ws.close(conn1)
+    ws.close(conn2)
+    ws.close(conn3)
+
+# --------------------------------------------------------------------------
+# Test 2: Kirim balik bergantian — verifikasi routing tidak tercampur
+# --------------------------------------------------------------------------
+print("")
+print("-- Test 2: send/recv bergantian lintas handle --")
+
+shell.exec("./build_make/flux tests/ws_generic_echo_server.flx -- 20011 > /dev/null 2>&1 &")
+shell.exec("./build_make/flux tests/ws_generic_echo_server.flx -- 20012 > /dev/null 2>&1 &")
+time.sleep(0.4)
+
+ca = ws.connect("ws://127.0.0.1:20011/", {}, 5)
+cb = ws.connect("ws://127.0.0.1:20012/", {}, 5)
+
+ab_ok = ca != null and cb != null
+if ab_ok:
+    ws.send(ca, "alpha")
+    ws.send(cb, "beta")
+    # recv dalam urutan terbalik dari send
+    rb = ws.recv(cb, 5)
+    ra = ws.recv(ca, 5)
+
+    ok_a = ra != null and ra["data"] == "ECHO:alpha"
+    ok_b = rb != null and rb["data"] == "ECHO:beta"
+    if ok_a and ok_b:
+        print("[PASS] routing benar meski recv urutan terbalik")
+        print("  ca->ra: " + ra["data"])
+        print("  cb->rb: " + rb["data"])
+    else:
+        print("[FAIL] routing tercampur — ra=" + str(ra) + " rb=" + str(rb))
+
+    ws.close(ca)
+    ws.close(cb)
+else:
+    print("[FAIL] gagal buka koneksi Test 2")
+
+# --------------------------------------------------------------------------
+# Test 3: Banyak pesan dalam satu handle (queue depth)
+# --------------------------------------------------------------------------
+print("")
+print("-- Test 3: banyak pesan dalam satu handle (queue depth) --")
+
+shell.exec("./build_make/flux tests/ws_generic_echo_server.flx -- 20021 > /dev/null 2>&1 &")
+time.sleep(0.4)
+
+cm = ws.connect("ws://127.0.0.1:20021/", {}, 5)
+if cm != null:
+    n = 5
+    i = 0
+    while i < n:
+        ws.send(cm, "pesan-" + str(i))
+        i = i + 1
+
+    pass_count = 0
+    j = 0
+    while j < n:
+        rm = ws.recv(cm, 5)
+        expected = "ECHO:pesan-" + str(j)
+        got_ok = rm != null and rm["data"] == expected
+        if got_ok:
+            pass_count = pass_count + 1
+        else:
+            print("[FAIL] pesan-" + str(j) + " salah: " + str(rm))
+        j = j + 1
+
+    if pass_count == n:
+        print("[PASS] " + str(n) + "/" + str(n) + " pesan diterima urut dan benar")
+    else:
+        print("[FAIL] hanya " + str(pass_count) + "/" + str(n) + " pesan benar")
+    ws.close(cm)
+else:
+    print("[FAIL] gagal buka koneksi Test 3")
+
+# --------------------------------------------------------------------------
+# Test 4: Reconnect cepat ke port yang sama
+# --------------------------------------------------------------------------
+print("")
+print("-- Test 4: reconnect ke port baru setelah close --")
+
+shell.exec("./build_make/flux tests/ws_generic_echo_server.flx -- 20031 > /dev/null 2>&1 &")
+time.sleep(0.3)
+cx = ws.connect("ws://127.0.0.1:20031/", {}, 5)
+if cx != null:
+    ws.send(cx, "sesi-pertama")
+    rx = ws.recv(cx, 5)
+    ws.close(cx)
+    ok_x = rx != null and rx["data"] == "ECHO:sesi-pertama"
+    if ok_x:
+        print("[PASS] sesi pertama ok: " + rx["data"])
+    else:
+        print("[FAIL] sesi pertama: " + str(rx))
+
+    # reconnect ke port baru
+    shell.exec("./build_make/flux tests/ws_generic_echo_server.flx -- 20032 > /dev/null 2>&1 &")
+    time.sleep(0.3)
+    cy = ws.connect("ws://127.0.0.1:20032/", {}, 5)
+    if cy != null:
+        ws.send(cy, "sesi-kedua")
+        ry = ws.recv(cy, 5)
+        ws.close(cy)
+        ok_y = ry != null and ry["data"] == "ECHO:sesi-kedua"
+        if ok_y:
+            print("[PASS] reconnect sesi kedua ok: " + ry["data"])
+        else:
+            print("[FAIL] sesi kedua: " + str(ry))
+    else:
+        print("[FAIL] reconnect gagal")
+else:
+    print("[FAIL] sesi pertama gagal connect")
+
+print("")
+print("=== Semua test multi-handle selesai ===")

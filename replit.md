@@ -72,6 +72,9 @@ Catatan penting tentang Flux + WebSocket:
 
 ## Perubahan Terbaru
 
+- **Fix ws client — message queue** (`extension/ws/ws_ext.c`): Ganti single-slot `pending` dengan circular buffer 16 slot (`WsMsgQueue`). Sebelumnya, jika server mengirim TEXT frame lalu langsung CLOSE frame dalam satu `wslay_event_recv()`, frame TEXT hilang tertimpa CLOSE. Sekarang kedua frame masuk antrian dan `ws.recv()` mengambilnya satu per satu.
+- **Fix ws client — timing** (`extension/ws/ws_ext.c`): Kalkulasi `remain` di `tcp_connect_timeout()` dan loop send handshake mengabaikan nanosecond, sehingga bisa timeout prematur jika sisa waktu kurang dari 1 detik. Diperbaiki ke kalkulasi nsec-aware.
+- **Fix ws client — URL tidak valid** (`extension/ws/ws_ext.c`): `ws.connect()` dengan URL bukan `ws://` sebelumnya melempar runtime error; sekarang mengembalikan `null` sesuai kontrak API (kembalikan null jika gagal, bukan exception).
 - **Fix print() buffering** (`src/stdlib/stdlib_core.c`): Tambah `fflush(stdout)` di `native_print` sehingga output `print()` langsung muncul bahkan saat stdout bukan TTY (misalnya saat server HTTP menunggu koneksi). Sebelumnya hanya `write()` yang flush, `print()` tidak.
 
 

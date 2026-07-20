@@ -1,0 +1,111 @@
+# Test: Walrus operator in repeated-evaluation contexts (inside functions)
+# The critical regression: new-local walrus in a loop must STORE on every
+# iteration, not only on the first one.
+
+let ok_count = 0
+let fail_count = 0
+
+func check(label, got, expected):
+    if got == expected:
+        print(f"  [OK] {label}")
+        ok_count = ok_count + 1
+    else:
+        print(f"  [FAIL] {label}: got={got} expected={expected}")
+        fail_count = fail_count + 1
+
+print("=== Walrus in while-condition inside a function ===")
+
+# 1. Classic read-loop pattern: walrus as sole condition
+func sum_while_walrus():
+    data = [10, 20, 30]
+    idx = 0
+    total = 0
+    while (item := data[idx]) > 0:
+        total = total + item
+        idx = idx + 1
+        if idx >= len(data):
+            break
+    return total
+
+check("sum via walrus while", sum_while_walrus(), 60)
+
+# 2. Each iteration picks up the freshly-computed walrus value
+func collect_items():
+    src = ["a", "b", "c", "d"]
+    idx = 0
+    result = []
+    while idx < len(src):
+        cur := src[idx]
+        result.append(cur)
+        idx = idx + 1
+    return result
+
+r = collect_items()
+check("collect walrus items len", len(r), 4)
+check("collect walrus items[0]", r[0], "a")
+check("collect walrus items[3]", r[3], "d")
+
+# 3. Walrus updates its slot every iteration (not stale on 2nd+)
+func walrus_update_check():
+    vals = [1, 2, 3, 4, 5]
+    idx = 0
+    last := 0
+    while idx < len(vals):
+        last := vals[idx]
+        idx = idx + 1
+    return last   # must be 5, not 1
+
+check("walrus updated every iteration", walrus_update_check(), 5)
+
+# 4. Walrus inside condition expression, used in body
+func walrus_cond_and_body():
+    items = [3, 7, 2, 9, 1]
+    idx = 0
+    big_count = 0
+    while idx < len(items):
+        if (v := items[idx]) > 5:
+            big_count = big_count + 1
+        idx = idx + 1
+    return big_count   # 7 and 9 are > 5 → 2
+
+check("walrus in if-cond inside loop", walrus_cond_and_body(), 2)
+
+# 5. Nested walrus (outer + inner) in the same function
+func nested_walrus():
+    a = [10, 20, 30]
+    b = [1, 2, 3]
+    idx = 0
+    total = 0
+    while idx < len(a):
+        x := a[idx]
+        y := b[idx]
+        total = total + x + y
+        idx = idx + 1
+    return total   # (10+1) + (20+2) + (30+3) = 66
+
+check("nested walrus in loop", nested_walrus(), 66)
+
+# 6. Walrus at script level (existing passing test) still works
+data_g = [5, 10, 15]
+idx_g = 0
+total_g = 0
+while (g_item := data_g[idx_g]) > 0:
+    total_g = total_g + g_item
+    idx_g = idx_g + 1
+    if idx_g >= len(data_g):
+        break
+check("walrus in while at script level", total_g, 30)
+
+# 7. Walrus inside a for-loop body (new local, repeated execution)
+func walrus_in_for_body():
+    nums = [2, 4, 6, 8]
+    total = 0
+    for n in nums:
+        doubled := n * 2
+        total = total + doubled
+    return total   # (4+8+12+16) = 40
+
+check("walrus new local in for-body", walrus_in_for_body(), 40)
+
+print("")
+print(f"Results: {ok_count} passed, {fail_count} failed")

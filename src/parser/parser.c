@@ -439,33 +439,110 @@ static AstNode *parse_primary(Parser *p) {
         return expr;
     }
 
-    /* List literal */
+    /* List literal / List comprehension */
     if (match(p, TOK_LBRACKET)) {
+        skip_newlines(p);
+        /* Empty list */
+        if (check(p, TOK_RBRACKET)) {
+            advance(p);
+            AstNode *node = ast_node_alloc(p->arena, AST_LIST, line, col);
+            ast_list_init(&node->as.list.elements);
+            return node;
+        }
+        AstNode *first = parse_expr(p);
+        /* Check for list comprehension: [expr for var in iterable [if cond]] */
+        if (match(p, TOK_FOR)) {
+            if (!check(p, TOK_IDENT)) {
+                parser_error(p, "Expected variable name after 'for' in list comprehension");
+                return ast_null(p->arena, line, col);
+            }
+            advance(p);
+            int   vlen = p->previous.length;
+            char *vbuf = FLUX_ALLOC(char, vlen + 1);
+            memcpy(vbuf, p->previous.start, (size_t)vlen);
+            vbuf[vlen] = '\0';
+            consume(p, TOK_IN, "Expected 'in' after variable in list comprehension");
+            AstNode *iterable = parse_expr(p);
+            AstNode *cond = NULL;
+            if (match(p, TOK_IF)) cond = parse_expr(p);
+            consume(p, TOK_RBRACKET, "Expected ']' after list comprehension");
+            AstNode *comp = ast_node_alloc(p->arena, AST_LIST_COMP, line, col);
+            comp->as.list_comp.expr      = first;
+            comp->as.list_comp.var       = vbuf;
+            comp->as.list_comp.iterable  = iterable;
+            comp->as.list_comp.condition = cond;
+            return comp;
+        }
+        /* Normal list literal */
         AstNode *node = ast_node_alloc(p->arena, AST_LIST, line, col);
         ast_list_init(&node->as.list.elements);
-        skip_newlines(p);
-        while (!check(p, TOK_RBRACKET) && !check(p, TOK_EOF)) {
-            ast_list_push(&node->as.list.elements, parse_expr(p));
-            if (!match(p, TOK_COMMA)) break;
+        ast_list_push(&node->as.list.elements, first);
+        if (match(p, TOK_COMMA)) {
             skip_newlines(p);
+            while (!check(p, TOK_RBRACKET) && !check(p, TOK_EOF)) {
+                ast_list_push(&node->as.list.elements, parse_expr(p));
+                if (!match(p, TOK_COMMA)) break;
+                skip_newlines(p);
+            }
         }
         skip_newlines(p);
         consume(p, TOK_RBRACKET, "Expected ']' after list");
         return node;
     }
 
-    /* Dict literal */
+    /* Dict literal / Dict comprehension */
     if (match(p, TOK_LBRACE)) {
+        skip_newlines(p);
+        /* Empty dict */
+        if (check(p, TOK_RBRACE)) {
+            advance(p);
+            AstNode *node = ast_node_alloc(p->arena, AST_DICT, line, col);
+            ast_list_init(&node->as.dict.keys);
+            ast_list_init(&node->as.dict.values);
+            return node;
+        }
+        AstNode *first_key = parse_expr(p);
+        consume(p, TOK_COLON, "Expected ':' in dict literal");
+        AstNode *first_val = parse_expr(p);
+        /* Check for dict comprehension: {k: v for var in iterable [if cond]} */
+        if (match(p, TOK_FOR)) {
+            if (!check(p, TOK_IDENT)) {
+                parser_error(p, "Expected variable name after 'for' in dict comprehension");
+                return ast_null(p->arena, line, col);
+            }
+            advance(p);
+            int   vlen = p->previous.length;
+            char *vbuf = FLUX_ALLOC(char, vlen + 1);
+            memcpy(vbuf, p->previous.start, (size_t)vlen);
+            vbuf[vlen] = '\0';
+            consume(p, TOK_IN, "Expected 'in' after variable in dict comprehension");
+            AstNode *iterable = parse_expr(p);
+            AstNode *cond = NULL;
+            if (match(p, TOK_IF)) cond = parse_expr(p);
+            consume(p, TOK_RBRACE, "Expected '}' after dict comprehension");
+            AstNode *comp = ast_node_alloc(p->arena, AST_DICT_COMP, line, col);
+            comp->as.dict_comp.key       = first_key;
+            comp->as.dict_comp.val       = first_val;
+            comp->as.dict_comp.var       = vbuf;
+            comp->as.dict_comp.iterable  = iterable;
+            comp->as.dict_comp.condition = cond;
+            return comp;
+        }
+        /* Normal dict literal */
         AstNode *node = ast_node_alloc(p->arena, AST_DICT, line, col);
         ast_list_init(&node->as.dict.keys);
         ast_list_init(&node->as.dict.values);
-        skip_newlines(p);
-        while (!check(p, TOK_RBRACE) && !check(p, TOK_EOF)) {
-            ast_list_push(&node->as.dict.keys,   parse_expr(p));
-            consume(p, TOK_COLON, "Expected ':' in dict literal");
-            ast_list_push(&node->as.dict.values, parse_expr(p));
-            if (!match(p, TOK_COMMA)) break;
+        ast_list_push(&node->as.dict.keys,   first_key);
+        ast_list_push(&node->as.dict.values, first_val);
+        if (match(p, TOK_COMMA)) {
             skip_newlines(p);
+            while (!check(p, TOK_RBRACE) && !check(p, TOK_EOF)) {
+                ast_list_push(&node->as.dict.keys,   parse_expr(p));
+                consume(p, TOK_COLON, "Expected ':' in dict literal");
+                ast_list_push(&node->as.dict.values, parse_expr(p));
+                if (!match(p, TOK_COMMA)) break;
+                skip_newlines(p);
+            }
         }
         skip_newlines(p);
         consume(p, TOK_RBRACE, "Expected '}' after dict");
@@ -709,6 +786,14 @@ static AstNode *parse_expr(Parser *p) {
     AstNode *left = parse_ternary(p);
 
     int line = p->current.line, col = p->current.column;
+
+    /* Walrus operator: name := expr (assignment expression) */
+    if (left->kind == AST_IDENT && match(p, TOK_WALRUS)) {
+        AstNode *n = ast_node_alloc(p->arena, AST_WALRUS, line, col);
+        n->as.walrus.name  = left->as.ident.name;
+        n->as.walrus.value = parse_expr(p); /* right-assoc */
+        return n;
+    }
 
     /* Simple assignment */
     if (match(p, TOK_ASSIGN)) {

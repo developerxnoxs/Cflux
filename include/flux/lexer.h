@@ -82,6 +82,7 @@ typedef enum {
 
     /* Assignment */
     TOK_ASSIGN,         /* =  */
+    TOK_WALRUS,         /* := */
     TOK_PLUS_ASSIGN,    /* += */
     TOK_MINUS_ASSIGN,   /* -= */
     TOK_STAR_ASSIGN,    /* *= */

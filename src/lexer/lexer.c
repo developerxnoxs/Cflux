@@ -274,7 +274,9 @@ static Token scan_raw_token(Lexer *lex) {
         case '}': return make_token(lex, TOK_RBRACE);
         case ',': return make_token(lex, TOK_COMMA);
         case ';': return make_token(lex, TOK_SEMICOLON);
-        case ':': return make_token(lex, TOK_COLON);
+        case ':':
+            if (match(lex, '=')) return make_token(lex, TOK_WALRUS);
+            return make_token(lex, TOK_COLON);
         case '?': return make_token(lex, TOK_QUESTION);
         case '.':
             if (peek(lex) == '.') { advance(lex); return make_token(lex, TOK_ELLIPSIS); }
@@ -516,6 +518,7 @@ const char *token_kind_name(TokenKind kind) {
         case TOK_AT_ARROW:   return "@>";
         case TOK_QUESTION:   return "?";
         case TOK_ASSIGN:     return "=";
+        case TOK_WALRUS:     return ":=";
         case TOK_EQ:         return "==";
         case TOK_NEQ:        return "!=";
         case TOK_LT:         return "<";

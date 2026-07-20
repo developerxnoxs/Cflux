@@ -70,6 +70,50 @@ Catatan penting tentang Flux + WebSocket:
 - Hindari blank line di antara cabang `if/elif/else` — Flux memisahkan blok berdasarkan indentasi/baris kosong
 - Kondisi `and` kompleks di `elif` sebaiknya diekstrak ke variabel terlebih dahulu
 
+## Fitur Baru yang Ditambahkan
+
+### Walrus Operator (`:=`) — Assignment Expression
+Operator `:=` mengevaluasi ekspresi, menyimpan ke variabel, dan mengembalikan nilai dalam satu langkah.
+
+```flux
+# Assign dan gunakan sekaligus dalam kondisi
+if (n := len(items)) > 3:
+    print(f"Ada {n} item")
+
+# Dalam while loop
+while (line := read_next()) != "":
+    process(line)
+```
+
+Diimplementasikan di: `src/lexer/lexer.c` (token `TOK_WALRUS`), `src/parser/parser.c`, `src/compiler/compiler.c` (case `AST_WALRUS`).
+
+### List Comprehension
+```flux
+# Dasar
+squares = [x * x for x in [1, 2, 3, 4, 5]]   # → [1, 4, 9, 16, 25]
+
+# Dengan filter
+evens = [x for x in items if x % 2 == 0]
+
+# Transform + filter
+result = [v * 2 for v in data if v > 10]
+```
+
+### Dict Comprehension
+```flux
+# Dasar
+lengths = {word: len(word) for word in words}
+
+# Dengan filter
+short = {k: v for k, v in pairs if len(k) <= 3}
+```
+
+Comprehension dikompilasi sebagai closure anonymous yang langsung dipanggil (pola CPython), sehingga scoping bersih dan tidak ada slot lokal yang bocor ke frame pemanggil.
+
+Test suite: `tests/test_walrus_comprehension.flx`
+
+> **Catatan:** Walrus operator (`:=`) di dalam kondisi `if` di dalam comprehension (misal `[y for x in list if (y := expr) > 0]`) belum didukung — gunakan `[expr for x in list if expr > 0]` sebagai alternatif.
+
 ## Perubahan Terbaru
 
 - **Fix ws client — message queue** (`extension/ws/ws_ext.c`): Ganti single-slot `pending` dengan circular buffer 16 slot (`WsMsgQueue`). Sebelumnya, jika server mengirim TEXT frame lalu langsung CLOSE frame dalam satu `wslay_event_recv()`, frame TEXT hilang tertimpa CLOSE. Sekarang kedua frame masuk antrian dan `ws.recv()` mengambilnya satu per satu.

@@ -26,6 +26,7 @@ typedef enum {
     /* Variable */
     AST_IDENT,
     AST_ASSIGN,          /* name = expr  */
+    AST_WALRUS,          /* name := expr (assignment expression) */
     AST_AUGMENTED_ASSIGN,/* name op= expr */
     AST_LET_DECL,        /* let/const name: type = expr */
 
@@ -37,6 +38,8 @@ typedef enum {
     AST_ATTR,            /* a.b    */
     AST_LIST,
     AST_DICT,
+    AST_LIST_COMP,       /* [expr for var in iter if cond] */
+    AST_DICT_COMP,       /* {k: v for var in iter if cond} */
     AST_LAMBDA,          /* |params| => expr */
     AST_PIPELINE,        /* expr |> expr     */
     AST_TERNARY,         /* cond ? then : else */
@@ -147,6 +150,9 @@ struct AstNode {
         /* AST_ASSIGN */
         struct { AstNode *target; AstNode *value; } assign;
 
+        /* AST_WALRUS: name := expr */
+        struct { char *name; AstNode *value; } walrus;
+
         /* AST_AUGMENTED_ASSIGN */
         struct { AstNode *target; AstNode *value; TokenKind op; } aug_assign;
 
@@ -173,6 +179,23 @@ struct AstNode {
 
         /* AST_DICT */
         struct { AstList keys; AstList values; } dict;
+
+        /* AST_LIST_COMP: [expr for var in iterable if condition] */
+        struct {
+            AstNode *expr;
+            char    *var;
+            AstNode *iterable;
+            AstNode *condition; /* NULL if no if-clause */
+        } list_comp;
+
+        /* AST_DICT_COMP: {key: val for var in iterable if condition} */
+        struct {
+            AstNode *key;
+            AstNode *val;
+            char    *var;
+            AstNode *iterable;
+            AstNode *condition; /* NULL if no if-clause */
+        } dict_comp;
 
         /* AST_FSTRING */
         struct { AstList parts; } fstring;

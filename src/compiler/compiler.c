@@ -909,6 +909,300 @@ static void compile_expr(Compiler *c, AstNode *node) {
             break;
         }
 
+        /* ----------------------------------------------------------------
+         * Walrus operator: name := expr
+         * Evaluates expr, assigns it to name, leaves value on stack.
+         * -------------------------------------------------------------- */
+        case AST_WALRUS: {
+            const char *name = node->as.walrus.name;
+            compile_expr(c, node->as.walrus.value);   /* push value */
+
+            if (frame_is_nonlocal(c->frame, name)) {
+                /* nonlocal name := expr → store to upvalue/global, leave on stack */
+                int upv = resolve_upvalue(c->frame, name, line);
+                if (upv != -1) {
+                    emit_byte(c, OP_SET_UPVALUE, line);
+                    emit_byte(c, (uint8_t)upv, line);
+                } else if (compiler_has_global(c, name)) {
+                    emit_byte(c, OP_STORE_GLOBAL, line);
+                    emit_uint16(c, identifier_constant(c, name, (int)strlen(name), line), line);
+                } else {
+                    compile_error(c, line,
+                        "nonlocal '%s': no binding found in any enclosing scope", name);
+                }
+                /* value left on stack as expression result */
+            } else if (resolve_local(c->frame, name) != -1 ||
+                       resolve_upvalue(c->frame, name, line) != -1) {
+                /* Existing local or upvalue: store and leave value on stack */
+                emit_store_var(c, name, line);
+            } else if (c->frame->scope_depth == 0) {
+                /* New global */
+                emit_byte(c, OP_DEFINE_GLOBAL, line);
+                emit_uint16(c, identifier_constant(c, name, (int)strlen(name), line), line);
+                compiler_declare_global(c, name);
+                emit_load_var(c, name, line);   /* reload as expression result */
+            } else {
+                /* New local: value is on stack = the slot; load copy as expression result */
+                add_local(c, name, line);
+                emit_load_var(c, name, line);
+            }
+            break;
+        }
+
+        /* ----------------------------------------------------------------
+         * List comprehension: [expr for var in iterable [if cond]]
+         * Compiled as an immediately-invoked anonymous closure so that
+         * scoping is clean and no extra stack slots leak into the caller.
+         * -------------------------------------------------------------- */
+        case AST_LIST_COMP: {
+            /* Save and reset loop/try state for the inner frame */
+            int old_loop_start        = c->loop_start;
+            int old_loop_depth        = c->loop_depth;
+            int old_break_count       = c->break_count;
+            int old_try_depth         = c->try_depth;
+            int old_try_depth_at_loop = c->try_depth_at_loop;
+            int old_exc_slot          = c->current_exc_slot;
+            c->loop_start = -1; c->loop_depth = 0; c->break_count = 0;
+            c->try_depth = 0;   c->try_depth_at_loop = 0; c->current_exc_slot = -1;
+
+            CompilerFrame comp_frame;
+            frame_init(c, &comp_frame, FUNC_FUNCTION, "<listcomp>", 10);
+            scope_begin(c);
+
+            /* slot 1: __comp = [] */
+            emit_byte(c, OP_CREATE_LIST, line); emit_uint16(c, 0, line);
+            int comp_slot = add_local(c, "__comp", line);
+
+            /* slot 2: var = null (pre-declared loop variable) */
+            emit_byte(c, OP_PUSH_NULL, line);
+            int var_slot = add_local(c, node->as.list_comp.var, line);
+
+            /* slot 3: __iter = iterable (possibly calls on_iter()) */
+            compile_expr(c, node->as.list_comp.iterable);
+            emit_byte(c, OP_GET_ITER, line);
+            int iter_slot = add_local(c, "__lc_iter", line);
+
+            /* slot 4: __idx = 0 */
+            emit_byte(c, OP_PUSH_INT, line);
+            chunk_write_int64(current_chunk(c), 0, line);
+            int idx_slot = add_local(c, "__lc_idx", line);
+
+            /* ---- Loop ---- */
+            int loop_start = current_chunk(c)->count;
+
+            /* Exit condition: __idx >= len(__iter) */
+            emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, (uint8_t)idx_slot, line);
+            {
+                FluxString *ls = object_string_copy(c->vm, "len", 3);
+                uint16_t lc   = make_constant(c, value_object((FluxObject *)ls), line);
+                emit_byte(c, OP_LOAD_GLOBAL, line); emit_uint16(c, lc, line);
+            }
+            emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, (uint8_t)iter_slot, line);
+            emit_byte(c, OP_CALL, line); emit_byte(c, 1, line);
+            emit_byte(c, OP_GTE, line);
+
+            int cont_j = emit_jump(c, OP_JUMP_IF_FALSE, line);
+            emit_byte(c, OP_POP, line);           /* pop true → exit loop */
+            int exit_j = emit_jump(c, OP_JUMP, line);
+            patch_jump(c, cont_j);
+            emit_byte(c, OP_POP, line);           /* pop false → continue */
+
+            /* var = __iter[__idx] */
+            emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, (uint8_t)iter_slot, line);
+            emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, (uint8_t)idx_slot,  line);
+            emit_byte(c, OP_GET_INDEX,  line);
+            emit_byte(c, OP_STORE_LOCAL, line); emit_byte(c, (uint8_t)var_slot, line);
+            emit_byte(c, OP_POP, line);
+
+            /* __idx += 1 */
+            emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, (uint8_t)idx_slot, line);
+            emit_byte(c, OP_PUSH_INT,   line); chunk_write_int64(current_chunk(c), 1, line);
+            emit_byte(c, OP_ADD, line);
+            emit_byte(c, OP_STORE_LOCAL, line); emit_byte(c, (uint8_t)idx_slot, line);
+            emit_byte(c, OP_POP, line);
+
+            /* Optional if-condition
+             * Truthy  → pop true, run body, jump past the falsy-skip block
+             * Falsy   → JUMP_IF_FALSE lands here, pop false, skip body */
+            int skip_j       = -1;
+            int after_skip_j = -1;
+            if (node->as.list_comp.condition) {
+                compile_expr(c, node->as.list_comp.condition);
+                skip_j = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                emit_byte(c, OP_POP, line);  /* pop true → proceed to body */
+            }
+
+            /* __comp.append(expr) */
+            emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, (uint8_t)comp_slot, line);
+            compile_expr(c, node->as.list_comp.expr);
+            {
+                FluxString *as = object_string_copy(c->vm, "append", 6);
+                uint16_t ac   = make_constant(c, value_object((FluxObject *)as), line);
+                emit_byte(c, OP_INVOKE, line); emit_uint16(c, ac, line);
+                emit_byte(c, 1, line);
+            }
+            emit_byte(c, OP_POP, line);  /* discard null return from append */
+
+            if (skip_j >= 0) {
+                /* Truthy path: jump past the falsy-skip block */
+                after_skip_j = emit_jump(c, OP_JUMP, line);
+                /* Falsy path lands here: pop the false condition */
+                patch_jump(c, skip_j);
+                emit_byte(c, OP_POP, line);
+                /* Both paths converge */
+                patch_jump(c, after_skip_j);
+            }
+
+            emit_loop(c, loop_start, line);
+            patch_jump(c, exit_j);
+
+            /* return __comp */
+            emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, (uint8_t)comp_slot, line);
+            emit_byte(c, OP_RETURN, line);
+
+            scope_end(c, line);            /* dead code after RETURN; keeps bookkeeping clean */
+            FluxFunction *comp_fn = frame_end(c, line);
+
+            /* Restore outer loop/try state */
+            c->loop_start        = old_loop_start;
+            c->loop_depth        = old_loop_depth;
+            c->break_count       = old_break_count;
+            c->try_depth         = old_try_depth;
+            c->try_depth_at_loop = old_try_depth_at_loop;
+            c->current_exc_slot  = old_exc_slot;
+
+            /* Emit CLOSURE + immediate CALL 0 */
+            uint16_t fn_idx = make_constant(c, value_object((FluxObject *)comp_fn), line);
+            emit_byte(c, OP_CLOSURE, line); emit_uint16(c, fn_idx, line);
+            for (int i = 0; i < comp_fn->upvalue_count; i++) {
+                emit_byte(c, comp_frame.upvalues[i].is_local ? 1 : 0, line);
+                emit_byte(c, comp_frame.upvalues[i].index, line);
+            }
+            emit_byte(c, OP_CALL, line); emit_byte(c, 0, line);
+            break;
+        }
+
+        /* ----------------------------------------------------------------
+         * Dict comprehension: {key: val for var in iterable [if cond]}
+         * -------------------------------------------------------------- */
+        case AST_DICT_COMP: {
+            /* Save and reset loop/try state */
+            int old_loop_start        = c->loop_start;
+            int old_loop_depth        = c->loop_depth;
+            int old_break_count       = c->break_count;
+            int old_try_depth         = c->try_depth;
+            int old_try_depth_at_loop = c->try_depth_at_loop;
+            int old_exc_slot          = c->current_exc_slot;
+            c->loop_start = -1; c->loop_depth = 0; c->break_count = 0;
+            c->try_depth = 0;   c->try_depth_at_loop = 0; c->current_exc_slot = -1;
+
+            CompilerFrame dc_frame;
+            frame_init(c, &dc_frame, FUNC_FUNCTION, "<dictcomp>", 10);
+            scope_begin(c);
+
+            /* slot 1: __comp = {} */
+            emit_byte(c, OP_CREATE_DICT, line); emit_uint16(c, 0, line);
+            int comp_slot = add_local(c, "__comp", line);
+
+            /* slot 2: var = null */
+            emit_byte(c, OP_PUSH_NULL, line);
+            int var_slot = add_local(c, node->as.dict_comp.var, line);
+
+            /* slot 3: __iter */
+            compile_expr(c, node->as.dict_comp.iterable);
+            emit_byte(c, OP_GET_ITER, line);
+            int iter_slot = add_local(c, "__dc_iter", line);
+
+            /* slot 4: __idx = 0 */
+            emit_byte(c, OP_PUSH_INT, line);
+            chunk_write_int64(current_chunk(c), 0, line);
+            int idx_slot = add_local(c, "__dc_idx", line);
+
+            /* ---- Loop ---- */
+            int loop_start = current_chunk(c)->count;
+
+            emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, (uint8_t)idx_slot, line);
+            {
+                FluxString *ls = object_string_copy(c->vm, "len", 3);
+                uint16_t lc   = make_constant(c, value_object((FluxObject *)ls), line);
+                emit_byte(c, OP_LOAD_GLOBAL, line); emit_uint16(c, lc, line);
+            }
+            emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, (uint8_t)iter_slot, line);
+            emit_byte(c, OP_CALL, line); emit_byte(c, 1, line);
+            emit_byte(c, OP_GTE, line);
+
+            int cont_j = emit_jump(c, OP_JUMP_IF_FALSE, line);
+            emit_byte(c, OP_POP, line);
+            int exit_j = emit_jump(c, OP_JUMP, line);
+            patch_jump(c, cont_j);
+            emit_byte(c, OP_POP, line);
+
+            /* var = __iter[__idx] */
+            emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, (uint8_t)iter_slot, line);
+            emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, (uint8_t)idx_slot,  line);
+            emit_byte(c, OP_GET_INDEX,  line);
+            emit_byte(c, OP_STORE_LOCAL, line); emit_byte(c, (uint8_t)var_slot, line);
+            emit_byte(c, OP_POP, line);
+
+            /* __idx += 1 */
+            emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, (uint8_t)idx_slot, line);
+            emit_byte(c, OP_PUSH_INT,   line); chunk_write_int64(current_chunk(c), 1, line);
+            emit_byte(c, OP_ADD, line);
+            emit_byte(c, OP_STORE_LOCAL, line); emit_byte(c, (uint8_t)idx_slot, line);
+            emit_byte(c, OP_POP, line);
+
+            /* Optional if-condition (same truthy/falsy jump pattern as list comp) */
+            int skip_j       = -1;
+            int after_skip_j = -1;
+            if (node->as.dict_comp.condition) {
+                compile_expr(c, node->as.dict_comp.condition);
+                skip_j = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                emit_byte(c, OP_POP, line);  /* pop true → proceed */
+            }
+
+            /* __comp[key] = val */
+            emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, (uint8_t)comp_slot, line);
+            compile_expr(c, node->as.dict_comp.key);
+            compile_expr(c, node->as.dict_comp.val);
+            emit_byte(c, OP_SET_INDEX,  line);
+            emit_byte(c, OP_PUSH_NULL,  line);  /* compiler convention: null after SET_INDEX */
+            emit_byte(c, OP_POP, line);
+
+            if (skip_j >= 0) {
+                after_skip_j = emit_jump(c, OP_JUMP, line);  /* truthy: skip falsy block */
+                patch_jump(c, skip_j);
+                emit_byte(c, OP_POP, line);    /* pop false condition */
+                patch_jump(c, after_skip_j);   /* both paths converge */
+            }
+
+            emit_loop(c, loop_start, line);
+            patch_jump(c, exit_j);
+
+            /* return __comp */
+            emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, (uint8_t)comp_slot, line);
+            emit_byte(c, OP_RETURN, line);
+
+            scope_end(c, line);
+            FluxFunction *comp_fn = frame_end(c, line);
+
+            /* Restore outer state */
+            c->loop_start        = old_loop_start;
+            c->loop_depth        = old_loop_depth;
+            c->break_count       = old_break_count;
+            c->try_depth         = old_try_depth;
+            c->try_depth_at_loop = old_try_depth_at_loop;
+            c->current_exc_slot  = old_exc_slot;
+
+            uint16_t fn_idx = make_constant(c, value_object((FluxObject *)comp_fn), line);
+            emit_byte(c, OP_CLOSURE, line); emit_uint16(c, fn_idx, line);
+            for (int i = 0; i < comp_fn->upvalue_count; i++) {
+                emit_byte(c, dc_frame.upvalues[i].is_local ? 1 : 0, line);
+                emit_byte(c, dc_frame.upvalues[i].index, line);
+            }
+            emit_byte(c, OP_CALL, line); emit_byte(c, 0, line);
+            break;
+        }
+
         default:
             compile_error(c, line, "Expected expression, got statement kind %d", node->kind);
             break;
@@ -971,6 +1265,8 @@ static void predeclare_node_locals(Compiler *c, AstNode *node, int line) {
             predeclare_node_locals(c, node->as.if_stmt.else_branch, line);
             break;
         case AST_WHILE:
+            /* Also scan the condition for walrus assignments (e.g. while (x := expr) > 0) */
+            predeclare_node_locals(c, node->as.while_stmt.condition, line);
             /* Recurse into nested while bodies so variables assigned there
              * are also visible after the nested loop ends. */
             predeclare_node_locals(c, node->as.while_stmt.body, line);
@@ -1019,6 +1315,37 @@ static void predeclare_node_locals(Compiler *c, AstNode *node, int line) {
         case AST_WITH:
             predeclare_node_locals(c, node->as.with_stmt.body, line);
             break;
+        /* ---- Expression nodes that may contain walrus sub-expressions ---- */
+        case AST_WALRUS: {
+            /* A walrus target must be pre-declared so every execution of the
+             * containing expression (e.g. inside a loop condition) uses
+             * emit_store_var (STORE_LOCAL) instead of the first-time
+             * add_local + LOAD_LOCAL path, which only works correctly once. */
+            const char *name = node->as.walrus.name;
+            if (!frame_is_nonlocal(c->frame, name) &&
+                resolve_local(c->frame, name) == -1 &&
+                resolve_upvalue(c->frame, name, line) == -1 &&
+                !compiler_has_global(c, name)) {
+                emit_byte(c, OP_PUSH_NULL, node->line);
+                add_local(c, name, node->line);
+            }
+            /* Recurse in case the RHS also contains a walrus */
+            predeclare_node_locals(c, node->as.walrus.value, line);
+            break;
+        }
+        case AST_BINARY:
+            predeclare_node_locals(c, node->as.binary.left,  line);
+            predeclare_node_locals(c, node->as.binary.right, line);
+            break;
+        case AST_UNARY:
+            predeclare_node_locals(c, node->as.unary.operand, line);
+            break;
+        case AST_TERNARY:
+            predeclare_node_locals(c, node->as.ternary.condition, line);
+            predeclare_node_locals(c, node->as.ternary.then_expr,  line);
+            predeclare_node_locals(c, node->as.ternary.else_expr,  line);
+            break;
+
         /* Never cross function/class boundaries – those introduce a new scope. */
         case AST_FUNC_DEF:
         case AST_ASYNC_FUNC_DEF:
@@ -1329,9 +1656,10 @@ static void compile_node(Compiler *c, AstNode *node) {
             int old_try_depth_at_loop = c->try_depth_at_loop;
             c->try_depth_at_loop = c->try_depth;  /* break/continue only unwind try contexts inside this loop */
 
-            /* Pre-declare variables that are first-assigned inside the body
-             * so that every loop iteration uses STORE_LOCAL, and those
-             * variables remain visible after the loop ends. */
+            /* Pre-declare walrus targets in the condition (e.g. while (x := expr) > 0)
+             * and variables first-assigned in the body, so every loop iteration
+             * uses STORE_LOCAL and variables remain visible after the loop. */
+            predeclare_node_locals(c, node->as.while_stmt.condition, line);
             predeclare_node_locals(c, node->as.while_stmt.body, line);
 
             c->loop_start = current_chunk(c)->count;

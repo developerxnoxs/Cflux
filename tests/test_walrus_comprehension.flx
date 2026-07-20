@@ -1,0 +1,130 @@
+# Test: Walrus Operator (:=) and Comprehensions
+# ================================================
+
+let passed = 0
+let failed = 0
+
+func ok(name, got, expected):
+    if got == expected:
+        print(f"  [LULUS] {name}")
+        passed = passed + 1
+    else:
+        print(f"  [GAGAL] {name}: dapat {got}, harap {expected}")
+        failed = failed + 1
+
+print("=== Walrus Operator (:=) ===")
+
+# 1. Basic walrus: assign and use value
+x := 42
+ok("walrus basic assign", x, 42)
+
+# 2. Walrus in condition (like Python's `if n := len(...):`)
+items = [1, 2, 3, 4, 5]
+if (n := len(items)) > 3:
+    ok("walrus in if condition", n, 5)
+else:
+    ok("walrus in if condition", n, -1)  # should not reach
+
+# 3. Walrus updates existing variable
+counter := 0
+counter := counter + 1
+ok("walrus update existing", counter, 1)
+
+# 4. Walrus returns the assigned value
+val = (result := 99)
+ok("walrus expression value", result, 99)
+ok("walrus assigned to val", val, 99)
+
+# 5. Walrus inside while loop (simulating a read-loop pattern)
+data = [10, 20, 30]
+idx = 0
+total = 0
+while (item := data[idx]) > 0:
+    total = total + item
+    idx = idx + 1
+    if idx >= len(data):
+        break
+ok("walrus in while condition", total, 60)
+
+print("")
+print("=== List Comprehension ===")
+
+# 6. Basic list comprehension
+nums = [1, 2, 3, 4, 5]
+doubled = [x * 2 for x in nums]
+ok("list comp basic", len(doubled), 5)
+ok("list comp first element", doubled[0], 2)
+ok("list comp last element", doubled[4], 10)
+
+# 7. List comprehension with if filter
+evens = [x for x in nums if x % 2 == 0]
+ok("list comp with filter count", len(evens), 2)
+ok("list comp filter first", evens[0], 2)
+ok("list comp filter second", evens[1], 4)
+
+# 8. List comp on strings
+words = ["hello", "world", "flux"]
+lengths = [len(w) for w in words]
+ok("list comp string lengths[0]", lengths[0], 5)
+ok("list comp string lengths[1]", lengths[1], 5)
+ok("list comp string lengths[2]", lengths[2], 4)
+
+# 9. List comp with expression
+squares = [i * i for i in [1, 2, 3, 4, 5]]
+ok("list comp squares count", len(squares), 5)
+ok("list comp squares[4]", squares[4], 25)
+
+# 10. Nested expression in list comp
+data2 = [10, 20, 30, 40]
+filtered = [v * 2 for v in data2 if v > 15]
+ok("list comp filter+transform count", len(filtered), 3)
+ok("list comp filter+transform[0]", filtered[0], 40)
+ok("list comp filter+transform[2]", filtered[2], 80)
+
+# 11. Empty result from filter
+none_pass = [x for x in [1, 3, 5] if x % 2 == 0]
+ok("list comp empty result", len(none_pass), 0)
+
+print("")
+print("=== Dict Comprehension ===")
+
+# 12. Basic dict comprehension
+keys = ["a", "b", "c"]
+d = {k: len(k) for k in keys}
+ok("dict comp basic a", d["a"], 1)
+ok("dict comp basic b", d["b"], 1)
+ok("dict comp basic c", d["c"], 1)
+
+# 13. Dict comp with transformation
+nums2 = ["one", "two", "three"]
+d2 = {w: len(w) for w in nums2}
+ok("dict comp transform one", d2["one"], 3)
+ok("dict comp transform two", d2["two"], 3)
+ok("dict comp transform three", d2["three"], 5)
+
+# 14. Dict comp with filter
+all_keys = ["x", "y", "long_key", "z"]
+short = {k: len(k) for k in all_keys if len(k) <= 1}
+ok("dict comp filter count", len(short), 3)
+ok("dict comp filter x", short["x"], 1)
+
+print("")
+print("=== Walrus + Comprehension combo ===")
+
+# 15. Walrus and list comp together (walrus for outer var, comp for list)
+source = [1, 2, 3, 4, 5, 6]
+total := 0
+large = [x for x in source if x > 3]
+total := len(large)
+ok("walrus + list comp combo", total, 3)
+ok("walrus + list comp values", large[0], 4)
+
+# 16. Dict comp + walrus separately
+prefix := "item_"
+labels = ["a", "b", "c"]
+result_d = {prefix + k: len(k) for k in labels}
+ok("dict comp with outer walrus var", result_d["item_a"], 1)
+ok("dict comp with outer walrus var b", result_d["item_b"], 1)
+
+print("")
+print(f"Selesai: {passed} lulus, {failed} gagal")

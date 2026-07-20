@@ -1,6 +1,7 @@
 ================================================================
   FLUX INTERPRETER — TEMUAN ANALISIS CODEBASE
   Tanggal: 20 Juli 2026
+  Update : 20 Juli 2026 (items 1-5 diimplementasikan)
 ================================================================
 
 STRUKTUR PROYEK
@@ -14,6 +15,7 @@ src/
 ├── object/      – Runtime types: String, List, Dict, Closure, Class, Future
 ├── runtime/     – Built-in functions
 ├── api/         – Public C API (flux_vm_new, flux_eval, dll.)
+├── tools/       – CLI toolchain (fmt, lint, doc, pkg, build) [BARU]
 └── main.c       – CLI entry point
 
 stdlib/          – Module .so: io, math, time, fs, os, sys, json, socket, async
@@ -29,28 +31,60 @@ tests/           – .flx test scripts + C-level unit tests
 [MERAH] TIDAK BERFUNGSI SAMA SEKALI (STUB)
 -------------------------------------------
 
-1. flux fmt
-   Lokasi : src/main.c:59
-   Status : Print "not yet implemented", langsung exit. Tidak ada implementasi.
+[✓ SELESAI] 1. flux fmt
+   Lokasi : src/tools/fmt.c (BARU), src/main.c
+   Status : DIIMPLEMENTASIKAN — Token-based formatter, format in-place.
+            - Indentasi 4 spasi
+            - Spasi di sekitar operator binary
+            - Spasi setelah koma
+            - Strip trailing whitespace
+            - Melaporkan jumlah koreksi yang dilakukan
 
-2. flux lint
-   Lokasi : src/main.c:63
-   Status : Print "not yet implemented", langsung exit. Tidak ada implementasi.
+[✓ SELESAI] 2. flux lint
+   Lokasi : src/tools/lint.c (BARU), src/main.c
+   Status : DIIMPLEMENTASIKAN — AST-based linter dengan deteksi:
+            - Parse errors dengan nomor baris
+            - Unreachable code setelah return/break/continue/raise
+            - break/continue di luar loop
+            - return di luar fungsi
+            - bare raise di luar catch
+            - Empty catch block (silent exception swallowing)
+            - Fungsi didefinisikan di dalam loop
+            - Shadowing nama built-in (print, len, range, dll.)
+            - Import yang tidak pernah digunakan
+            - Perbandingan == null (disarankan is null)
 
-3. flux doc
-   Lokasi : src/main.c:67
-   Status : Print "not yet implemented", langsung exit. Tidak ada implementasi.
+[✓ SELESAI] 3. flux doc
+   Lokasi : src/tools/doc.c (BARU), src/main.c
+   Status : DIIMPLEMENTASIKAN — Markdown doc generator:
+            - Ekstrak doc-comments (blok # di atas definisi)
+            - Dokumentasi fungsi, class, struct, enum
+            - Output ke <file>.md atau file yang ditentukan
+            - Menampilkan signature lengkap dengan parameter
 
-4. flux package
-   Lokasi : src/main.c:71
-   Status : Print "not yet implemented", langsung exit. Tidak ada backend apapun.
+[✓ SELESAI] 4. flux package
+   Lokasi : src/tools/pkg.c (BARU), src/main.c
+   Status : DIIMPLEMENTASIKAN — File-based package manager:
+            - flux package init    → buat flux.pkg + packages/
+            - flux package list    → daftar package terinstal
+            - flux package install → install dari direktori lokal
+            - flux package remove  → hapus package
+            - flux package info    → detail package
+            (Network registry: direncanakan untuk versi mendatang)
 
-5. flux build
-   Lokasi : src/main.c:123
-   Status : Komentar di kode: "future; currently runs" — sebenarnya hanya
-            execute file biasa, tidak compile ke bytecode seperti yang
-            didokumentasikan di README.
+[✓ SELESAI] 5. flux build
+   Lokasi : src/tools/build.c (BARU), src/main.c
+   Status : DIIMPLEMENTASIKAN — Compile-only check tanpa eksekusi:
+            - Lex + parse + compile penuh
+            - Melaporkan jumlah fungsi, instruksi, konstanta
+            - --verbose: print disassembly bytecode
+            - Exit code 0/1 berdasarkan compile success/failure
+            (Serialisasi bytecode ke .flxc: direncanakan)
 
+
+================================================================
+  MASIH PERLU DIIMPLEMENTASIKAN
+================================================================
 
 [ORANYE] DIPARSE TAPI DIABAIKAN RUNTIME
 -----------------------------------------
@@ -177,7 +211,7 @@ tests/           – .flx test scripts + C-level unit tests
 
 
 ================================================================
-  RINGKASAN PRIORITAS
+  RINGKASAN PRIORITAS (SISA)
 ================================================================
 
 DAMPAK TINGGI (perbaiki duluan):
@@ -193,9 +227,11 @@ DAMPAK MENENGAH:
   - #15 standarisasi error handling stdlib
   - #7  multi-line pipeline
 
-MUDAH DIMULAI (quick wins):
-  - #1–5  CLI stubs (fmt, lint, doc, package, build)
-  - #16   object_print untuk Future
-  - #17   ast_print lengkap
+SUDAH SELESAI (items 1-5):
+  [✓] flux fmt     – formatter
+  [✓] flux lint    – linter
+  [✓] flux doc     – doc generator
+  [✓] flux package – package manager
+  [✓] flux build   – compile-only check
 
 ================================================================

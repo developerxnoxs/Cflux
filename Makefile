@@ -37,6 +37,13 @@ STDLIB_OBJ := \
 
 LIB_OBJ := $(VM_OBJ) $(STDLIB_OBJ)
 
+# CLI toolchain objects (compiled into the flux binary only, not libflux.a)
+TOOL_OBJ := $(BUILD)/tools_fmt.o   \
+             $(BUILD)/tools_lint.o  \
+             $(BUILD)/tools_doc.o   \
+             $(BUILD)/tools_pkg.o   \
+             $(BUILD)/tools_build.o
+
 .PHONY: all clean test extensions stdlib install uninstall
 
 all: $(BUILD)/flux $(BUILD)/libflux.a stdlib extensions
@@ -107,12 +114,24 @@ $(BUILD)/stdlib_core.o: src/stdlib/stdlib_core.c  | $(BUILD)
 $(BUILD)/libflux.a: $(LIB_OBJ)
 	ar rcs $@ $^
 
+# ----- CLI toolchain (fmt, lint, doc, pkg, build) -----
+$(BUILD)/tools_fmt.o:   src/tools/fmt.c   | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/tools_lint.o:  src/tools/lint.c  | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/tools_doc.o:   src/tools/doc.c   | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/tools_pkg.o:   src/tools/pkg.c   | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/tools_build.o: src/tools/build.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 # -rdynamic exports the interpreter's own symbols (object_dict_new,
 # dict_set, vm_runtime_error, ...) into the dynamic symbol table so that
 # native extensions loaded via dlopen() (see extension/) can resolve them —
 # without it, every symbol lookup in a loaded .so fails at runtime.
-$(BUILD)/flux: src/main.c $(BUILD)/libflux.a
-	$(CC) $(CFLAGS) -rdynamic $< -L$(BUILD) -lflux $(LDFLAGS) -o $@
+$(BUILD)/flux: src/main.c $(TOOL_OBJ) $(BUILD)/libflux.a
+	$(CC) $(CFLAGS) -rdynamic $< $(TOOL_OBJ) -L$(BUILD) -lflux $(LDFLAGS) -o $@
 
 # ----- tests -----
 $(BUILD)/test_lexer: tests/test_lexer.c $(BUILD)/libflux.a

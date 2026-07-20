@@ -3,19 +3,20 @@
  *
  * Subcommands:
  *   flux run <file.flx>    – execute a Flux source file (default)
- *   flux build <file.flx>  – compile to bytecode (future; currently runs)
+ *   flux build <file.flx>  – compile-only check (no execution)
  *   flux test <file.flx>   – run file and report pass/fail
- *   flux fmt <file.flx>    – format source file (stub)
- *   flux lint <file.flx>   – lint source file (stub)
- *   flux doc <file.flx>    – generate docs (stub)
+ *   flux fmt <file.flx>    – format source file in-place
+ *   flux lint <file.flx>   – lint source file (syntax + semantic warnings)
+ *   flux doc <file.flx>    – generate Markdown documentation
  *   flux repl              – interactive REPL
- *   flux package <cmd>     – package manager (stub)
+ *   flux package <cmd>     – package manager (init/list/install/remove/info)
  *   flux -e "<source>"     – evaluate a source string
  *   flux --version         – print version
  *   flux --help            – show help
  */
 #include "flux/flux.h"
 #include "flux/common.h"
+#include "tools/tools.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -24,21 +25,29 @@ static void print_usage(const char *prog) {
     fprintf(stderr,
         "Flux %s — a modern programming language\n\n"
         "Usage:\n"
-        "  %s run <file.flx>      Execute a Flux source file\n"
-        "  %s build <file.flx>    Compile a Flux source file\n"
-        "  %s test <file.flx>     Run tests in a Flux source file\n"
-        "  %s fmt <file.flx>      Format a Flux source file\n"
-        "  %s lint <file.flx>     Lint a Flux source file\n"
-        "  %s doc <file.flx>      Generate documentation\n"
-        "  %s repl                Start interactive REPL\n"
-        "  %s package <cmd>       Package manager\n"
-        "  %s <file.flx>          Execute a Flux source file (shorthand)\n"
-        "  %s -e \"<code>\"       Evaluate a source string\n"
-        "  %s --version           Print version information\n"
-        "  %s --help              Show this help message\n",
+        "  %s run <file.flx>               Execute a Flux source file\n"
+        "  %s build <file.flx> [--verbose] Compile-only check (no execution)\n"
+        "  %s test <file.flx>              Run tests in a Flux source file\n"
+        "  %s fmt  <file.flx>              Format source file in-place\n"
+        "  %s lint <file.flx>              Lint source (syntax + semantic warnings)\n"
+        "  %s doc  <file.flx> [out.md]     Generate Markdown documentation\n"
+        "  %s repl                         Start interactive REPL\n"
+        "  %s package <cmd> [args]         Package manager\n"
+        "  %s <file.flx>                   Execute (shorthand)\n"
+        "  %s -e \"<code>\"                  Evaluate a source string\n"
+        "  %s --version                    Print version information\n"
+        "  %s --help                       Show this help message\n"
+        "\n"
+        "Package manager subcommands:\n"
+        "  flux package init               Initialize project (creates flux.pkg)\n"
+        "  flux package list               List installed packages\n"
+        "  flux package install <path>     Install from a local directory\n"
+        "  flux package remove  <name>     Remove an installed package\n"
+        "  flux package info    <name>     Show package details\n",
         flux_version(),
-        prog, prog, prog, prog, prog,
-        prog, prog, prog, prog, prog, prog, prog);
+        prog, prog, prog, prog,
+        prog, prog, prog, prog,
+        prog, prog, prog, prog);
 }
 
 /* -------------------------------------------------------------------------
@@ -78,32 +87,6 @@ static void run_repl(void) {
 }
 
 /* -------------------------------------------------------------------------
- * Stub subcommands
- * ---------------------------------------------------------------------- */
-static void stub_fmt(const char *file) {
-    fprintf(stderr, "flux fmt: formatting %s (not yet implemented)\n", file);
-    fprintf(stderr, "Hint: use a compatible formatter or editor plugin.\n");
-}
-
-static void stub_lint(const char *file) {
-    fprintf(stderr, "flux lint: linting %s (not yet implemented)\n", file);
-    fprintf(stderr, "Hint: enable strict mode via compiler flags.\n");
-}
-
-static void stub_doc(const char *file) {
-    fprintf(stderr, "flux doc: generating docs for %s (not yet implemented)\n", file);
-}
-
-static void stub_package(int argc, char *argv[]) {
-    if (argc < 1) {
-        fprintf(stderr, "flux package: usage: flux package <install|add|remove|list> [package]\n");
-        return;
-    }
-    fprintf(stderr, "flux package %s: package manager not yet implemented.\n", argv[0]);
-    fprintf(stderr, "Hint: place dependencies in a 'packages/' directory.\n");
-}
-
-/* -------------------------------------------------------------------------
  * Entry point
  * ---------------------------------------------------------------------- */
 int main(int argc, char *argv[]) {
@@ -134,29 +117,42 @@ int main(int argc, char *argv[]) {
 
     /* fmt */
     if (strcmp(cmd, "fmt") == 0) {
-        if (argc < 3) { fprintf(stderr, "flux fmt: expected <file>\n"); return 1; }
-        stub_fmt(argv[2]);
-        return 0;
+        if (argc < 3) { fprintf(stderr, "flux fmt: expected <file.flx>\n"); return 1; }
+        return flux_fmt_file(argv[2]);
     }
 
     /* lint */
     if (strcmp(cmd, "lint") == 0) {
-        if (argc < 3) { fprintf(stderr, "flux lint: expected <file>\n"); return 1; }
-        stub_lint(argv[2]);
-        return 0;
+        if (argc < 3) { fprintf(stderr, "flux lint: expected <file.flx>\n"); return 1; }
+        return flux_lint_file(argv[2]);
     }
 
     /* doc */
     if (strcmp(cmd, "doc") == 0) {
-        if (argc < 3) { fprintf(stderr, "flux doc: expected <file>\n"); return 1; }
-        stub_doc(argv[2]);
-        return 0;
+        if (argc < 3) { fprintf(stderr, "flux doc: expected <file.flx>\n"); return 1; }
+        const char *out = (argc >= 4) ? argv[3] : NULL;
+        return flux_doc_file(argv[2], out);
     }
 
     /* package */
     if (strcmp(cmd, "package") == 0) {
-        stub_package(argc - 2, argv + 2);
-        return 0;
+        return flux_package_cmd(argc - 2, argv + 2);
+    }
+
+    /* build */
+    if (strcmp(cmd, "build") == 0) {
+        if (argc < 3) { fprintf(stderr, "flux build: expected <file.flx>\n"); return 1; }
+        /* Check for --verbose flag (may appear before or after filename) */
+        bool verbose = false;
+        const char *file = NULL;
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--verbose") == 0 || strcmp(argv[i], "-v") == 0)
+                verbose = true;
+            else
+                file = argv[i];
+        }
+        if (!file) { fprintf(stderr, "flux build: expected <file.flx>\n"); return 1; }
+        return flux_build_file(file, verbose);
     }
 
     /* Create VM for execution subcommands */
@@ -175,17 +171,6 @@ int main(int argc, char *argv[]) {
             return 1;
         }
         result = flux_execute_file(vm, argv[2]);
-
-    /* build <file> – compiles and reports success/failure */
-    } else if (strcmp(cmd, "build") == 0) {
-        if (argc < 3) {
-            fprintf(stderr, "flux build: expected <file.flx>\n");
-            flux_vm_destroy(vm);
-            return 1;
-        }
-        result = flux_execute_file(vm, argv[2]);
-        if (result == FLUX_OK)
-            printf("flux build: %s compiled successfully.\n", argv[2]);
 
     /* test <file> – run file and report */
     } else if (strcmp(cmd, "test") == 0) {

@@ -86,21 +86,166 @@ make clean
 ## 2. Perintah CLI
 
 ```
-flux run <file.flx>      Jalankan file Flux
-flux build <file.flx>    Kompilasi file Flux
-flux test <file.flx>     Jalankan file sebagai suite tes
-flux repl                Mulai sesi REPL interaktif
-flux -e "<kode>"         Evaluasi kode dari string langsung
-flux --version           Tampilkan versi
-flux --help              Tampilkan bantuan
-flux fmt <file.flx>      Format file (belum diimplementasi)
-flux lint <file.flx>     Lint file (belum diimplementasi)
-flux doc <file.flx>      Generate dokumentasi (belum diimplementasi)
+flux run <file.flx>               Jalankan file Flux
+flux build <file.flx> [--verbose] Compile-only check (tanpa eksekusi)
+flux test <file.flx>              Jalankan file sebagai suite tes
+flux fmt  <file.flx>              Format file sumber secara in-place
+flux lint <file.flx>              Lint file (syntax + semantic warnings)
+flux doc  <file.flx> [out.md]     Generate dokumentasi Markdown
+flux repl                         Mulai sesi REPL interaktif
+flux package <cmd> [args]         Package manager
+flux -e "<kode>"                  Evaluasi kode dari string langsung
+flux --version                    Tampilkan versi
+flux --help                       Tampilkan bantuan
 ```
 
 **Shorthand:** `flux <file.flx>` setara dengan `flux run <file.flx>`.
 
-**Contoh:**
+---
+
+### `flux build` — Compile-only check
+
+Mengompilasi file melalui pipeline penuh (lexer → parser → compiler) **tanpa menjalankan kode**. Berguna untuk mendeteksi semua error sintaks dan compile-time sebelum deployment.
+
+```bash
+# Cek kompilasi saja
+./build_make/flux build program.flx
+
+# Tampilkan disassembly bytecode
+./build_make/flux build --verbose program.flx
+```
+
+Output sukses:
+```
+flux build: program.flx — OK
+  Functions compiled : 3
+  Total instructions : 847 bytes
+  Total constants    : 21
+```
+
+---
+
+### `flux fmt` — Code Formatter
+
+Memformat file `.flx` secara **in-place** dengan style Flux yang konsisten:
+
+- Indentasi 4 spasi
+- Spasi di sekitar operator binary (`+`, `-`, `==`, `=`, dll.)
+- Satu spasi setelah `,`
+- Tidak ada spasi sebelum `,` `:` `.`
+- Tidak ada trailing whitespace
+- File selalu diakhiri newline
+
+```bash
+./build_make/flux fmt myfile.flx
+# flux fmt: formatted 'myfile.flx' (12 spacing corrections)
+```
+
+---
+
+### `flux lint` — Linter
+
+Menganalisis file sumber dan melaporkan:
+
+- **Syntax errors** — error parse dengan nomor baris
+- **Semantic warnings:**
+  - Kode tidak terjangkau (`unreachable code`) setelah `return`/`break`/`continue`/`raise`
+  - `break`/`continue` di luar loop
+  - `return` di luar fungsi
+  - `raise` bare di luar `catch`
+  - `catch` block yang kosong (silently swallows exceptions)
+  - Fungsi didefinisikan di dalam loop
+  - Shadowing nama built-in (`print`, `len`, `range`, dll.)
+  - Import yang tidak pernah digunakan
+  - Perbandingan ke `null` dengan `==` (disarankan pakai `is null`)
+
+```bash
+./build_make/flux lint myfile.flx
+
+# Contoh output:
+# myfile.flx:7: warning: unreachable code after return/break/continue/raise
+# myfile.flx:10: error: 'break' used outside a loop
+# flux lint: myfile.flx — 1 warning(s), 1 error(s)
+```
+
+Exit code `0` jika tidak ada error, `1` jika ada error.
+
+---
+
+### `flux doc` — Documentation Generator
+
+Menghasilkan dokumentasi Markdown dari source file. Mengekstrak:
+
+- **Doc-comments**: blok `# ...` yang langsung berada di atas definisi fungsi/class/struct/enum
+- **Signature** fungsi (nama + parameter + type hints jika ada)
+- **Class/struct** dengan method-nya
+- **Enum** dengan daftar member
+
+```bash
+# Tulis ke myfile.md (default)
+./build_make/flux doc myfile.flx
+
+# Tulis ke file tertentu
+./build_make/flux doc myfile.flx docs/api.md
+```
+
+Contoh doc-comment:
+```flux
+# Compute the area of a circle.
+# Returns pi * r^2.
+func circle_area(r: float):
+    return 3.14159 * r * r
+```
+
+Output Markdown:
+```markdown
+### `func circle_area(r: float)`
+
+Compute the area of a circle.
+Returns pi * r^2.
+```
+
+---
+
+### `flux package` — Package Manager
+
+Package manager berbasis file sistem. Package adalah direktori berisi file `.flx` yang diinstal di folder `packages/` proyek.
+
+```bash
+# Inisialisasi proyek (buat flux.pkg dan packages/)
+flux package init
+
+# Lihat daftar package yang terinstal
+flux package list
+
+# Install package dari direktori lokal
+flux package install ./path/to/mypackage
+
+# Hapus package
+flux package remove mypackage
+
+# Info detail package
+flux package info mypackage
+```
+
+Setelah install, package bisa diimpor langsung:
+```flux
+import mypackage
+```
+
+File manifest `flux.pkg` menyimpan metadata proyek:
+```
+name    = my-project
+version = 0.1.0
+author  = Your Name
+license = MIT
+```
+
+> **Catatan:** Network package registry (`flux package add`) adalah fitur yang direncanakan untuk versi mendatang.
+
+---
+
+**Contoh penggunaan dasar:**
 
 ```bash
 # Jalankan file

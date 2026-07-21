@@ -614,6 +614,115 @@ static Value dict_get_fn(FluxVM *vm, int argc, Value *argv) {
     return argc > 2 ? argv[2] : value_null();
 }
 
+/* items() → list of [key, value] pairs; enables `for pair in d.items()` */
+static Value dict_items_fn(FluxVM *vm, int argc, Value *argv) {
+    (void)argc;
+    FluxDict *dict  = AS_DICT(argv[0]);
+    FluxList *outer = object_list_new(vm);
+    vm_push(vm, value_object((FluxObject *)outer)); /* GC protect */
+    for (int i = 0; i < dict->capacity; i++) {
+        if (!dict->entries[i].key) continue;
+        FluxList *pair = object_list_new(vm);
+        vm_push(vm, value_object((FluxObject *)pair)); /* GC protect */
+        value_array_write(&pair->elements,
+                          value_object((FluxObject *)dict->entries[i].key));
+        value_array_write(&pair->elements, dict->entries[i].value);
+        value_array_write(&outer->elements, value_object((FluxObject *)pair));
+        vm_pop(vm); /* pair */
+    }
+    vm_pop(vm); /* outer */
+    return value_object((FluxObject *)outer);
+}
+
+/* update(other) → null: merge all entries from another dict in-place */
+static Value dict_update_fn(FluxVM *vm, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_DICT(argv[0]) || !IS_DICT(argv[1])) return value_null();
+    FluxDict *dst = AS_DICT(argv[0]);
+    FluxDict *src = AS_DICT(argv[1]);
+    for (int i = 0; i < src->capacity; i++) {
+        if (!src->entries[i].key) continue;
+        dict_set(vm, dst, src->entries[i].key, src->entries[i].value);
+    }
+    return value_null();
+}
+
+/* pop(k [, default]) → value: remove key and return its value */
+static Value dict_pop_fn(FluxVM *vm, int argc, Value *argv) {
+    (void)vm;
+    if (!IS_DICT(argv[0]) || !IS_STRING(argv[1])) return value_null();
+    FluxDict   *dict = AS_DICT(argv[0]);
+    FluxString *key  = AS_STRING(argv[1]);
+    Value out;
+    if (dict_get(dict, key, &out)) {
+        dict_delete(dict, key);
+        return out;
+    }
+    return argc > 2 ? argv[2] : value_null();
+}
+
+/* clear() → null: remove all entries in-place */
+static Value dict_clear_fn(FluxVM *vm, int argc, Value *argv) {
+    (void)vm; (void)argc;
+    FluxDict *dict = AS_DICT(argv[0]);
+    /* Tombstone all slots */
+    for (int i = 0; i < dict->capacity; i++)
+        dict->entries[i].key = NULL;
+    dict->count = 0;
+    return value_null();
+}
+
+/* copy() → dict: shallow copy */
+static Value dict_copy_fn(FluxVM *vm, int argc, Value *argv) {
+    (void)argc;
+    FluxDict *src  = AS_DICT(argv[0]);
+    FluxDict *copy = object_dict_new(vm);
+    vm_push(vm, value_object((FluxObject *)copy)); /* GC protect */
+    for (int i = 0; i < src->capacity; i++) {
+        if (!src->entries[i].key) continue;
+        dict_set(vm, copy, src->entries[i].key, src->entries[i].value);
+    }
+    vm_pop(vm);
+    return value_object((FluxObject *)copy);
+}
+
+/* setdefault(k [, default]) → value: return value if key exists, else set & return default */
+static Value dict_setdefault_fn(FluxVM *vm, int argc, Value *argv) {
+    if (!IS_DICT(argv[0]) || !IS_STRING(argv[1])) return value_null();
+    FluxDict   *dict = AS_DICT(argv[0]);
+    FluxString *key  = AS_STRING(argv[1]);
+    Value out;
+    if (dict_get(dict, key, &out)) return out;
+    Value def = argc > 2 ? argv[2] : value_null();
+    dict_set(vm, dict, key, def);
+    return def;
+}
+
+/* merge(other) → dict: return a new dict that is a copy of self updated with other */
+static Value dict_merge_fn(FluxVM *vm, int argc, Value *argv) {
+    (void)argc;
+    FluxDict *result = object_dict_new(vm);
+    vm_push(vm, value_object((FluxObject *)result)); /* GC protect */
+    /* copy self */
+    if (IS_DICT(argv[0])) {
+        FluxDict *self = AS_DICT(argv[0]);
+        for (int i = 0; i < self->capacity; i++) {
+            if (!self->entries[i].key) continue;
+            dict_set(vm, result, self->entries[i].key, self->entries[i].value);
+        }
+    }
+    /* overlay other */
+    if (argc > 1 && IS_DICT(argv[1])) {
+        FluxDict *other = AS_DICT(argv[1]);
+        for (int i = 0; i < other->capacity; i++) {
+            if (!other->entries[i].key) continue;
+            dict_set(vm, result, other->entries[i].key, other->entries[i].value);
+        }
+    }
+    vm_pop(vm);
+    return value_object((FluxObject *)result);
+}
+
 /* -------------------------------------------------------------------------
  * Register runtime methods on built-in types
  *
@@ -681,10 +790,18 @@ static const MethodEntry list_methods[] = {
 };
 
 static const MethodEntry dict_methods[] = {
-    { "keys",    dict_keys_fn, 0 },
-    { "values",  dict_values_fn, 0 },
-    { "has_key", dict_has_key,  1 },
-    { "get",     dict_get_fn,  -1 },
+    { "keys",       dict_keys_fn,       0 },
+    { "values",     dict_values_fn,     0 },
+    { "has_key",    dict_has_key,       1 },
+    { "get",        dict_get_fn,       -1 },
+    /* --- new methods --- */
+    { "items",      dict_items_fn,      0 },
+    { "update",     dict_update_fn,     1 },
+    { "pop",        dict_pop_fn,       -1 },
+    { "clear",      dict_clear_fn,      0 },
+    { "copy",       dict_copy_fn,       0 },
+    { "setdefault", dict_setdefault_fn,-1 },
+    { "merge",      dict_merge_fn,     -1 },
     { NULL, NULL, 0 },
 };
 

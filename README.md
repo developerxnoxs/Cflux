@@ -936,9 +936,6 @@ angka.len()           # 5
 terurut = sorted(angka)   # kembalikan list baru yang terurut
 ```
 
-> **Catatan:** Method `sort` (in-place), `extend`, `index`, `count`,
-> `clear`, dan `copy` belum tersedia. Gunakan `sorted()` sebagai built-in
-> untuk mendapat salinan list yang terurut.
 
 ### Dict Methods
 
@@ -949,6 +946,14 @@ terurut = sorted(angka)   # kembalikan list baru yang terurut
 | `d.has_key(k)` | `true` jika key `k` ada |
 | `d.get(k)` | Ambil value `k`, kembalikan `null` jika tidak ada |
 | `d.get(k, default)` | Ambil value `k`, kembalikan `default` jika tidak ada |
+| `d.items()` | List pasangan `[key, value]` — untuk iterasi di `for` loop |
+| `d.update(other)` | Merge semua entry dari dict `other` ke dalam `d` secara in-place |
+| `d.pop(k)` | Hapus key `k` dan kembalikan nilainya (`null` jika tidak ada) |
+| `d.pop(k, default)` | Seperti `pop(k)` tapi kembalikan `default` jika key tidak ada |
+| `d.clear()` | Hapus semua entry secara in-place |
+| `d.copy()` | Kembalikan shallow copy dari dict |
+| `d.setdefault(k [, default])` | Kembalikan value `k` jika ada; jika tidak, set `k = default` lalu kembalikan `default` |
+| `d.merge(other)` | Kembalikan dict baru hasil gabungan `d` dan `other` (non-destructive; `other` menang jika ada key yang sama) |
 
 ```flux
 orang = {"nama": "Budi", "usia": 30, "kota": "Jakarta"}
@@ -956,19 +961,38 @@ orang = {"nama": "Budi", "usia": 30, "kota": "Jakarta"}
 orang.keys()             # ["nama", "usia", "kota"]
 orang.values()           # ["Budi", 30, "Jakarta"]
 orang.has_key("usia")    # true
-orang.has_key("email")   # false
-orang.get("nama")        # "Budi"
-orang.get("email")       # null
 orang.get("email", "-")  # "-"
 
-# Iterasi key:
-for k in orang.keys():
-    print(k, orang[k])
-```
+# Iterasi pasangan key-value dengan items()
+for pair in orang.items():
+    print(pair[0] + ": " + str(pair[1]))
 
-> **Catatan:** Method `items()`, `update()`, `pop()`, `clear()`, `copy()`,
-> dan `setdefault()` belum tersedia. Untuk mengiterasi pasangan key-value,
-> gunakan `for k in d.keys()` kemudian akses `d[k]`.
+# update() — merge in-place
+orang.update({"email": "budi@mail.com", "usia": 31})
+print(orang["usia"])      # 31
+
+# pop()
+kota = orang.pop("kota")           # "Jakarta"; key dihapus
+orang.pop("x", "default")          # "default" (key tidak ada)
+
+# setdefault()
+orang.setdefault("nama", "Anonim") # "Budi" (sudah ada, tidak berubah)
+orang.setdefault("negara", "ID")   # "ID"   (baru diset)
+
+# copy() — perubahan pada salinan tidak mempengaruhi aslinya
+salinan = orang.copy()
+salinan["nama"] = "Andi"
+print(orang["nama"])      # "Budi"
+
+# merge() — non-destructive, kembalikan dict baru
+a = {"x": 1, "y": 2}
+b = {"y": 99, "z": 3}
+c = a.merge(b)            # a tidak berubah; c["y"] == 99
+
+# clear()
+orang.clear()
+print(orang.keys().len()) # 0
+```
 
 ---
 

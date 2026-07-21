@@ -467,7 +467,43 @@ anjing = Hewan("Anjing", "Guk")
 anjing.bicara()
 ```
 
-> Constructor menggunakan nama `init` (atau `__init__` sebagai alias).
+> **Constructor** di Flux menggunakan nama `init`.
+
+### Constructor (`init`)
+
+Constructor adalah method khusus yang dipanggil otomatis saat sebuah instance dibuat. Di Flux, nama resminya adalah `init`:
+
+```flux
+class Lingkaran:
+    func init(jari_jari):
+        self.jari_jari = jari_jari
+
+    func luas():
+        import math
+        return math.PI * self.jari_jari ** 2
+
+c = Lingkaran(5)
+print(c.luas())   # 78.539...
+```
+
+**Aturan penting:**
+
+- Nama yang digunakan adalah `init`, bukan `new` atau `constructor`.
+- `__init__` diterima sebagai alias (untuk kompatibilitas dengan programmer yang terbiasa Python), tetapi keduanya dikompilasi menjadi `init` secara internal — pilih salah satu secara konsisten.
+- Constructor tidak mengembalikan nilai; nilai kembalian dari `init` diabaikan.
+- Jika class tidak mendefinisikan `init`, instance tetap bisa dibuat tanpa argumen — hanya tidak ada atribut awal yang di-set.
+- `self` wajib menjadi parameter pertama di setiap method termasuk `init`.
+
+```flux
+# Kedua bentuk ini identik di runtime:
+class A:
+    func init(x):      # ← cara resmi Flux
+        self.x = x
+
+class B:
+    func __init__(x):  # ← alias Python-style, dikompilasi sama
+        self.x = x
+```
 
 ### Pewarisan
 

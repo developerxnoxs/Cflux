@@ -550,7 +550,13 @@ static AstNode *parse_primary(Parser *p) {
     }
 
     parser_error(p, "Expected expression");
-    /* Return a dummy null node to continue parsing */
+    /* Advance past the unexpected token to break infinite synchronize loops.
+     * Without this, panic_mode recovery may get stuck on non-expression tokens
+     * (INDENT, DEDENT, ':', etc.) that parse_primary never consumes. */
+    if (p->current.kind != TOK_EOF &&
+        p->current.kind != TOK_DEDENT &&
+        p->current.kind != TOK_NEWLINE)
+        advance(p);
     return ast_null(p->arena, line, col);
 }
 

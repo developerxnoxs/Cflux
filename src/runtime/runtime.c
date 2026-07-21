@@ -477,6 +477,102 @@ static Value list_reverse(FluxVM *vm, int argc, Value *argv) {
     return value_null();
 }
 
+/* sort() helper: compare two Values for qsort_r */
+static int list_value_cmp(const void *a, const void *b, void *ctx) {
+    (void)ctx;
+    const Value *va = (const Value *)a;
+    const Value *vb = (const Value *)b;
+
+    /* Numbers: int and float compared as doubles */
+    bool a_num = value_is_number(*va);
+    bool b_num = value_is_number(*vb);
+    if (a_num && b_num) {
+        double da = value_is_int(*va) ? (double)value_as_int(*va) : value_as_float(*va);
+        double db = value_is_int(*vb) ? (double)value_as_int(*vb) : value_as_float(*vb);
+        return (da > db) - (da < db);
+    }
+
+    /* Strings */
+    if (IS_STRING(*va) && IS_STRING(*vb))
+        return strcmp(AS_STRING(*va)->chars, AS_STRING(*vb)->chars);
+
+    /* Mixed: order by type tag so sort is at least stable/deterministic */
+    return (int)(va->type) - (int)(vb->type);
+}
+
+/* sort() → null: sort list in-place (numbers and strings) */
+static Value list_sort(FluxVM *vm, int argc, Value *argv) {
+    (void)vm; (void)argc;
+    FluxList *list = AS_LIST(argv[0]);
+    if (list->elements.count < 2) return value_null();
+    qsort_r(list->elements.data, (size_t)list->elements.count,
+            sizeof(Value), list_value_cmp, NULL);
+    return value_null();
+}
+
+/* extend(other) → null: append all elements from another list */
+static Value list_extend(FluxVM *vm, int argc, Value *argv) {
+    (void)argc;
+    FluxList *list = AS_LIST(argv[0]);
+    if (!IS_LIST(argv[1])) return value_null();
+    FluxList *other = AS_LIST(argv[1]);
+    vm_push(vm, value_object((FluxObject *)list));  /* GC protect */
+    for (int i = 0; i < other->elements.count; i++)
+        value_array_write(&list->elements, other->elements.data[i]);
+    vm_pop(vm);
+    return value_null();
+}
+
+/* find(x) → int: index of first occurrence of x, or -1 */
+static Value list_find(FluxVM *vm, int argc, Value *argv) {
+    (void)vm; (void)argc;
+    FluxList *list = AS_LIST(argv[0]);
+    Value     val  = argv[1];
+    for (int i = 0; i < list->elements.count; i++)
+        if (value_equal(list->elements.data[i], val)) return value_int(i);
+    return value_int(-1);
+}
+
+/* index(x) → int: like find but raises ValueError if not found */
+static Value list_index(FluxVM *vm, int argc, Value *argv) {
+    Value result = list_find(vm, argc, argv);
+    if (value_is_int(result) && value_as_int(result) == -1) {
+        vm_runtime_error(vm, "ValueError: value not in list");
+        return value_null();
+    }
+    return result;
+}
+
+/* count(x) → int: number of occurrences of x */
+static Value list_count(FluxVM *vm, int argc, Value *argv) {
+    (void)vm; (void)argc;
+    FluxList *list = AS_LIST(argv[0]);
+    Value     val  = argv[1];
+    int count = 0;
+    for (int i = 0; i < list->elements.count; i++)
+        if (value_equal(list->elements.data[i], val)) count++;
+    return value_int(count);
+}
+
+/* clear() → null: remove all elements in-place */
+static Value list_clear(FluxVM *vm, int argc, Value *argv) {
+    (void)vm; (void)argc;
+    AS_LIST(argv[0])->elements.count = 0;
+    return value_null();
+}
+
+/* copy() → list: shallow copy */
+static Value list_copy(FluxVM *vm, int argc, Value *argv) {
+    (void)argc;
+    FluxList *src  = AS_LIST(argv[0]);
+    FluxList *copy = object_list_new(vm);
+    vm_push(vm, value_object((FluxObject *)copy)); /* GC protect */
+    for (int i = 0; i < src->elements.count; i++)
+        value_array_write(&copy->elements, src->elements.data[i]);
+    vm_pop(vm);
+    return value_object((FluxObject *)copy);
+}
+
 /* -------------------------------------------------------------------------
  * Dict built-in methods
  * ---------------------------------------------------------------------- */
@@ -573,6 +669,14 @@ static const MethodEntry list_methods[] = {
     { "remove",   list_remove,   1 },
     { "contains", list_contains, 1 },
     { "reverse",  list_reverse,  0 },
+    /* --- new methods --- */
+    { "sort",     list_sort,     0 },
+    { "extend",   list_extend,   1 },
+    { "find",     list_find,     1 },
+    { "index",    list_index,    1 },
+    { "count",    list_count,    1 },
+    { "clear",    list_clear,    0 },
+    { "copy",     list_copy,     0 },
     { NULL, NULL, 0 },
 };
 

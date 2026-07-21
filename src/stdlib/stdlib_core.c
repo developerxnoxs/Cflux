@@ -93,16 +93,76 @@ FluxString *value_to_string(FluxVM *vm, Value v) {
                             snprintf(buf, sizeof(buf), "<func>");
                         return object_string_copy(vm, buf, (int)strlen(buf));
                     }
-                    case OBJ_CLASS:
-                        snprintf(buf, sizeof(buf), "<class %s>", AS_CLASS(v)->name->chars);
+                    case OBJ_CLASS: {
+                        FluxClass *cls_ = AS_CLASS(v);
+                        if (cls_->is_enum)
+                            snprintf(buf, sizeof(buf), "<enum %s>", cls_->name->chars);
+                        else if (cls_->is_struct)
+                            snprintf(buf, sizeof(buf), "<struct %s>", cls_->name->chars);
+                        else
+                            snprintf(buf, sizeof(buf), "<class %s>", cls_->name->chars);
                         return object_string_copy(vm, buf, (int)strlen(buf));
+                    }
                     case OBJ_INSTANCE: {
-                        /* Check for user-defined to_str() hook first */
                         FluxInstance *inst_ = AS_INSTANCE(v);
+
+                        /* Enum instance: format as "EnumName.MemberName" */
+                        if (inst_->klass->is_enum) {
+                            const char *mname = NULL;
+                            for (int _fi = 0; _fi < inst_->fields->capacity; _fi++) {
+                                DictEntry *_fe = &inst_->fields->entries[_fi];
+                                if (_fe->key && strcmp(_fe->key->chars, "name") == 0 &&
+                                    value_is_object(_fe->value) &&
+                                    value_as_object(_fe->value)->type == OBJ_STRING) {
+                                    mname = ((FluxString *)value_as_object(_fe->value))->chars;
+                                    break;
+                                }
+                            }
+                            if (mname)
+                                snprintf(buf, sizeof(buf), "%s.%s",
+                                         inst_->klass->name->chars, mname);
+                            else
+                                snprintf(buf, sizeof(buf), "<%s member>",
+                                         inst_->klass->name->chars);
+                            return object_string_copy(vm, buf, (int)strlen(buf));
+                        }
+
+                        /* Struct instance: format as "StructName{field=val, ...}" */
+                        if (inst_->klass->is_struct) {
+                            char big2[4096] = {0};
+                            int pos2 = 0;
+                            int klen2 = (int)strlen(inst_->klass->name->chars);
+                            if (klen2 < (int)sizeof(big2) - 2) {
+                                memcpy(big2, inst_->klass->name->chars, (size_t)klen2);
+                                pos2 = klen2;
+                            }
+                            big2[pos2++] = '{';
+                            bool first2 = true;
+                            for (int _fi2 = 0; _fi2 < inst_->fields->capacity && pos2 < 4000; _fi2++) {
+                                DictEntry *_fe2 = &inst_->fields->entries[_fi2];
+                                if (!_fe2->key) continue;
+                                if (!first2) { big2[pos2++] = ','; big2[pos2++] = ' '; }
+                                first2 = false;
+                                int fklen = _fe2->key->length < (4000 - pos2) ? _fe2->key->length : (4000 - pos2);
+                                memcpy(big2 + pos2, _fe2->key->chars, (size_t)fklen);
+                                pos2 += fklen;
+                                big2[pos2++] = '=';
+                                FluxString *fvs = value_to_string(vm, _fe2->value);
+                                int fvlen = fvs->length < (4000 - pos2) ? fvs->length : (4000 - pos2);
+                                memcpy(big2 + pos2, fvs->chars, (size_t)fvlen);
+                                pos2 += fvlen;
+                            }
+                            if (pos2 < (int)sizeof(big2)) big2[pos2++] = '}';
+                            big2[pos2] = '\0';
+                            return object_string_copy(vm, big2, pos2);
+                        }
+
+                        /* Check for user-defined to_str() hook */
                         Value ts_method;
                         FluxString *ts_key = object_string_copy(vm, "to_str", 6);
                         if (!vm->has_error &&
-                            dict_get(inst_->klass->methods, ts_key, &ts_method)) {
+                            dict_get(inst_->klass->methods, ts_key, &ts_method) &&
+                            IS_CLOSURE(ts_method)) {
                             Value receiver = v;
                             Value result_  = vm_invoke(vm, value_object((FluxObject *)
                                 object_bound_method_new(vm, receiver, AS_CLOSURE(ts_method))),
@@ -860,6 +920,7 @@ void flux_stdlib_load_core(FluxVM *vm) {
     vm_register_native(vm, "get_attr",    native_get_attr,         -1);
     vm_register_native(vm, "set_attr",    native_set_attr,          3);
     vm_register_native(vm, "is_instance", native_is_instance,       2);
+    vm_register_native(vm, "isinstance",  native_is_instance,       2); /* canonical alias */
     vm_register_native(vm, "is_callable", native_is_callable,       1);
     vm_register_native(vm, "attrs",       native_attrs,             1);
 

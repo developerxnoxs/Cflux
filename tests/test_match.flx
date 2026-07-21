@@ -67,4 +67,70 @@ func test_match_let(x):
 test_match_let(10)
 test_match_let(99)   # other
 
+# --- Enum match (identity comparison) ---
+enum Color:
+    Red
+    Green
+    Blue
+
+func color_name(c):
+    match c:
+        Color.Red:
+            return "Red"
+        Color.Green:
+            return "Green"
+        Color.Blue:
+            return "Blue"
+        _:
+            return "Unknown"
+
+print(color_name(Color.Red))    # Red
+print(color_name(Color.Green))  # Green
+print(color_name(Color.Blue))   # Blue
+
+# --- Struct destructuring ---
+struct Point:
+    let x: float
+    let y: float
+
+let p1 = Point(3.0, 4.0)
+let p2 = Point(0.0, 0.0)
+
+func describe_point(p):
+    match p:
+        Point(x, y):
+            if x == 0.0 and y == 0.0:
+                return "origin"
+            return f"point({x}, {y})"
+        _:
+            return "unknown"
+
+print(describe_point(p1))   # point(3.0, 4.0)
+print(describe_point(p2))   # origin
+
+# --- Struct destructuring with guard ---
+func classify_point(p):
+    match p:
+        Point(x, y) if x > 0.0 and y > 0.0:
+            return "Q1"
+        Point(x, y) if x < 0.0 and y > 0.0:
+            return "Q2"
+        Point(x, y):
+            return "other"
+        _:
+            return "not a point"
+
+print(classify_point(Point(1.0, 2.0)))    # Q1
+print(classify_point(Point(-1.0, 2.0)))   # Q2
+print(classify_point(Point(0.0, 0.0)))    # other
+
+# --- isinstance builtin ---
+struct Box:
+    let value: int
+
+let box = Box(42)
+print(isinstance(box, Box))      # true
+print(isinstance(p1, Point))     # true
+print(isinstance(p1, Box))       # false
+
 print("match: OK")

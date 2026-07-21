@@ -1,36 +1,51 @@
 # test_enum.flx — regression tests for enum definitions
+# Enums are compiled as classes with singleton instances (each member
+# is an ObjInstance with .name and .value attributes).
 
 enum Color:
     Red
     Green
     Blue
 
-print(Color.Red)     # 0
-print(Color.Green)   # 1
-print(Color.Blue)    # 2
+# Members print as EnumName.MemberName
+print(Color.Red)     # Color.Red
+print(Color.Green)   # Color.Green
+print(Color.Blue)    # Color.Blue
 
-# --- Enum values are stable integers ---
+# Enum members are stable singletons — identity comparison works
 let r = Color.Red
 let g = Color.Green
 let b = Color.Blue
-print(r == 0)    # true
-print(g == 1)    # true
-print(b == 2)    # true
+print(r == Color.Red)    # true
+print(g == Color.Green)  # true
+print(b == Color.Blue)   # true
+print(r == Color.Green)  # false
 
-# --- Enums are usable in match ---
+# Enum members carry .name and .value attributes
+print(Color.Red.name)    # Red
+print(Color.Red.value)   # 0
+print(Color.Green.value) # 1
+print(Color.Blue.value)  # 2
+
+# Enums are usable in match (identity comparison)
 func color_name(c):
     match c:
-        0:
+        Color.Red:
             return "Red"
-        1:
+        Color.Green:
             return "Green"
-        2:
+        Color.Blue:
             return "Blue"
         _:
             return "Unknown"
 
 print(color_name(Color.Red))    # Red
 print(color_name(Color.Blue))   # Blue
+print(color_name(Color.Green))  # Green
+
+# isinstance check
+print(isinstance(Color.Red, Color))    # true
+print(isinstance(Color.Green, Color))  # true
 
 # --- Larger enum ---
 enum Direction:
@@ -39,8 +54,8 @@ enum Direction:
     East
     West
 
-print(Direction.North)   # 0
-print(Direction.West)    # 3
+print(Direction.North.name)   # North
+print(Direction.West.value)   # 3
 print(Direction.East == Direction.East)  # true
 print(Direction.East == Direction.West)  # false
 
@@ -48,7 +63,7 @@ print(Direction.East == Direction.West)  # false
 func is_horizontal(dir):
     return dir == Direction.East or dir == Direction.West
 
-print(is_horizontal(Direction.East))    # true
-print(is_horizontal(Direction.North))   # false
+print(is_horizontal(Direction.East))   # true
+print(is_horizontal(Direction.North))  # false
 
 print("enum: OK")

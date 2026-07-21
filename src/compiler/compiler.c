@@ -2131,44 +2131,122 @@ static void compile_node(Compiler *c, AstNode *node) {
                                  ? node->as.match_stmt.guards.data[i]
                                  : NULL;
 
-                /* Condition: subject == pattern */
-                emit_byte(c, OP_LOAD_LOCAL, line);
-                emit_byte(c, (uint8_t)subject_slot, line);
-                compile_expr(c, pat);
-                emit_byte(c, OP_EQ, line);
+                /* ---- Detect struct/class destructuring pattern ------- *
+                 * Pattern:  TypeName(var1, var2, ...)                    *
+                 * Compiled: isinstance check + field binding.            *
+                 * Recognised only when callee is a bare identifier and   *
+                 * every argument is also a bare identifier (variable to  *
+                 * bind), so we never mis-classify value calls.           *
+                 * ----------------------------------------------------- */
+                bool is_destruct = false;
+                const char *destruct_type = NULL;
+                int n_destruct_vars = 0;
 
-                int eq_fail = emit_jump(c, OP_JUMP_IF_FALSE, line);
-                emit_byte(c, OP_POP, line); /* pop true eq result */
+                if (pat->kind == AST_CALL &&
+                    pat->as.call.callee->kind == AST_IDENT &&
+                    pat->as.call.args.count > 0) {
+                    bool all_idents = true;
+                    for (int j = 0; j < pat->as.call.args.count; j++) {
+                        if (pat->as.call.args.data[j]->kind != AST_IDENT) {
+                            all_idents = false; break;
+                        }
+                    }
+                    if (all_idents) {
+                        is_destruct     = true;
+                        destruct_type   = pat->as.call.callee->as.ident.name;
+                        n_destruct_vars = pat->as.call.args.count;
+                    }
+                }
 
-                if (guard) {
-                    /* Evaluate guard; if false, this arm is skipped */
-                    compile_expr(c, guard);
-                    int guard_fail = emit_jump(c, OP_JUMP_IF_FALSE, line);
-                    emit_byte(c, OP_POP, line); /* pop true guard result */
+                if (is_destruct) {
+                    /* ---- isinstance(subject, TypeName) check --------- */
+                    emit_byte(c, OP_LOAD_LOCAL, line);
+                    emit_byte(c, (uint8_t)subject_slot, line);
+                    emit_load_var(c, destruct_type, line);
+                    emit_byte(c, OP_ISINSTANCE, line);
 
-                    /* Arm body */
+                    int isinstance_fail = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                    emit_byte(c, OP_POP, line); /* pop true isinstance result */
+
+                    /* ---- Bind each variable to the matching field ---- */
                     scope_begin(c);
-                    compile_node(c, body);
-                    scope_end(c, line);
-                    end_jumps[end_count++] = emit_jump(c, OP_JUMP, line);
+                    for (int j = 0; j < n_destruct_vars; j++) {
+                        const char *vname =
+                            pat->as.call.args.data[j]->as.ident.name;
+                        emit_byte(c, OP_LOAD_LOCAL, line);
+                        emit_byte(c, (uint8_t)subject_slot, line);
+                        emit_byte(c, OP_GET_ATTR, line);
+                        emit_uint16(c, identifier_constant(
+                                c, vname, (int)strlen(vname), line), line);
+                        add_local(c, vname, line);
+                    }
 
-                    /* Guard failed: pop false guard, then skip eq_fail's own pop */
-                    patch_jump(c, guard_fail);
-                    emit_byte(c, OP_POP, line); /* pop false guard result */
-                    int skip_eq_pop = emit_jump(c, OP_JUMP, line);
+                    if (guard) {
+                        compile_expr(c, guard);
+                        int guard_fail = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                        emit_byte(c, OP_POP, line); /* pop true guard */
 
-                    /* Eq failed: pop false eq result, then fall through to next arm */
-                    patch_jump(c, eq_fail);
-                    emit_byte(c, OP_POP, line); /* pop false eq result */
-                    patch_jump(c, skip_eq_pop); /* guard-fail path rejoins here */
+                        compile_node(c, body);
+                        scope_end(c, line); /* pops bound vars + body locals */
+                        end_jumps[end_count++] = emit_jump(c, OP_JUMP, line);
+
+                        /* Guard failed: clean up manually (scope_end already
+                         * adjusted compiler state for the success path above;
+                         * here we just emit the runtime cleanup bytecodes). */
+                        patch_jump(c, guard_fail);
+                        emit_byte(c, OP_POP, line); /* pop false guard */
+                        for (int j = 0; j < n_destruct_vars; j++)
+                            emit_byte(c, OP_POP, line); /* pop each bound var */
+
+                        /* Re-join with isinstance_fail path */
+                        int skip_fail = emit_jump(c, OP_JUMP, line);
+                        patch_jump(c, isinstance_fail);
+                        emit_byte(c, OP_POP, line); /* pop false isinstance */
+                        patch_jump(c, skip_fail);
+                    } else {
+                        compile_node(c, body);
+                        scope_end(c, line); /* pops bound vars + body locals */
+                        end_jumps[end_count++] = emit_jump(c, OP_JUMP, line);
+
+                        patch_jump(c, isinstance_fail);
+                        emit_byte(c, OP_POP, line); /* pop false isinstance */
+                    }
+
                 } else {
-                    /* No guard: simple equality match */
-                    scope_begin(c);
-                    compile_node(c, body);
-                    scope_end(c, line);
-                    end_jumps[end_count++] = emit_jump(c, OP_JUMP, line);
-                    patch_jump(c, eq_fail);
-                    emit_byte(c, OP_POP, line); /* pop false eq result */
+                    /* ---- Standard equality check --------------------- */
+                    emit_byte(c, OP_LOAD_LOCAL, line);
+                    emit_byte(c, (uint8_t)subject_slot, line);
+                    compile_expr(c, pat);
+                    emit_byte(c, OP_EQ, line);
+
+                    int eq_fail = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                    emit_byte(c, OP_POP, line); /* pop true eq result */
+
+                    if (guard) {
+                        compile_expr(c, guard);
+                        int guard_fail = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                        emit_byte(c, OP_POP, line); /* pop true guard result */
+
+                        scope_begin(c);
+                        compile_node(c, body);
+                        scope_end(c, line);
+                        end_jumps[end_count++] = emit_jump(c, OP_JUMP, line);
+
+                        patch_jump(c, guard_fail);
+                        emit_byte(c, OP_POP, line); /* pop false guard result */
+                        int skip_eq_pop = emit_jump(c, OP_JUMP, line);
+
+                        patch_jump(c, eq_fail);
+                        emit_byte(c, OP_POP, line); /* pop false eq result */
+                        patch_jump(c, skip_eq_pop);
+                    } else {
+                        scope_begin(c);
+                        compile_node(c, body);
+                        scope_end(c, line);
+                        end_jumps[end_count++] = emit_jump(c, OP_JUMP, line);
+                        patch_jump(c, eq_fail);
+                        emit_byte(c, OP_POP, line); /* pop false eq result */
+                    }
                 }
             }
 

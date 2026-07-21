@@ -1,6 +1,6 @@
 # Flux Programming Language
 
-Flux adalah bahasa pemrograman modern yang diimplementasikan dalam C. Flux memiliki VM berbasis bytecode, garbage collector, sistem tipe dinamis, dan standard library yang lengkap. Sintaksisnya terinspirasi dari Python dengan tambahan fitur fungsional dan asynchronous.
+Flux adalah bahasa pemrograman modern yang diimplementasikan dalam C. Flux menggunakan VM berbasis bytecode, garbage collector mark-and-sweep, sistem tipe dinamis, coroutine async/await berbasis libuv, dan standard library yang bisa di-load secara lazy.
 
 ---
 
@@ -9,40 +9,26 @@ Flux adalah bahasa pemrograman modern yang diimplementasikan dalam C. Flux memil
 1. [Build & Jalankan](#1-build--jalankan)
 2. [Perintah CLI](#2-perintah-cli)
 3. [Dasar-Dasar Bahasa](#3-dasar-dasar-bahasa)
-   - [Variabel](#variabel)
-   - [Tipe Data](#tipe-data)
-   - [Operator](#operator)
-   - [Operator Ternary](#operator-ternary)
-   - [String & F-string](#string--f-string)
-4. [Struktur Kontrol](#4-struktur-kontrol)
-   - [if / elif / else](#if--elif--else)
-   - [match](#match)
-   - [while](#while)
-   - [for](#for)
-5. [Fungsi](#5-fungsi)
-   - [Fungsi Biasa](#fungsi-biasa)
-   - [Closure](#closure)
-   - [Lambda](#lambda)
-   - [Pipeline Operator](#pipeline-operator)
-   - [Decorator](#decorator)
-6. [List & Dictionary](#6-list--dictionary)
-7. [Class & Object](#7-class--object)
-   - [Metode Spesial (Magic Methods)](#metode-spesial-magic-methods)
-8. [Struct](#8-struct)
-9. [Enum](#9-enum)
-10. [Async / Await / Coroutine](#10-async--await--coroutine)
-11. [Penanganan Error (try / catch / finally / raise)](#11-penanganan-error-try--catch--finally--raise)
-12. [Sistem Import Modul](#12-sistem-import-modul)
-13. [Standard Library](#13-standard-library)
-14. [Modul Socket](#14-modul-socket)
-15. [Modul MySQL](#15-modul-mysql)
-16. [Modul HTTP](#16-modul-http)
-17. [Modul WebSocket](#17-modul-websocket)
-18. [FFI — Import dan Panggil Library C Native](#18-ffi--import-dan-panggil-library-c-native)
-19. [Ekstensi Native (.so Plugin)](#19-ekstensi-native-so-plugin)
-20. [Embed libflux ke Program C](#20-embed-libflux-ke-program-c)
-21. [Struktur Proyek](#21-struktur-proyek)
+4. [Operator](#4-operator)
+5. [Struktur Kontrol](#5-struktur-kontrol)
+6. [Fungsi](#6-fungsi)
+7. [List & Dictionary](#7-list--dictionary)
+8. [Class & Object](#8-class--object)
+9. [Struct](#9-struct)
+10. [Enum](#10-enum)
+11. [Penanganan Error](#11-penanganan-error-try--catch--finally--raise)
+12. [Match](#12-match)
+13. [Async / Await / Spawn](#13-async--await--spawn)
+14. [Sistem Import Modul](#14-sistem-import-modul)
+15. [Built-in Functions](#15-built-in-functions)
+16. [Built-in Type Methods](#16-built-in-type-methods)
+17. [Standard Library](#17-standard-library)
+18. [Ekstensi Native](#18-ekstensi-native)
+19. [FFI — Panggil Library C Native](#19-ffi--panggil-library-c-native)
+20. [Package Manager](#20-package-manager)
+21. [C API (libflux)](#21-c-api-libflux)
 22. [Arsitektur Internal](#22-arsitektur-internal)
+23. [Struktur Proyek](#23-struktur-proyek)
 
 ---
 
@@ -50,10 +36,13 @@ Flux adalah bahasa pemrograman modern yang diimplementasikan dalam C. Flux memil
 
 ### Prasyarat
 
-- GCC (C17)
+- GCC (C17 / `gnu17`)
 - GNU Make
-- `libuv` (untuk fitur async)
-- `libpq` / `postgresql` (opsional, untuk ekstensi PostgreSQL)
+- `libuv` (async runtime)
+- `libcurl` + `openssl` (ekstensi HTTP)
+- `wslay` (ekstensi WebSocket)
+- `libpq` / `postgresql` (ekstensi PostgreSQL)
+- `libmysqlclient` (ekstensi MySQL)
 
 Di Replit, semua dependensi sudah tersedia melalui `replit.nix`.
 
@@ -64,15 +53,32 @@ make all
 ```
 
 Perintah ini menghasilkan:
-- `build_make/flux` — executable CLI
-- `build_make/libflux.a` — static library
-- `stdlib/*/lib<name>.so` — modul standard library (lazy-loaded)
-- `extension/postgresql/libpostgresql.so` — ekstensi PostgreSQL (opsional)
+
+| Output | Keterangan |
+|--------|-----------|
+| `build_make/flux` | Executable CLI |
+| `build_make/libflux.a` | Static library untuk embedding |
+| `stdlib/math/libmath.so` | Modul matematika |
+| `stdlib/fs/libfs.so` | Modul filesystem |
+| `stdlib/os/libos.so` | Modul OS |
+| `stdlib/io/libio.so` | Modul I/O tingkat rendah |
+| `stdlib/json/libjson.so` | Modul JSON |
+| `stdlib/time/libtime.so` | Modul waktu |
+| `stdlib/sys/libsys.so` | Modul sys |
+| `stdlib/shell/libshell.so` | Modul shell |
+| `stdlib/socket/libsocket.so` | Modul socket |
+| `stdlib/native/libnative.so` | Modul FFI |
+| `extension/http/libhttp.so` | Ekstensi HTTP client+server |
+| `extension/ws/libws.so` | Ekstensi WebSocket |
+| `extension/mysql/libmysql.so` | Ekstensi MySQL |
+| `extension/postgresql/libpostgresql.so` | Ekstensi PostgreSQL |
 
 ### Menjalankan Program
 
 ```bash
 ./build_make/flux hello.flx
+# atau
+./build_make/flux run hello.flx
 ```
 
 ### Membersihkan Build
@@ -90,952 +96,442 @@ flux run <file.flx>               Jalankan file Flux
 flux build <file.flx> [--verbose] Compile-only check (tanpa eksekusi)
 flux test <file.flx>              Jalankan file sebagai suite tes
 flux fmt  <file.flx>              Format file sumber secara in-place
-flux lint <file.flx>              Lint file (syntax + semantic warnings)
+flux lint <file.flx>              Lint (syntax + semantic warnings)
 flux doc  <file.flx> [out.md]     Generate dokumentasi Markdown
 flux repl                         Mulai sesi REPL interaktif
 flux package <cmd> [args]         Package manager
-flux -e "<kode>"                  Evaluasi kode dari string langsung
+flux <file.flx>                   Jalankan (shorthand)
+flux -e "<kode>"                  Evaluasi kode dari string
 flux --version                    Tampilkan versi
 flux --help                       Tampilkan bantuan
 ```
 
-**Shorthand:** `flux <file.flx>` setara dengan `flux run <file.flx>`.
+### `flux fmt`
 
----
-
-### `flux build` — Compile-only check
-
-Mengompilasi file melalui pipeline penuh (lexer → parser → compiler) **tanpa menjalankan kode**. Berguna untuk mendeteksi semua error sintaks dan compile-time sebelum deployment.
-
-```bash
-# Cek kompilasi saja
-./build_make/flux build program.flx
-
-# Tampilkan disassembly bytecode
-./build_make/flux build --verbose program.flx
-```
-
-Output sukses:
-```
-flux build: program.flx — OK
-  Functions compiled : 3
-  Total instructions : 847 bytes
-  Total constants    : 21
-```
-
----
-
-### `flux fmt` — Code Formatter
-
-Memformat file `.flx` secara **in-place** dengan style Flux yang konsisten:
-
+Memformat source code secara in-place dengan aturan:
 - Indentasi 4 spasi
-- Spasi di sekitar operator binary (`+`, `-`, `==`, `=`, dll.)
+- Satu spasi di sekeliling operator biner
+- Tidak ada spasi setelah `(`, `[`, `{` dan sebelum `)`, `]`, `}`
 - Satu spasi setelah `,`
-- Tidak ada spasi sebelum `,` `:` `.`
-- Tidak ada trailing whitespace
-- File selalu diakhiri newline
+- Trailing whitespace dihapus
 
-```bash
-./build_make/flux fmt myfile.flx
-# flux fmt: formatted 'myfile.flx' (12 spacing corrections)
+### `flux lint`
+
+Memeriksa:
+- Kesalahan sintaks (melalui parser)
+- Kode yang tidak terjangkau (setelah `return`, `break`, `continue`, `raise`)
+- Blok `catch` kosong (hanya berisi `pass`)
+- Penggunaan nama built-in sebagai nama variabel
+- Fungsi didefinisikan di dalam loop
+- `raise` di luar blok `catch`
+- Membandingkan dengan `null` menggunakan `==` (sebaiknya `is`)
+- Import yang tidak digunakan
+
+### `flux package`
+
+```
+flux package init               Buat file flux.pkg (manifest paket)
+flux package list               Daftar paket yang sudah terinstal
+flux package install <path>     Install dari direktori lokal
+flux package remove  <name>     Hapus paket
+flux package info    <name>     Detail sebuah paket
 ```
 
----
-
-### `flux lint` — Linter
-
-Menganalisis file sumber dan melaporkan:
-
-- **Syntax errors** — error parse dengan nomor baris
-- **Semantic warnings:**
-  - Kode tidak terjangkau (`unreachable code`) setelah `return`/`break`/`continue`/`raise`
-  - `break`/`continue` di luar loop
-  - `return` di luar fungsi
-  - `raise` bare di luar `catch`
-  - `catch` block yang kosong (silently swallows exceptions)
-  - Fungsi didefinisikan di dalam loop
-  - Shadowing nama built-in (`print`, `len`, `range`, dll.)
-  - Import yang tidak pernah digunakan
-  - Perbandingan ke `null` dengan `==` (disarankan pakai `is null`)
-
-```bash
-./build_make/flux lint myfile.flx
-
-# Contoh output:
-# myfile.flx:7: warning: unreachable code after return/break/continue/raise
-# myfile.flx:10: error: 'break' used outside a loop
-# flux lint: myfile.flx — 1 warning(s), 1 error(s)
-```
-
-Exit code `0` jika tidak ada error, `1` jika ada error.
-
----
-
-### `flux doc` — Documentation Generator
-
-Menghasilkan dokumentasi Markdown dari source file. Mengekstrak:
-
-- **Doc-comments**: blok `# ...` yang langsung berada di atas definisi fungsi/class/struct/enum
-- **Signature** fungsi (nama + parameter + type hints jika ada)
-- **Class/struct** dengan method-nya
-- **Enum** dengan daftar member
-
-```bash
-# Tulis ke myfile.md (default)
-./build_make/flux doc myfile.flx
-
-# Tulis ke file tertentu
-./build_make/flux doc myfile.flx docs/api.md
-```
-
-Contoh doc-comment:
-```flux
-# Compute the area of a circle.
-# Returns pi * r^2.
-func circle_area(r: float):
-    return 3.14159 * r * r
-```
-
-Output Markdown:
-```markdown
-### `func circle_area(r: float)`
-
-Compute the area of a circle.
-Returns pi * r^2.
-```
-
----
-
-### `flux package` — Package Manager
-
-Package manager berbasis file sistem. Package adalah direktori berisi file `.flx` yang diinstal di folder `packages/` proyek.
-
-```bash
-# Inisialisasi proyek (buat flux.pkg dan packages/)
-flux package init
-
-# Lihat daftar package yang terinstal
-flux package list
-
-# Install package dari direktori lokal
-flux package install ./path/to/mypackage
-
-# Hapus package
-flux package remove mypackage
-
-# Info detail package
-flux package info mypackage
-```
-
-Setelah install, package bisa diimpor langsung:
-```flux
-import mypackage
-```
-
-File manifest `flux.pkg` menyimpan metadata proyek:
-```
-name    = my-project
-version = 0.1.0
-author  = Your Name
-license = MIT
-```
-
-> **Catatan:** Network package registry (`flux package add`) adalah fitur yang direncanakan untuk versi mendatang.
-
----
-
-**Contoh penggunaan dasar:**
-
-```bash
-# Jalankan file
-./build_make/flux tests/hello.flx
-
-# Evaluasi ekspresi langsung
-./build_make/flux -e 'print(2 + 2)'
-
-# REPL interaktif
-./build_make/flux repl
-```
+> **Catatan:** `flux package add` (registry jaringan) belum diimplementasikan.
 
 ---
 
 ## 3. Dasar-Dasar Bahasa
 
-### Variabel
-
-Flux mendukung tiga cara deklarasi variabel:
+### Komentar
 
 ```flux
-# Penugasan biasa (mutable, function-scoped)
-x = 10
-name = "Flux"
-
-# let — deklarasi eksplisit, mutable, block-scoped
-let count = 0
-let pi: float = 3.14   # anotasi tipe diabaikan saat runtime
-
-# const — konstanta, tidak bisa diubah
-const MAX = 100
-const VERSION = "0.1.0"
+# Ini komentar satu baris
 ```
 
-**Aturan scoping:**
-- Penugasan di dalam fungsi membuat variabel **lokal fungsi** — tidak memodifikasi global.
-- Variabel yang di-assign di dalam blok (`if`, `while`, `for`) **di-hoist** ke scope fungsi sehingga tetap bisa diakses setelah blok berakhir.
-- Penugasan ke nama yang merupakan *upvalue* dari fungsi luar akan **memutasi upvalue** tersebut (lihat Closure).
+### Variabel
+
+```flux
+x = 10           # assignment biasa
+let y = 20       # deklarasi eksplisit
+const PI = 3.14  # konstanta (tidak bisa di-reassign)
+name := "Flux"   # walrus assignment (assignment sebagai ekspresi)
+```
+
+Type annotation didukung secara sintaksis tapi diabaikan saat runtime:
+
+```flux
+let count: int = 0
+let name: string = "hello"
+```
 
 ### Tipe Data
 
-| Tipe      | Contoh                        | Keterangan                         |
-|-----------|-------------------------------|------------------------------------|
-| `int`     | `42`, `-7`, `0`               | Bilangan bulat                     |
-| `float`   | `3.14`, `-0.5`, `1.0`         | Bilangan desimal (64-bit)          |
-| `string`  | `"hello"`, `'world'`          | Teks, immutable                    |
-| `bool`    | `true`, `false`               | Boolean                            |
-| `null`    | `null`                        | Nilai kosong                       |
-| `list`    | `[1, 2, 3]`                   | Array dinamis                      |
-| `dict`    | `{"key": "val"}`              | Hashmap key-value                  |
-| `func`    | `func f(): ...`               | Fungsi / closure                   |
+| Tipe | Contoh | Keterangan |
+|------|--------|-----------|
+| `int` | `42`, `0xFF`, `-7` | Integer 64-bit; hex dengan `0x` |
+| `float` | `3.14`, `1.5e10` | Double 64-bit; notasi ilmiah didukung |
+| `bool` | `true`, `false` | |
+| `null` | `null` | Nilai kosong |
+| `string` | `"hello"`, `'world'` | Kutip tunggal atau ganda |
+| `list` | `[1, 2, 3]` | Array dinamis |
+| `dict` | `{"a": 1}` | Hash map |
+
+### String
 
 ```flux
-print(type(42))       # int
-print(type(3.14))     # float
-print(type("hello"))  # string
-print(type(true))     # bool
-print(type(null))     # null
-print(type([]))       # list
-print(type({}))       # dict
+s = "Hello, World!"
+s2 = 'Bisa pakai kutip tunggal'
 
-# Konversi tipe
-print(int("42"))      # 42
-print(float("3.14"))  # 3.14
-print(str(100))       # 100
-print(int(3.9))       # 3  (truncate)
+# Escape sequences: \n  \t  \r  \\  \"  \'  \0
+greeting = "Halo\nDunia"
 ```
 
-### Operator
-
-**Aritmatika:**
+### F-String (String Interpolasi)
 
 ```flux
-print(10 + 3)   # 13
-print(10 - 3)   # 7
-print(10 * 3)   # 30
-print(10 / 3)   # 3.3333...
-print(10 // 3)  # 3   (floor division)
-print(10 % 3)   # 1   (modulo)
-print(2 ** 10)  # 1024 (pangkat)
-```
+name = "Budi"
+age = 25
+print(f"Nama: {name}, Umur: {age}")
+print(f"Nilai: {2 + 3 * 4}")
+print(f"Nested: {f'inner {name}'}")
 
-**Perbandingan:**
-
-```flux
-print(5 == 5)   # true
-print(5 != 3)   # true
-print(5 > 3)    # true
-print(5 < 3)    # false
-print(5 >= 5)   # true
-print(5 <= 4)   # false
-```
-
-**Logika:**
-
-```flux
-print(true and false)  # false
-print(true or false)   # true
-print(not true)        # false
-```
-
-**Penugasan gabungan:**
-
-```flux
-x = 10
-x += 5   # x = 15
-x -= 3   # x = 12
-x *= 2   # x = 24
-x /= 4   # x = 6.0
-```
-
-### Operator Ternary
-
-Operator ternary memungkinkan ekspresi kondisional ringkas dalam satu baris dengan sintaksis `kondisi ? nilai_jika_benar : nilai_jika_salah`.
-
-```flux
-x = 10
-print(x > 5 ? "besar" : "kecil")   # besar
-
-# Ternary dalam penugasan
-a = 3
-b = 7
-maks = a > b ? a : b
-print(maks)   # 7
-
-# Ternary sebagai argumen fungsi
-print(str(x > 0 ? x : -x))   # nilai absolut
-
-# Ternary bersarang (right-associative)
-y = 0
-print(y > 0 ? "positif" : y < 0 ? "negatif" : "nol")   # nol
-```
-
-### String & F-string
-
-```flux
-# Konkatenasi
-greeting = "Hello" + ", " + "World!"
-
-# Panjang string
-print(len("hello"))   # 5
-
-# Method string bawaan
-s = "Hello World"
-print(s.upper())              # HELLO WORLD
-print(s.lower())              # hello world
-print(s.replace("World", "Flux"))  # Hello Flux
-print(s.split(" "))           # [Hello, World]
-print(s.strip())              # Hello World
-```
-
-**F-string** memungkinkan interpolasi ekspresi langsung di dalam string:
-
-```flux
-name = "Flux"
-version = "0.1.0"
-print(f"Welcome to {name} {version}!")
-
-x = 7
-y = 6
-print(f"{x} × {y} = {x * y}")   # 7 × 6 = 42
-
-# Ekspresi kompleks bisa diinterpolasi
-n = 9
-print(f"The number {n} squared is {n * n}")  # The number 9 squared is 81
-
-# F-string di dalam fungsi
-func greet(who):
-    return f"Hello, {who}!"
-
-print(greet("Developer"))   # Hello, Developer!
+# Literal kurung kurawal: {{ dan }}
+print(f"Kurung kurawal: {{literal}}")
 ```
 
 ---
 
-## 4. Struktur Kontrol
+## 4. Operator
+
+### Aritmatika
+
+| Operator | Keterangan |
+|----------|-----------|
+| `+` | Penjumlahan / konkatenasi string |
+| `-` | Pengurangan |
+| `*` | Perkalian |
+| `/` | Pembagian (float) |
+| `//` | Pembagian bulat (floor division) |
+| `%` | Modulo |
+| `**` | Pangkat (kanan-asosiatif) |
+| `-x` | Negasi unary |
+
+### Perbandingan
+
+`==`, `!=`, `<`, `<=`, `>`, `>=`, `is`
+
+> Gunakan `is` untuk membandingkan dengan `null`: `if x is null:`
+
+### Logika
+
+`and`, `or`, `not`
+
+### Bitwise
+
+| Operator | Keterangan |
+|----------|-----------|
+| `&` | AND |
+| `\|` | OR |
+| `^` | XOR |
+| `~` | NOT (unary) |
+| `<<` | Shift kiri |
+| `>>` | Shift kanan |
+
+### Assignment
+
+```flux
+x = 10
+x += 5    # juga: -= *= /= //= %=
+y := x + 1   # walrus: assignment sebagai ekspresi
+```
+
+### Operator Khusus
+
+```flux
+# Pipeline: meneruskan hasil kiri sebagai argumen pertama ke kanan
+result = data |> process |> format
+
+# Ternary
+nilai = "genap" ? (x % 2 == 0) : "ganjil"
+# sintaks: ekspresi_true ? kondisi : ekspresi_false
+```
+
+---
+
+## 5. Struktur Kontrol
 
 ### if / elif / else
 
 ```flux
-x = 15
-
-if x > 20:
-    print("besar")
-elif x > 10:
-    print("sedang")
+if x > 0:
+    print("positif")
+elif x == 0:
+    print("nol")
 else:
-    print("kecil")
-```
-
-### match
-
-`match` adalah ekspresi switch/case yang mencocokkan nilai secara eksak. `_` adalah wildcard (default). **Setiap arm harus ditulis dalam blok indented — tidak bisa satu baris.**
-
-```flux
-func http_status(code):
-    match code:
-        200:
-            return "OK"
-        404:
-            return "Not Found"
-        500:
-            return "Internal Server Error"
-        _:
-            return "Unknown"
-
-print(http_status(200))   # OK
-print(http_status(999))   # Unknown
-
-# match dengan string
-func day_type(day):
-    match day:
-        "Saturday":
-            return "weekend"
-        "Sunday":
-            return "weekend"
-        _:
-            return "weekday"
-
-print(day_type("Saturday"))   # weekend
-print(day_type("Monday"))     # weekday
+    print("negatif")
 ```
 
 ### while
 
 ```flux
 i = 0
-while i < 5:
+while i < 10:
     print(i)
     i += 1
-
-# break dan continue
-i = 0
-while true:
-    if i >= 5:
-        break
-    i += 1
-print(i)   # 5
 ```
 
 ### for
 
 ```flux
-# Iterasi list
-for x in [1, 2, 3]:
-    print(x)
+for item in [1, 2, 3]:
+    print(item)
 
-# Iterasi range
-for i in range(5):      # 0, 1, 2, 3, 4
-    print(i)
+for i in range(5):
+    print(i)          # 0 1 2 3 4
 
-for i in range(2, 8):   # 2, 3, 4, 5, 6, 7
-    print(i)
+for i in range(2, 8, 2):
+    print(i)          # 2 4 6
+```
 
-# continue — lewati iterasi saat ini
-total = 0
+### break / continue / pass
+
+```flux
 for x in range(10):
+    if x == 5:
+        break
     if x % 2 == 0:
         continue
-    total += x
-print(total)   # 25 (1+3+5+7+9)
+    print(x)
 
-# break — hentikan loop
-for i in range(100):
-    if i == 5:
-        break
-print(i)   # 5
+# pass: placeholder untuk blok kosong
+func belum_selesai():
+    pass
+```
+
+### with
+
+```flux
+with buka_koneksi() as conn:
+    conn.kirim("data")
+# conn.tutup() dipanggil otomatis saat keluar blok
 ```
 
 ---
 
-## 5. Fungsi
+## 6. Fungsi
 
 ### Fungsi Biasa
 
-> **Catatan:** Body fungsi **harus selalu ditulis di baris baru dengan indentasi**. Sintaksis satu baris `func f(x): return x` **tidak valid** di Flux.
-
 ```flux
-# Deklarasi fungsi
-func greet(name):
-    print("Hello, " + name + "!")
+func sapa(nama):
+    print(f"Halo, {nama}!")
 
-greet("World")   # Hello, World!
-
-# Fungsi dengan nilai return
-func add(a, b):
+func tambah(a, b):
     return a + b
 
-result = add(3, 4)
-print(result)   # 7
+hasil = tambah(3, 4)
+```
 
-# Fungsi rekursif
-func factorial(n):
-    if n <= 1:
-        return 1
-    return n * factorial(n - 1)
+### Parameter Default
 
-print(factorial(5))   # 120
+```flux
+func beri_salam(nama, salam="Halo"):
+    print(f"{salam}, {nama}!")
+
+beri_salam("Budi")            # Halo, Budi!
+beri_salam("Ani", "Selamat")  # Selamat, Ani!
 ```
 
 ### Closure
 
-Fungsi di dalam fungsi bisa mengakses dan **memutasi** variabel dari fungsi luarnya (upvalue).
-
 ```flux
-func counter(start):
-    count = start
-    func increment(step):
-        count = count + step   # memutasi upvalue 'count'
-        return count
-    return increment
+func buat_penghitung():
+    n = 0
+    func tambah():
+        nonlocal n
+        n += 1
+        return n
+    return tambah
 
-c1 = counter(0)
-c2 = counter(100)
-
-print(c1(1))   # 1
-print(c1(1))   # 2
-print(c1(5))   # 7
-print(c2(10))  # 110  (c2 punya 'count' sendiri, independen dari c1)
-```
-
-Gunakan `nonlocal` untuk mendeklarasikan secara eksplisit bahwa sebuah nama merujuk ke variabel fungsi luar:
-
-```flux
-func outer():
-    x = 10
-    func inner():
-        nonlocal x
-        x = x + 1
-    inner()
-    return x   # 11
+hitung = buat_penghitung()
+print(hitung())   # 1
+print(hitung())   # 2
 ```
 
 ### Lambda
 
-Lambda adalah fungsi anonim dengan sintaksis `|params| => ekspresi`.
-
 ```flux
-# Expression-body lambda
-let square  = |x| => x * x
-let add     = |a, b| => a + b
-let negate  = |x| => -x
+# Sintaks: |param1, param2| => ekspresi
+kuadrat = |x| => x * x
+jumlah  = |a, b| => a + b
 
-print(square(5))    # 25
-print(add(3, 4))    # 7
-print(negate(10))   # -10
+print(kuadrat(5))    # 25
 
-# Lambda tanpa parameter
-let greet = || => "Hello!"
-print(greet())   # Hello!
-
-# Block-body lambda (gunakan =>:)
-let describe = |n| =>:
-    if n > 0:
-        return "positive"
-    elif n < 0:
-        return "negative"
-    else:
-        return "zero"
-
-print(describe(5))    # positive
-print(describe(-3))   # negative
-print(describe(0))    # zero
-
-# Lambda sebagai argumen fungsi
-func apply(f, val):
-    return f(val)
-
-print(apply(|x| => x * 2, 10))   # 20
-
-# Lambda closure — menangkap variabel luar
-func make_adder(n):
-    return |x| => x + n
-
-add5 = make_adder(5)
-print(add5(3))   # 8
+# Lambda dengan blok:
+proses = |x| =>:
+    y = x * 2
+    return y + 1
 ```
 
 ### Pipeline Operator
 
-Operator `|>` meneruskan nilai di sebelah kiri sebagai argumen pertama ke fungsi di sebelah kanan.
-
 ```flux
-func double(x):
-    return x * 2
+func double(x): return x * 2
+func inc(x):    return x + 1
 
-func inc(x):
-    return x + 1
-
-func to_str(x):
-    return str(x)
-
-func add(a, b):
-    return a + b
-
-# Chaining sederhana
-result = 4 |> double |> inc |> to_str
-print(result)   # "9"
-
-# Pipeline dengan fungsi yang butuh argumen tambahan
-print(10 |> add(5))   # 15   (10 jadi argumen pertama, 5 jadi kedua)
-
-# Pipeline dengan lambda
-print(7 |> (|x| => x * x))   # 49
+# Ekuivalen: inc(double(5))
+hasil = 5 |> double |> inc    # 11
 ```
 
 ### Decorator
 
-Decorator menggunakan sintaksis `@>` dan mengubah fungsi saat deklarasi.
+Sintaks decorator menggunakan `@>` (bukan `@`):
 
 ```flux
-# Decorator sederhana
-func logged(fn):
-    func wrapper():
-        print("[log] calling function")
-        result = fn()
-        print("[log] done")
-        return result
+func log_call(f):
+    func wrapper(x):
+        print(f"Memanggil dengan {x}")
+        return f(x)
     return wrapper
 
-@>logged
-func hello():
-    print("Hello, World!")
-    return 42
+@> log_call
+func kuadrat(x):
+    return x * x
 
-hello()
+kuadrat(4)
 # Output:
-# [log] calling function
-# Hello, World!
-# [log] done
-
-# Decorator dengan argumen
-func repeat(n):
-    func decorator(fn):
-        func wrapper():
-            i = 0
-            while i < n:
-                fn()
-                i += 1
-        return wrapper
-    return decorator
-
-@>repeat(3)
-func beep():
-    print("beep!")
-
-beep()   # beep! (3×)
-
-# Decorator bertumpuk (stacked) — diterapkan dari bawah ke atas
-@>logged
-@>repeat(2)
-func ping():
-    print("ping!")
+# Memanggil dengan 4
+# 16
 ```
 
 ---
 
-## 6. List & Dictionary
+## 7. List & Dictionary
 
 ### List
 
 ```flux
-# Membuat list
-nums = [1, 2, 3, 4, 5]
-empty = []
+angka = [1, 2, 3, 4, 5]
 
-# Akses elemen
-print(nums[0])    # 1
-print(nums[-1])   # 5  (indeks negatif dari akhir)
+# Akses & modifikasi
+print(angka[0])       # 1
+angka[0] = 10
 
-# Panjang
-print(len(nums))  # 5
+# Nested
+matrix = [[1, 2], [3, 4]]
+print(matrix[1][0])   # 3
+```
 
-# Append
-nums.append(6)
+### List Comprehension
 
-# Iterasi
-for x in nums:
-    print(x)
-
-# Fungsi built-in untuk list
-doubled = map(nums, |x| => x * 2)
-evens   = filter(nums, |x| => x % 2 == 0)
-total   = reduce(nums, |acc, x| => acc + x)
-print(doubled)   # [2, 4, 6, 8, 10]
-print(evens)     # [2, 4]
-print(total)     # 15
-
-# Fungsi utilitas
-print(sorted([3, 1, 4, 1, 5]))   # [1, 1, 3, 4, 5]
-print(reversed([1, 2, 3]))       # [3, 2, 1]
-print(sum([1, 2, 3, 4]))         # 10
-print(min([3, 1, 4]))            # 1
-print(max([3, 1, 4]))            # 4
-
-# zip dan enumerate
-for pair in zip([1, 2, 3], ["a", "b", "c"]):
-    print(pair)   # [1, a], [2, b], [3, c]
-
-for item in enumerate(["x", "y", "z"]):
-    print(item[0], item[1])   # 0 x, 1 y, 2 z
+```flux
+kuadrat = [x * x for x in range(6)]              # [0, 1, 4, 9, 16, 25]
+genap   = [x for x in range(10) if x % 2 == 0]   # [0, 2, 4, 6, 8]
 ```
 
 ### Dictionary
 
 ```flux
-# Membuat dict
-d = {"nama": "Flux", "versi": 1, "aktif": true}
+orang = {"nama": "Budi", "usia": 30}
 
-# Akses nilai
-print(d["nama"])   # Flux
+print(orang["nama"])       # Budi
+orang["kota"] = "Jakarta"  # tambah key baru
+```
 
-# Set nilai
-d["baru"] = "ditambahkan"
+### Dict Comprehension
 
-# Cek keberadaan key
-print(d.has_key("nama"))    # true
-print(d.has_key("tidak"))   # false
+```flux
+kuadrat_map = {x: x*x for x in range(5)}
+# {0: 0, 1: 1, 2: 4, 3: 9, 4: 16}
 
-# Nilai default jika key tidak ada
-val = d.get("tidak_ada", "default")
-print(val)   # default
-
-# Error jika key tidak ada (tanpa .get)
-try:
-    print(d["tidak_ada"])
-catch e:
-    print("Key tidak ditemukan:", e)
+hanya_besar = {k: v for k, v in data.items() if v > 10}
 ```
 
 ---
 
-## 7. Class & Object
+## 8. Class & Object
+
+### Mendefinisikan Class
 
 ```flux
-class Animal:
-    func __init__(name, sound):
-        self.name = name
-        self.sound = sound
+class Hewan:
+    func init(nama, suara):
+        self.nama  = nama
+        self.suara = suara
 
-    func speak():
-        print(self.name + " says " + self.sound)
+    func bicara():
+        print(f"{self.nama} berkata: {self.suara}")
 
-    func describe():
-        print("I am " + self.name)
-
-# Membuat instance
-dog = Animal("Dog", "Woof!")
-dog.speak()     # Dog says Woof!
-dog.describe()  # I am Dog
-
-# Pewarisan (Inheritance)
-class Dog(Animal):
-    func __init__(name):
-        self.name = name
-        self.sound = "Woof!"
-
-    func fetch():
-        print(self.name + " fetches the ball!")
-
-rex = Dog("Rex")
-rex.speak()    # Rex says Woof!
-rex.fetch()    # Rex fetches the ball!
-rex.describe() # I am Rex  (diwarisi dari Animal)
+anjing = Hewan("Anjing", "Guk")
+anjing.bicara()
 ```
 
-### Metode Spesial (Magic Methods)
+> Constructor menggunakan nama `init` (atau `__init__` sebagai alias).
 
-Magic methods memungkinkan kelas mengimplementasikan perilaku bawaan seperti konversi string, indexing, dan iterasi.
-
-| Method       | Dipanggil saat                      |
-|--------------|--------------------------------------|
-| `__init__`   | `Kelas(args)` — konstruktor          |
-| `to_str`     | `print(obj)` / `str(obj)`           |
-| `to_repr`    | `repr(obj)`                         |
-| `on_len`     | `len(obj)`                          |
-| `on_get`     | `obj[key]`                          |
-| `on_set`     | `obj[key] = val`                    |
-| `on_iter`    | `for x in obj` — kembalikan list    |
-| `on_call`    | `obj(args)` — callable instance     |
-| `on_enter`   | `with obj:` — masuk blok            |
-| `on_exit`    | `with obj:` — keluar blok           |
-| `equals`     | `obj1 == obj2`                      |
+### Pewarisan
 
 ```flux
-# to_str
-class Vec2:
-    func __init__(x, y):
+class Kucing(Hewan):
+    func init(nama):
+        super.init(nama, "Meow")
+
+    func mendengkur():
+        print(f"{self.nama} mendengkur...")
+
+mimi = Kucing("Mimi")
+mimi.bicara()       # warisan dari Hewan
+mimi.mendengkur()
+```
+
+### `is` dan isinstance
+
+```flux
+print(mimi is null)               # false
+print(isinstance(mimi, Kucing))   # true
+```
+
+---
+
+## 9. Struct
+
+`struct` adalah syntactic sugar yang dikompilasi sebagai class:
+
+```flux
+struct Titik:
+    func init(x, y):
         self.x = x
         self.y = y
-    func to_str():
-        return "Vec2(" + str(self.x) + ", " + str(self.y) + ")"
 
-v = Vec2(1, 2)
-print(v)       # Vec2(1, 2)
-print(str(v))  # Vec2(1, 2)
+    func jarak():
+        import math
+        return math.sqrt(self.x ** 2 + self.y ** 2)
 
-# on_len + on_get → iterable lewat for
-class NumberedList:
-    func __init__():
-        self.items = ["a", "b", "c"]
-    func on_len():
-        return len(self.items)
-    func on_get(i):
-        return self.items[i]
-
-for item in NumberedList():
-    print(item)   # a, b, c
-
-# on_call — instance bisa dipanggil seperti fungsi
-class Multiplier:
-    func __init__(factor):
-        self.factor = factor
-    func on_call(x):
-        return x * self.factor
-
-double = Multiplier(2)
-print(double(7))   # 14
-
-# on_enter / on_exit — context manager (with statement)
-class Timer:
-    func __init__(name):
-        self.name = name
-    func on_enter():
-        print("Entering: " + self.name)
-        return self
-    func on_exit():
-        print("Exiting: " + self.name)
-
-with Timer("block1"):
-    print("inside block")
-
-with Timer("block2") as t:
-    print("inside: " + t.name)
-
-# equals — operator ==
-class Color:
-    func __init__(r, g, b):
-        self.r = r
-        self.g = g
-        self.b = b
-    func equals(other):
-        return self.r == other.r and self.g == other.g and self.b == other.b
-
-red1 = Color(255, 0, 0)
-red2 = Color(255, 0, 0)
-blue = Color(0, 0, 255)
-print(red1 == red2)   # true
-print(red1 == blue)   # false
+p = Titik(3, 4)
+print(p.jarak())   # 5.0
 ```
 
 ---
 
-## 8. Struct
+## 10. Enum
 
-`struct` adalah tipe data komposit dengan field bertipe, mirip kelas sederhana. Field dideklarasikan dengan `let`, dan konstruktor di-generate otomatis berdasarkan urutan field.
-
-```flux
-struct Point:
-    let x: float
-    let y: float
-
-let p = Point(3.0, 4.0)
-print(p.x)   # 3.0
-print(p.y)   # 4.0
-
-# Struct dengan method
-struct Circle:
-    let radius: float
-
-    func area():
-        return 3.14159 * self.radius * self.radius
-
-    func describe():
-        print(f"Circle with radius {self.radius}")
-
-let c = Circle(5.0)
-c.describe()         # Circle with radius 5.0
-print(c.area())      # 78.539...
-
-# Beberapa instance independen satu sama lain
-let p1 = Point(1.0, 2.0)
-let p2 = Point(10.0, 20.0)
-print(p1.x)   # 1.0
-print(p2.x)   # 10.0
-```
-
----
-
-## 9. Enum
-
-`enum` mendefinisikan sekumpulan konstanta bernama dengan nilai integer otomatis mulai dari `0`.
+`enum` dikompilasi sebagai dictionary. Member mendapatkan nilai ordinal otomatis dimulai dari `0`, atau nilai eksplisit:
 
 ```flux
-enum Color:
-    Red     # 0
-    Green   # 1
-    Blue    # 2
+enum Warna:
+    MERAH
+    HIJAU
+    BIRU
 
-print(Color.Red)    # 0
-print(Color.Green)  # 1
-print(Color.Blue)   # 2
+print(Warna.MERAH)   # 0
+print(Warna.BIRU)    # 2
 
-# Nilai enum adalah integer — bisa dibandingkan langsung
-print(Color.Red == 0)   # true
+enum Status:
+    AKTIF   = 1
+    NONAKTIF = 0
+    PENDING  = 2
 
-# Gunakan enum dalam match
-func color_name(c):
-    match c:
-        0: return "Red"
-        1: return "Green"
-        2: return "Blue"
-        _: return "Unknown"
-
-print(color_name(Color.Blue))   # Blue
-
-# Enum lebih besar
-enum Direction:
-    North   # 0
-    South   # 1
-    East    # 2
-    West    # 3
-
-func is_horizontal(dir):
-    return dir == Direction.East or dir == Direction.West
-
-print(is_horizontal(Direction.East))    # true
-print(is_horizontal(Direction.North))   # false
-```
-
----
-
-## 10. Async / Await / Coroutine
-
-Flux mendukung pemrograman asinkron dengan `async`, `await`, `spawn`, dan `yield`.
-
-```flux
-import aio
-
-# Fungsi async dasar
-async func sapa(nama):
-    return "Halo, " + nama + "!"
-
-# await dapat digunakan di top-level script maupun dalam fungsi async
-let r = await sapa("Flux")
-print(r)   # Halo, Flux!
-
-# Rantai await
-async func kuadrat(n):
-    return n * n
-
-async func pitagoras(a, b):
-    a2 = await kuadrat(a)
-    b2 = await kuadrat(b)
-    return a2 + b2
-
-print(await pitagoras(3, 4))   # 25
-
-# spawn — jalankan coroutine secara concurrent, dapatkan handle
-async func tugas(nama, tunda_ms):
-    await aio.sleep(tunda_ms)
-    return nama
-
-let hA = spawn tugas("A", 120)
-let hB = spawn tugas("B", 30)
-let hC = spawn tugas("C", 70)
-
-# B selesai dulu (30ms), lalu C (70ms), lalu A (120ms)
-let rA = await hA
-let rB = await hB
-let rC = await hC
-print(rA, rB, rC)   # A B C (nilai return tetap urut sesuai handle)
-
-# yield — cooperative multitasking manual
-async func producer():
-    yield
-    return "done"
-
-# aio.gather — fan-out bersamaan, hasil urut sesuai input
-async func kerja(n):
-    await aio.sleep(10)
-    return n * 10
-
-results = await aio.gather([kerja(1), kerja(2), kerja(3)])
-print(results)   # [10, 20, 30]
-
-# aio.read_file / aio.write_file — I/O non-blocking
-await aio.write_file("/tmp/test.txt", "hello flux")
-isi = await aio.read_file("/tmp/test.txt")
-print(isi)   # hello flux
+print(Status.AKTIF)  # 1
 ```
 
 ---
@@ -1043,1786 +539,756 @@ print(isi)   # hello flux
 ## 11. Penanganan Error (try / catch / finally / raise)
 
 ```flux
-# try / catch dasar
 try:
-    raise "Sesuatu salah"
+    hasil = 10 / 0
 catch e:
-    print("Tertangkap:", e)
-
-# catch tanpa variabel
-try:
-    raise "diabaikan"
-catch:
-    print("Error tertangkap (tanpa variabel)")
-
-# try / finally (selalu dijalankan)
-try:
-    x = 10
+    print(f"Error: {e.message}")
 finally:
-    print("Finally selalu jalan")
+    print("Selalu dieksekusi")
 
-# try / catch / finally (keduanya)
-try:
-    raise "combo"
-catch e:
-    print("Caught:", e)
-finally:
-    print("Finally juga jalan")
+# Melempar error
+func validasi(n):
+    if n < 0:
+        raise ValueError("Nilai tidak boleh negatif")
+    return n
+```
 
-# Kelas Error bawaan
-try:
-    raise Error("pesan error kustom")
-catch e:
-    print("Error.message:", e.message)
+### Hierarki Error Bawaan
 
-# TypeError
-try:
-    raise TypeError("tipe salah")
-catch e:
-    print("TypeError.message:", e.message)
-
-# Nested try/catch
-try:
-    try:
-        raise "level 2"
-    catch e:
-        print("Inner caught:", e)
-        raise "re-raise ke luar"
-catch e:
-    print("Outer caught:", e)
-
-# bare raise — re-raise error yang sedang ditangani
-try:
-    try:
-        raise "original"
-    catch:
-        raise   # re-raise 'original'
-catch e:
-    print(e)   # original
-
-# return di dalam finally mengoverride exception
-func test():
-    try:
-        raise "akan ditindas"
-    finally:
-        return "finally menang"
-
-print(test())   # finally menang
+```
+Error
+├── TypeError
+├── ValueError
+├── IndexError
+├── KeyError
+├── RuntimeError
+├── IOError
+└── NameError
 ```
 
 ---
 
-## 12. Sistem Import Modul
+## 12. Match
 
-Flux mendukung beberapa gaya import modul:
+`match` membandingkan subjek dengan serangkaian pola menggunakan `==`. Mendukung guard (`if`) dan pola wildcard `_`:
 
 ```flux
-# import modul — akses via namespace
-import mathutils
-
-print(mathutils.square(5))   # 25
-print(mathutils.PI_APPROX)   # 3.14
-
-# import dengan alias
-import greeter as g
-print(g.greet("Flux"))
-
-# from import — import nama tertentu
-from mathutils import square, cube
-print(square(4))   # 16
-print(cube(3))     # 27
-
-# from import dengan alias
-from mathutils import square as sq, PI_APPROX as pi
-print(sq(5))   # 25
-print(pi)      # 3.14
-
-# from import * — import semua nama top-level
-from mathutils import *
-print(square(6))   # 36
+match nilai:
+    1:
+        print("satu")
+    2:
+        print("dua")
+    _:
+        print("lainnya")
 ```
 
-**Aturan resolusi modul:**
-- `import <name>` mencari `<name>.flx` di direktori file yang mengimpor, lalu di current working directory.
-- Modul yang sudah diimpor di-cache — import kedua tidak menjalankan ulang kode modul.
-- Modul standard library (lihat bagian berikut) diload dari `stdlib/`.
-
----
-
-## 13. Standard Library
-
-Modul stdlib di-load secara *lazy* saat pertama kali diimport.
-
-### math
+### Guard
 
 ```flux
-from math import sqrt, pow, floor, ceil, abs, sin, cos, tan, log, log2, exp
-from math import pi, tau, inf
-from math import isnan, isinf, gcd, degrees, radians
-
-print(sqrt(16))       # 4.0
-print(pow(2, 10))     # 1024.0
-print(floor(3.9))     # 3
-print(ceil(3.1))      # 4
-print(log2(8))        # 3.0
-print(degrees(3.14159265358979 / 2))  # 90
-print(gcd(12, 8))     # 4
-print(pi)             # 3.14159
-print(tau)            # 6.28319
-print(isinf(inf))     # true
+match x:
+    n if n < 0:
+        print("negatif")
+    n if n == 0:
+        print("nol")
+    _:
+        print("positif")
 ```
 
-### io
+### Struct Destructuring
 
 ```flux
-from io import write, writeln, read_file, write_file, append_file
-
-write("tanpa newline: ")
-writeln("dengan newline")
-write_file("/tmp/test.txt", "isi file\n")
-append_file("/tmp/test.txt", "baris tambahan\n")
-isi = read_file("/tmp/test.txt")
-print(isi)
-```
-
-### json
-
-```flux
-from json import encode, decode
-
-data = {"nama": "Flux", "nilai": [1, 2, 3], "aktif": true}
-s = encode(data)
-print(s)   # {"aktif":true,"nama":"Flux","nilai":[1,2,3]}
-
-balik = decode(s)
-print(balik["nama"])      # Flux
-print(balik["nilai"][0])  # 1
-```
-
-### os
-
-```flux
-from os import getcwd, path_exists, path_join, path_basename, is_file, sep
-
-print(getcwd())                          # /home/user/myproject
-print(path_exists("/tmp"))               # true
-print(path_join("/tmp", "file.txt"))     # /tmp/file.txt
-print(path_basename("/tmp/file.txt"))    # file.txt
-print(is_file("/tmp/file.txt"))          # true/false
-print(sep)                               # /
-```
-
-### sys
-
-```flux
-from sys import platform, version, argv
-
-print(platform)  # linux
-print(version)   # 0.1.0
-print(argv)      # [nama_script.flx, ...]
-```
-
-### time
-
-```flux
-from time import now, clock, format as fmt
-
-t = now()
-print(t)          # timestamp (float, detik sejak epoch)
-print(clock())    # CPU time (float, detik)
-print(fmt(t))     # "2026-07-18 16:00:00" (format ISO)
-```
-
-### fs
-
-```flux
-from fs import exists, size, remove
-
-print(exists("/tmp/test.txt"))   # true
-print(size("/tmp/test.txt"))     # ukuran dalam byte
-remove("/tmp/test.txt")
-print(exists("/tmp/test.txt"))   # false
-```
-
-### aio (async I/O)
-
-```flux
-import aio
-
-await aio.sleep(100)           # tidur 100ms (non-blocking)
-await aio.write_file("/tmp/x.txt", "data")
-isi = await aio.read_file("/tmp/x.txt")
-results = await aio.gather([task1, task2, task3])
-handle = await aio.create_task(coroutine)
-```
-
-### Built-in Global
-
-Berikut fungsi yang tersedia tanpa import:
-
-```flux
-# Tipe & konversi
-type(val)          # kembalikan string nama tipe
-int(val)           # konversi ke int
-float(val)         # konversi ke float
-str(val)           # konversi ke string
-repr(val)          # representasi debug
-
-# Koleksi
-len(val)           # panjang string/list/dict/objek
-range(n)           # list [0..n-1]
-range(a, b)        # list [a..b-1]
-map(lst, fn)       # terapkan fn ke setiap elemen
-filter(lst, fn)    # elemen yang fn(x) == true
-reduce(lst, fn)    # lipat list jadi satu nilai
-reduce(lst, fn, init)
-
-# Utilitas list
-sorted(lst)               # list terurut naik
-sorted(lst, comparator)   # sort dengan fungsi pembanding
-reversed(lst)             # list terbalik
-sum(lst)                  # jumlah semua elemen
-min(lst) / min(a,b,...)   # nilai terkecil
-max(lst) / max(a,b,...)   # nilai terbesar
-zip(lst1, lst2)           # gabungkan dua list jadi list pasangan
-enumerate(lst)            # list [indeks, nilai]
-
-# Numerik
-abs(x)            # nilai absolut
-round(x)          # pembulatan
-round(x, n)       # pembulatan ke n desimal
-any(lst)          # true jika ada elemen truthy
-all(lst)          # true jika semua elemen truthy
-
-# Objek & atribut
-has_attr(obj, name)          # cek apakah obj punya atribut
-get_attr(obj, name)          # ambil atribut
-get_attr(obj, name, default) # dengan nilai default
-set_attr(obj, name, val)     # set atribut
-attrs(obj)                   # list nama semua atribut
-assert(cond, msg)            # error jika cond false
-print(...)                   # cetak ke stdout
+match titik:
+    Titik(x=0, y=0):
+        print("asal-usul")
+    Titik(x=px, y=py):
+        print(f"di ({px}, {py})")
 ```
 
 ---
 
-## 14. Modul Socket
+## 13. Async / Await / Spawn
 
-Modul `socket` menyediakan TCP, UDP, dan raw socket. Semua fungsi mengembalikan dict `{ok: bool, error: string, ...}` sehingga error selalu terlihat — tidak ada hang diam-diam, SIGPIPE, atau segfault.
+Flux memiliki runtime async berbasis **libuv** dengan coroutine.
 
-**Prinsip keamanan bawaan:**
-- Timeout default 30 detik pada setiap socket (bisa diubah dengan `set_timeout`)
-- `tcp_accept` menggunakan `select()` — tidak pernah hang selamanya
-- `send`/`sendto` menggunakan `MSG_NOSIGNAL` — tidak dibunuh saat remote tutup koneksi
-- Buffer size dibatasi 64 MB
-- Setiap syscall dicek hasilnya dan error dilaporkan lewat field `error`
+```flux
+async func ambil_data(url):
+    import http
+    resp = await http.get(url)
+    return resp["body"]
 
-### TCP Client
+async func main():
+    data = await ambil_data("https://api.example.com/data")
+    print(data)
+
+# Jalankan coroutine tanpa menunggu hasilnya (fire-and-forget)
+task = spawn ambil_data("https://api.example.com/other")
+
+# Tunggu task selesai
+hasil = await task
+```
+
+### yield (Generator)
+
+```flux
+async func generator():
+    yield 1
+    yield 2
+    yield 3
+```
+
+---
+
+## 14. Sistem Import Modul
+
+```flux
+# Import seluruh modul
+import math
+import os
+
+print(math.sqrt(16))
+print(os.getcwd())
+
+# Import dengan alias
+import json as j
+data = j.decode('{"a": 1}')
+
+# Import nama tertentu
+from math import sin, cos
+from os import getcwd, listdir
+
+print(sin(0))
+```
+
+Modul di-load secara **lazy** saat pertama kali diimpor. VM mencari modul di:
+1. Modul built-in (selalu tersedia tanpa import)
+2. `stdlib/<name>/lib<name>.so` — modul standard library
+3. `extension/<name>/lib<name>.so` — ekstensi native
+4. Direktori paket yang terinstal
+
+---
+
+## 15. Built-in Functions
+
+Fungsi berikut selalu tersedia tanpa `import`:
+
+### I/O
+
+| Fungsi | Keterangan |
+|--------|-----------|
+| `print(...)` | Cetak dengan newline |
+| `println(...)` | Alias `print` |
+| `write(...)` | Cetak tanpa newline |
+| `input(prompt)` | Baca satu baris dari stdin |
+
+### Konversi Tipe
+
+| Fungsi | Keterangan |
+|--------|-----------|
+| `int(x)` | Konversi ke integer |
+| `float(x)` | Konversi ke float |
+| `str(x)` | Konversi ke string |
+| `bool(x)` | Konversi ke boolean |
+
+### Inspeksi & Informasi
+
+| Fungsi | Keterangan |
+|--------|-----------|
+| `type(x)` | Nama tipe sebagai string |
+| `repr(x)` | Representasi string yang dapat dibaca |
+| `id(x)` | Identitas objek (pointer) |
+| `len(x)` | Panjang string/list/dict |
+
+### Sequence & Iterasi
+
+| Fungsi | Keterangan |
+|--------|-----------|
+| `range(n)` / `range(start,stop,step)` | Menghasilkan list integer |
+| `enumerate(list, start=0)` | Pasangan (indeks, nilai) |
+| `zip(list1, list2, ...)` | Gabungkan beberapa list |
+| `sorted(list, key=null, reverse=false)` | Mengurutkan list |
+| `reversed(list)` | Membalik urutan list |
+| `any(list)` | `true` jika ada elemen truthy |
+| `all(list)` | `true` jika semua elemen truthy |
+| `min(...)` | Nilai minimum |
+| `max(...)` | Nilai maksimum |
+| `sum(list)` | Total penjumlahan |
+
+### Fungsional
+
+| Fungsi | Keterangan |
+|--------|-----------|
+| `map(list, func)` | Terapkan fungsi ke setiap elemen |
+| `filter(list, func)` | Filter elemen dengan fungsi predikat |
+| `reduce(list, func, initial?)` | Kumulasikan dengan fungsi biner |
+
+### Matematika
+
+| Fungsi | Keterangan |
+|--------|-----------|
+| `abs(x)` | Nilai absolut |
+| `round(x, digits=0)` | Pembulatan |
+
+### Introspeksi Objek
+
+| Fungsi | Keterangan |
+|--------|-----------|
+| `has_attr(obj, name)` | Cek apakah objek punya atribut |
+| `get_attr(obj, name, default?)` | Ambil atribut dengan nama string |
+| `set_attr(obj, name, value)` | Set atribut dengan nama string |
+| `isinstance(obj, class)` | Cek tipe instance |
+| `is_callable(x)` | Cek apakah bisa dipanggil |
+| `attrs(obj)` | Daftar atribut objek |
+
+### Lainnya
+
+| Fungsi | Keterangan |
+|--------|-----------|
+| `exit(code=0)` | Keluar dari program |
+| `sleep(detik)` | Jeda eksekusi |
+| `assert(cond, msg?)` | Lempar error jika kondisi gagal |
+
+---
+
+## 16. Built-in Type Methods
+
+### String Methods
+
+```flux
+s = "Hello, World!"
+
+s.upper()          # "HELLO, WORLD!"
+s.lower()          # "hello, world!"
+s.trim()           # hapus spasi di awal dan akhir
+s.split(", ")      # ["Hello", "World!"]
+", ".join(list)    # gabungkan list menjadi string
+s.len()            # panjang string (sama dengan len(s))
+```
+
+### List Methods
+
+List mendukung operasi dinamis lengkap — `append`, `pop`, `insert`, `remove`, dan lainnya tersedia melalui metode objek.
+
+### Dict Methods
+
+Dict mendukung `keys()`, `values()`, `items()`, dan lainnya untuk iterasi.
+
+---
+
+## 17. Standard Library
+
+Semua modul di-load secara lazy dengan `import <nama>`.
+
+### `math`
+
+```flux
+import math
+
+math.sin(x)        math.cos(x)        math.tan(x)
+math.asin(x)       math.acos(x)       math.atan(x)
+math.atan2(y, x)
+math.sqrt(x)       math.cbrt(x)       math.pow(x, y)
+math.exp(x)        math.log(x)        math.log2(x)       math.log10(x)
+math.floor(x)      math.ceil(x)       math.round(x)      math.trunc(x)
+math.abs(x)        math.min(a, b)     math.max(a, b)
+math.hypot(x, y)
+math.degrees(r)    math.radians(d)
+math.pi            math.e
+```
+
+### `fs`
+
+```flux
+import fs
+
+fs.read(path)                  # baca file sebagai string
+fs.write(path, data)           # tulis string ke file
+fs.append(path, data)          # tambahkan ke file
+fs.exists(path)                # bool
+fs.size(path)                  # ukuran dalam byte
+fs.remove(path)                # hapus file
+fs.rename(src, dst)            # rename/pindahkan file
+fs.is_file(path)               # bool
+fs.is_dir(path)                # bool
+fs.copy(src, dst)              # salin file
+```
+
+### `os`
+
+```flux
+import os
+
+os.getenv(name)                # ambil environment variable
+os.getcwd()                    # direktori kerja saat ini
+os.chdir(path)                 # ganti direktori kerja
+os.listdir(path)               # daftar isi direktori
+os.mkdir(path)                 # buat direktori
+os.remove(path)                # hapus file/direktori
+os.rename(src, dst)
+os.path_join(a, b, ...)        # gabungkan path
+os.path_exists(path)
+os.path_basename(path)
+os.path_dirname(path)
+os.is_file(path)
+os.is_dir(path)
+os.sep                         # pemisah path ("/" di Unix)
+```
+
+### `json`
+
+```flux
+import json
+
+teks  = json.encode({"a": 1, "b": [2, 3]})   # dict/list → JSON string
+data  = json.decode('{"a": 1}')               # JSON string → dict/list
+```
+
+### `time`
+
+```flux
+import time
+
+time.now()                     # timestamp Unix (float, detik)
+time.sleep(detik)              # jeda (float boleh)
+time.clock()                   # CPU time (float)
+time.monotonic()               # monotonic clock (float)
+time.format(ts, fmt)           # format timestamp ke string
+time.parse(str, fmt)           # parse string ke timestamp
+```
+
+### `io`
+
+```flux
+import io
+
+io.write(str)                  # tulis ke stdout tanpa newline
+io.writeln(str)                # tulis ke stdout dengan newline
+io.read_line()                 # baca satu baris dari stdin
+io.read_file(path)             # baca file sebagai string
+io.write_file(path, data)      # tulis string ke file
+io.append_file(path, data)     # tambahkan ke file
+io.print_err(str)              # tulis ke stderr
+io.flush()                     # flush stdout
+```
+
+### `sys`
+
+```flux
+import sys
+
+sys.exit(code)                 # keluar program
+sys.stdin_read()               # baca seluruh stdin
+sys.stdout_write(str)          # tulis ke stdout
+```
+
+### `shell`
+
+```flux
+import shell
+
+shell.exec(cmd)                # jalankan perintah shell, tampilkan output
+shell.capture(cmd)             # jalankan, kembalikan {stdout, stderr, code}
+shell.spawn(cmd, args)         # spawn proses, kembalikan handle
+shell.pipe(cmds)               # pipeline beberapa perintah
+```
+
+### `socket`
 
 ```flux
 import socket
 
-# Buka koneksi TCP
-r = socket.tcp_connect("example.com", 80)
-if not r["ok"]:
-    print("Gagal: " + r["error"])
-else:
-    fd = r["fd"]
-
-    # Kirim request HTTP
-    req = "GET / HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n\r\n"
-    sent = socket.send(fd, req)
-    print("Terkirim: " + str(sent["nbytes"]) + " byte")
-
-    # Terima semua response hingga koneksi ditutup
-    resp = socket.recv_all(fd)
-    print("Diterima: " + str(resp["nbytes"]) + " byte")
-    print(resp["data"])
-
-    socket.close(fd)
-```
-
-### TCP Server
-
-```flux
-import socket
-
+# TCP
 srv = socket.tcp_listen("0.0.0.0", 8080)
-if not srv["ok"]:
-    print("listen gagal: " + srv["error"])
-else:
-    print("Server berjalan di port 8080")
+conn = socket.tcp_accept(srv)
+data = socket.tcp_recv(conn, 1024)
+socket.tcp_send(conn, "response")
+socket.close(conn)
+socket.close(srv)
 
-    while true:
-        # Tunggu koneksi masuk (timeout 60 detik)
-        client = socket.tcp_accept(srv["fd"], 60)
-        if not client["ok"]:
-            print("timeout atau error: " + client["error"])
-            break
+# UDP
+sock = socket.udp_socket()
+socket.udp_bind(sock, "0.0.0.0", 9000)
+socket.udp_sendto(sock, "data", "1.2.3.4", 9000)
+data, addr = socket.udp_recvfrom(sock, 1024)
 
-        print("Koneksi dari " + client["addr"] + ":" + str(client["port"]))
+# Raw socket
+raw = socket.raw_socket(proto)
+socket.raw_sendto(raw, data, addr)
+socket.raw_recv(raw, size)
 
-        # Terima data
-        data = socket.recv(client["fd"], 4096)
-        if data["ok"] and data["nbytes"] > 0:
-            print("Data: " + data["data"])
-            socket.send(client["fd"], "Halo dari Flux!\r\n")
-
-        socket.close(client["fd"])
-
-    socket.close(srv["fd"])
+# Utilitas
+ip = socket.resolve("hostname")    # DNS resolve
+socket.set_timeout(sock, ms)
+socket.set_nonblocking(sock)
+socket.set_reuseaddr(sock)
+socket.shutdown(sock, how)
+socket.getpeername(sock)
+socket.getsockname(sock)
+socket.select(reads, writes, timeout)
 ```
 
-### UDP
+### `native` (FFI)
 
-```flux
-import socket
-
-# UDP sender
-s = socket.udp_socket()
-socket.udp_sendto(s["fd"], "ping", "127.0.0.1", 5005)
-socket.close(s["fd"])
-
-# UDP receiver
-r = socket.udp_socket()
-socket.udp_bind(r["fd"], "0.0.0.0", 5005)
-pkt = socket.udp_recvfrom(r["fd"], 1024)
-if pkt["ok"]:
-    print("Dari " + pkt["addr"] + ":" + str(pkt["port"]) + " → " + pkt["data"])
-socket.close(r["fd"])
-```
-
-### Raw Socket
-
-```flux
-import socket
-
-# Butuh CAP_NET_RAW atau root
-raw = socket.raw_socket(socket.IPPROTO_ICMP)
-if not raw["ok"]:
-    print("Gagal: " + raw["error"])   # biasanya "Operation not permitted"
-else:
-    fd = raw["fd"]
-    # Kirim paket ICMP (header IP sudah termasuk karena IP_HDRINCL aktif)
-    socket.raw_sendto(fd, paket_bytes, "8.8.8.8")
-
-    # Terima — hasil termasuk IP header
-    pkt = socket.raw_recv(fd, 65535)
-    if pkt["ok"]:
-        print("Dari: " + pkt["src_addr"] + " (" + str(pkt["nbytes"]) + " byte)")
-    socket.close(fd)
-```
-
-### Utilitas
-
-```flux
-import socket
-
-# Resolve hostname ke IPv4
-ip = socket.resolve("google.com")
-print(ip)   # "142.250.x.x"
-
-# Periksa beberapa fd sekaligus (non-blocking)
-ready_fds = socket.select([fd1, fd2, fd3], 5)   # timeout 5 detik
-
-# Ubah timeout
-socket.set_timeout(fd, 10)          # 10 detik
-
-# Non-blocking mode (recv kembalikan error EAGAIN jika belum ada data)
-socket.set_nonblocking(fd, true)
-
-# Tutup dengan bersih
-socket.shutdown(fd, socket.SHUT_RDWR)
-socket.close(fd)
-```
-
-### Referensi Fungsi
-
-| Fungsi | Deskripsi | Nilai kembalian |
-|--------|-----------|-----------------|
-| `tcp_connect(host, port [, timeout])` | Buka koneksi TCP | `{ok, fd, error}` |
-| `tcp_listen(host, port [, backlog])` | Buat TCP server | `{ok, fd, error}` |
-| `tcp_accept(fd [, timeout])` | Terima koneksi masuk | `{ok, fd, addr, port, error}` |
-| `send(fd, data)` | Kirim data (loop sampai selesai) | `{ok, nbytes, error}` |
-| `recv(fd, bufsize)` | Terima hingga bufsize byte | `{ok, data, nbytes, error}` |
-| `recv_all(fd [, chunk])` | Terima semua hingga koneksi ditutup | `{ok, data, nbytes, error}` |
-| `udp_socket()` | Buat UDP socket | `{ok, fd, error}` |
-| `udp_bind(fd, host, port)` | Bind UDP ke alamat lokal | `{ok, error}` |
-| `udp_sendto(fd, data, host, port)` | Kirim datagram UDP | `{ok, nbytes, error}` |
-| `udp_recvfrom(fd, bufsize)` | Terima datagram UDP | `{ok, data, nbytes, addr, port, error}` |
-| `raw_socket(protocol)` | Buat raw socket (butuh root) | `{ok, fd, error}` |
-| `raw_sendto(fd, data, host)` | Kirim raw packet | `{ok, nbytes, error}` |
-| `raw_recv(fd, bufsize)` | Terima raw packet + IP header | `{ok, data, nbytes, src_addr, error}` |
-| `close(fd)` | Tutup socket | `bool` |
-| `shutdown(fd, how)` | Shutdown socket | `bool` |
-| `set_timeout(fd, detik)` | Ubah timeout recv/send | `bool` |
-| `set_nonblocking(fd, aktif)` | Aktifkan mode non-blocking | `bool` |
-| `set_reuseaddr(fd, aktif)` | Aktifkan SO_REUSEADDR | `bool` |
-| `resolve(host)` | DNS lookup ke IPv4 | `string \| null` |
-| `getpeername(fd)` | Alamat remote | `{ok, addr, port, error}` |
-| `getsockname(fd)` | Alamat lokal | `{ok, addr, port, error}` |
-| `select(fds, timeout)` | Cek fd mana yang siap dibaca | `list` |
-
-**Konstanta:**
-
-| Nama | Nilai | Keterangan |
-|------|-------|------------|
-| `IPPROTO_ICMP` | 1 | Protocol ICMP (ping) |
-| `IPPROTO_TCP` | 6 | Protocol TCP |
-| `IPPROTO_UDP` | 17 | Protocol UDP |
-| `IPPROTO_RAW` | 255 | Raw IP |
-| `SHUT_RD` | 0 | Shutdown sisi read |
-| `SHUT_WR` | 1 | Shutdown sisi write |
-| `SHUT_RDWR` | 2 | Shutdown keduanya |
+Lihat [Bagian 19](#19-ffi--panggil-library-c-native).
 
 ---
 
-## 15. Modul MySQL
+## 18. Ekstensi Native
 
-Modul `mysql` menghubungkan Flux ke database MySQL atau MariaDB via **MariaDB Connector/C**. Tipe data kolom otomatis dikonversi — integer jadi `int`, DECIMAL/FLOAT jadi `float`, NULL jadi `null`, sisanya jadi `string`.
+Modul-modul ini memerlukan library sistem eksternal dan di-build terpisah.
 
-### Koneksi
+### `http` — HTTP Client + Server
 
-```flux
-import mysql
-
-conn = mysql.connect("host", "user", "password", "database")      # port default 3306
-conn = mysql.connect("host", "user", "password", "database", 3306) # port eksplisit
-```
-
-### SELECT (query)
-
-```flux
-rows = mysql.query(conn, "SELECT id, nama, saldo FROM users WHERE aktif = 1")
-
-i = 0
-while i < len(rows):
-    r = rows[i]
-    print(r["nama"] + " - saldo: " + str(r["saldo"]))
-    i += 1
-```
-
-### INSERT / UPDATE / DELETE (exec)
-
-```flux
-# Mengembalikan jumlah baris yang terpengaruh
-n = mysql.exec(conn, "INSERT INTO users (nama, umur) VALUES ('Budi', 25)")
-id_baru = mysql.insert_id(conn)   # AUTO_INCREMENT id dari INSERT terakhir
-print("Baris baru id=" + str(id_baru))
-
-n = mysql.exec(conn, "UPDATE users SET aktif = 0 WHERE umur < 18")
-print("Diupdate: " + str(n) + " baris")
-
-n = mysql.exec(conn, "DELETE FROM users WHERE aktif = 0")
-print("Dihapus: " + str(n) + " baris")
-```
-
-### Escape (cegah SQL injection)
-
-```flux
-# SELALU gunakan escape untuk data dari input user
-input_user = "O'Brien; DROP TABLE users --"
-aman = mysql.escape(conn, input_user)
-rows = mysql.query(conn, "SELECT * FROM users WHERE nama = '" + aman + "'")
-```
-
-### Contoh lengkap
-
-```flux
-import mysql
-
-conn = mysql.connect("sql12.freesqldatabase.com", "user", "pass", "dbname", 3306)
-
-# Buat tabel
-mysql.exec(conn, "CREATE TABLE IF NOT EXISTS produk (
-    id    INT AUTO_INCREMENT PRIMARY KEY,
-    nama  VARCHAR(100) NOT NULL,
-    harga DOUBLE,
-    stok  INT DEFAULT 0
-)")
-
-# Tambah data
-mysql.exec(conn, "INSERT INTO produk (nama, harga, stok) VALUES ('Buku Flux', 75000.0, 50)")
-mysql.exec(conn, "INSERT INTO produk (nama, harga, stok) VALUES ('Kaos Flux', 120000.0, 30)")
-
-# Baca data
-produk = mysql.query(conn, "SELECT * FROM produk ORDER BY harga")
-i = 0
-while i < len(produk):
-    p = produk[i]
-    print(p["nama"] + " — Rp" + str(p["harga"]) + " (stok: " + str(p["stok"]) + ")")
-    i += 1
-
-# Cek koneksi masih hidup
-print("Koneksi ok: " + str(mysql.ping(conn)))
-
-mysql.close(conn)
-```
-
-### Referensi Fungsi
-
-| Fungsi | Deskripsi | Kembalian |
-|--------|-----------|-----------|
-| `connect(host, user, pass, db [, port])` | Buka koneksi | connection handle |
-| `query(conn, sql)` | Jalankan SELECT | `list` of `dict` |
-| `exec(conn, sql)` | Jalankan INSERT/UPDATE/DELETE/DDL | `int` (affected rows) |
-| `insert_id(conn)` | AUTO_INCREMENT id dari INSERT terakhir | `int` |
-| `escape(conn, str)` | Escape string untuk query aman | `string` |
-| `ping(conn)` | Cek koneksi masih hidup | `bool` |
-| `close(conn)` | Tutup koneksi | `null` |
-
-**Konversi tipe otomatis:**
-
-| Tipe MySQL | Tipe Flux |
-|------------|-----------|
-| TINYINT, SMALLINT, INT, BIGINT, YEAR | `int` |
-| FLOAT, DOUBLE, DECIMAL, NUMERIC | `float` |
-| NULL | `null` |
-| VARCHAR, TEXT, CHAR, DATE, DATETIME, BLOB, ENUM, dll | `string` |
-
----
-
-## 16. Modul HTTP
-
-Modul `http` menyediakan **HTTP/1.1 client** (berbasis libcurl) dan **HTTP server** (raw POSIX socket).
-
-```flux
-import http
-```
-
----
-
-### 16.1 Batasan & Aturan Penting
-
-| # | Aturan |
-|---|--------|
-| 1 | **HTTP dan HTTPS didukung.** Client menerima URL `http://` dan `https://`. URL dengan skema lain (`ftp://`, `file://`, dll.) langsung mengembalikan `ok=false` tanpa melakukan koneksi. |
-| 2 | **TLS diverifikasi.** Sertifikat server divalidasi secara default. Koneksi ke server dengan sertifikat tidak valid menghasilkan `ok=false`. |
-| 3 | **Server single-threaded.** `http.accept` memblok sampai ada request masuk; hanya satu request ditangani sekaligus. Gunakan `spawn` Flux untuk konkurensi. |
-| 4 | **Satu respond atau close per request.** Memanggil `http.respond` atau `http.close_conn` dua kali pada request yang sama menghasilkan runtime error. |
-| 5 | **Selalu respond atau tutup.** Setiap `req` dari `http.accept` **harus** direspons dengan `http.respond` atau ditutup dengan `http.close_conn`. Tidak melakukan keduanya menyebabkan kebocoran file descriptor. |
-| 6 | **Ukuran header request dibatasi 64 KB.** Jika melebihi, koneksi client ditutup dan `http.accept` melanjutkan ke koneksi berikutnya. |
-| 7 | **Ukuran body dibatasi 64 MB** untuk client dan server. |
-| 8 | **Content-Length request > 64 MB ditolak sebelum alokasi** — tidak ada risiko OOM. |
-| 9 | **Koneksi TCP non-HTTP diabaikan otomatis** — server menutupnya dan menunggu koneksi berikutnya tanpa mengembalikan `null`. |
-| 10 | **`http.close(srv)` harus dipanggil** saat server sudah tidak diperlukan untuk melepas file descriptor. |
-
----
-
-### 16.2 HTTP Client
-
-#### 16.2.1 Fungsi-fungsi Client
-
-Semua fungsi client bersifat **sinkron** (memblok hingga response diterima atau timeout).
-
----
-
-**`http.get(url [, headers [, timeout_sec]])`**
-
-Kirim HTTP GET. `headers` adalah dict string→string (opsional). `timeout_sec` adalah int (opsional).
+**Client:**
 
 ```flux
 import http
 
-# GET dasar
-r = http.get("https://api.example.com/users")
-
-# Dengan header custom
-r = http.get("https://api.example.com/users",
-    {"Authorization": "Bearer eyJhbGci...", "Accept": "application/json"})
-
-# Dengan timeout 10 detik
-r = http.get("https://api.example.com/users", {}, 10)
-```
-
----
-
-**`http.post(url, body [, headers [, timeout_sec]])`**
-
-Kirim HTTP POST dengan body string.
-
-```flux
-# POST JSON
-r = http.post("https://api.example.com/users",
-    '{"nama": "Budi", "umur": 25}',
-    {"Content-Type": "application/json"})
-
-# POST form-encoded
-r = http.post("https://api.example.com/login",
-    "username=budi&password=rahasia",
-    {"Content-Type": "application/x-www-form-urlencoded"})
-```
-
----
-
-**`http.put(url, body [, headers [, timeout_sec]])`**
-
-Kirim HTTP PUT dengan body string. Signature identik dengan `http.post`.
-
----
-
-**`http.patch(url, body [, headers [, timeout_sec]])`**
-
-Kirim HTTP PATCH dengan body string. Signature identik dengan `http.post`.
-
----
-
-**`http.delete(url [, headers [, timeout_sec]])`**
-
-Kirim HTTP DELETE tanpa body.
-
-```flux
-r = http.delete("https://api.example.com/users/42")
-print(r["status"])   # 204
-```
-
----
-
-**`http.request(method, url [, body [, headers [, timeout_sec]]])`**
-
-Kirim request dengan HTTP method bebas. `method` dikonversi ke uppercase secara otomatis.
-
-```flux
-r = http.request("OPTIONS", "https://api.example.com/users", "", {})
-r = http.request("HEAD",    "https://api.example.com/posts/1", "", {})
-r = http.request("PURGE",   "https://cache.internal/path", "", {})
-```
-
----
-
-#### 16.2.2 Nilai Return Client
-
-Semua fungsi client mengembalikan **dict** dengan field berikut:
-
-| Field | Tipe | Keterangan |
-|-------|------|-----------|
-| `ok` | bool | `true` jika koneksi dan HTTP exchange berhasil; `false` jika gagal (timeout, DNS gagal, TLS error, skema tidak valid, dll.) |
-| `status` | int | HTTP status code (200, 404, 500, …); `0` jika `ok=false` |
-| `headers` | dict | Header response; semua **key lowercase** |
-| `body` | string | Response body (kosong jika `ok=false` atau tidak ada body) |
-| `error` | string | Pesan error dari libcurl jika `ok=false`; string kosong jika `ok=true` |
-
-> **Penting:** `ok=true` hanya berarti komunikasi HTTP berhasil — bukan bahwa status 2xx. Response 404 atau 500 tetap `ok=true`. Selalu cek `r["status"]`.
-
-```flux
-r = http.get("https://api.example.com/users/999")
-if r["ok"] == false:
-    print("Gagal: " + r["error"])
-elif r["status"] == 200:
-    print("Data: " + r["body"])
-elif r["status"] == 404:
-    print("Tidak ditemukan")
-else:
-    print("Status tidak terduga: " + str(r["status"]))
-```
-
----
-
-#### 16.2.3 Timeout & Batas
-
-| Parameter | Default | Berlaku untuk |
-|-----------|---------|---------------|
-| Timeout koneksi TCP | **15 detik** | Waktu tunggu hingga koneksi TCP terbentuk |
-| Timeout total transfer | **30 detik** | Batas waktu keseluruhan operasi (termasuk upload body dan download response) |
-| Timeout kustom | argumen `timeout_sec` | Menimpa **kedua** timeout di atas sekaligus |
-| Maksimum redirect | **10 hop** | Lebih dari 10 redirect → `ok=false` |
-| Maksimum body response | **64 MB** | Melebihi batas → `ok=false` |
-
-```flux
-# Semua operasi (connect + transfer) dibatasi 5 detik
-r = http.get("https://api.example.com/slow-endpoint", {}, 5)
-if r["ok"] == false:
-    print("Timeout atau gagal: " + r["error"])
-```
-
----
-
-#### 16.2.4 Redirect
-
-Client mengikuti redirect secara otomatis hingga **10 hop**:
-
-| Kode | Perilaku |
-|------|----------|
-| 301, 302 | Lanjutkan dengan GET (body asli dibuang) — perilaku browser standar |
-| 307, 308 | Lanjutkan dengan **method dan body asli** (sesuai RFC 7231) |
-
-Redirect hanya diizinkan ke `http://` atau `https://`. Redirect ke skema lain (`file://`, `ftp://`, dll.) menyebabkan `ok=false`.
-
----
-
-#### 16.2.5 HTTPS & TLS
-
-- Verifikasi sertifikat **aktif** (`SSL_VERIFYPEER=1`, `SSL_VERIFYHOST=2`).
-- Koneksi ke server dengan sertifikat self-signed atau expired menghasilkan `ok=false`.
-- TLS dikelola sepenuhnya oleh libcurl (OpenSSL); tidak ada konfigurasi tambahan yang diperlukan.
-
-```flux
-# HTTPS bekerja sama seperti HTTP
-r = http.get("https://httpbin.org/get")
+# GET
+r = http.get("https://api.example.com/data")
 print(r["status"])   # 200
+print(r["body"])
+print(r["headers"])
+
+# POST
+r = http.post("https://api.example.com/submit",
+              {"Content-Type": "application/json"},
+              '{"key": "value"}')
+
+# Metode lain: http.put(), http.delete(), http.patch()
+
+# Request penuh
+r = http.request("POST", url, headers, body)
 ```
 
----
-
-#### 16.2.6 Header yang Dikirim Client
-
-Libcurl menambahkan header berikut secara otomatis (kecuali sudah ada di dict `headers` custom):
-
-```
-User-Agent: Flux/1.0
-Host: <host>
-Content-Length: <n>    (hanya jika ada body)
-Expect:                (dikosongkan — menonaktifkan 100-continue pada POST)
-```
-
-Header custom dari argumen `headers` selalu dikirim dan dapat menimpa header default libcurl (kecuali `Expect` yang selalu dikosongkan).
-
----
-
-### 16.3 HTTP Server
-
-#### 16.3.1 Contoh Minimal
+**Server:**
 
 ```flux
 import http
 
 srv = http.listen("0.0.0.0", 8080)
-print("Server berjalan di port 8080")
 
 while true:
-    req = http.accept(srv, 30)
-    if req == null:
-        continue   # timeout, coba lagi
+    req = http.accept(srv, 30)   # timeout 30 detik; null jika timeout
+    if req is null:
+        continue
 
-    if req["path"] == "/ping":
-        http.respond(req, 200, {"Content-Type": "text/plain"}, "pong")
-    else:
-        http.respond(req, 404, {"Content-Type": "text/plain"}, "Not found")
-```
-
----
-
-#### 16.3.2 `http.listen(host, port)` → server handle
-
-Membuat TCP socket, bind ke alamat yang diberikan, dan mulai menerima koneksi.
-
-```flux
-srv = http.listen("0.0.0.0", 8080)    # semua interface, IPv4 + IPv6
-srv = http.listen("127.0.0.1", 9000)  # hanya loopback IPv4
-srv = http.listen("::", 8080)          # wildcard IPv6 dual-stack
-```
-
-**Parameter:**
-- `host` — string IP atau hostname. `"0.0.0.0"` dan `"::"` berarti semua interface. DNS di-resolve otomatis.
-- `port` — int, **1–65535**. Nilai di luar range menghasilkan runtime error.
-
-**Perilaku:**
-- Mencoba socket IPv6 dual-stack terlebih dahulu (`IPV6_V6ONLY=0` — menerima koneksi IPv4 dan IPv6 lewat satu socket), fallback ke IPv4 jika tidak tersedia.
-- `SO_REUSEADDR` diset — port bisa langsung dipakai ulang setelah restart tanpa menunggu TIME_WAIT.
-- `SO_REUSEPORT` diset jika sistem mendukung.
-- Backlog listen queue = **256**.
-- Gagal bind menghasilkan **runtime error** (bukan return nilai); pastikan port tidak dipakai proses lain.
-
-**Return:** opaque server handle. Jangan akses field internal handle ini.
-
----
-
-#### 16.3.3 `http.accept(server [, timeout_sec])` → dict | null
-
-Menunggu satu request HTTP masuk. Memblok hingga ada request atau timeout.
-
-```flux
-req = http.accept(srv)       # tunggu tanpa batas (default 30 detik)
-req = http.accept(srv, 5)    # tunggu maks 5 detik
-
-if req == null:
-    # timeout — tidak ada request masuk
-    continue
-```
-
-**Parameter:**
-- `timeout_sec` — int, opsional. Default: **30 detik**. Waktu tunggu maksimum.
-
-**Return:** dict request jika ada koneksi masuk, `null` jika timeout.
-
-**Perilaku internal:**
-- Koneksi TCP yang bukan HTTP valid (port scanner, koneksi biner, header > 64 KB) dibuang secara senyap; accept melanjutkan ke koneksi berikutnya.
-- `Content-Length` request yang melebihi 64 MB ditolak; koneksi ditutup, accept melanjutkan.
-- Request dengan `Transfer-Encoding: chunked` di-decode otomatis; Flux menerima body yang sudah tergabung.
-- Timeout membaca header request: **15 detik**. Timeout membaca body request: **30 detik**. Semua diimplementasikan dengan `select()` berbasis deadline absolut — client yang lambat tidak dapat memblok server selamanya.
-- `TCP_NODELAY` diset pada setiap koneksi client yang diterima.
-
----
-
-#### 16.3.4 Field Request Dict
-
-Field yang tersedia di dict `req` dari `http.accept`:
-
-| Field | Tipe | Contoh nilai | Keterangan |
-|-------|------|-------------|------------|
-| `ok` | bool | `true` | Selalu `true` (bukan `null`) |
-| `method` | string | `"GET"`, `"POST"` | HTTP method, selalu uppercase |
-| `path` | string | `"/api/users"` | Path URL; tanpa query string, tanpa fragment |
-| `query` | string | `"page=1&q=flux"` | Query string mentah (bagian setelah `?`). String kosong `""` jika tidak ada query |
-| `body` | string | `'{"nama":"Budi"}'` | Request body; sudah di-decode jika chunked; string kosong jika tidak ada body |
-| `headers` | dict | `{"content-type": "application/json"}` | Header request; semua key **lowercase** |
-| `remote_addr` | string | `"192.168.1.10"` | IP address client. Koneksi IPv4-mapped IPv6 (`::ffff:x.x.x.x`) ditampilkan sebagai IPv4 biasa |
-| `remote_port` | int | `54321` | Port TCP sumber client |
-
-> Field `_fd` (int) juga ada di dict untuk kebutuhan internal; jangan diakses atau diubah.
-
-```flux
-req = http.accept(srv, 30)
-if req != null:
-    print(req["method"])                        # "POST"
-    print(req["path"])                          # "/api/users"
-    print(req["query"])                         # "dry_run=1"
-    print(req["remote_addr"])                   # "203.0.113.5"
-    ct = req["headers"]["content-type"]         # "application/json"
-    auth = req["headers"]["authorization"]      # "Bearer ..."
+    # Data request:
+    # req["method"]   — "GET", "POST", dll.
+    # req["path"]     — "/api/data"
+    # req["query"]    — "?foo=bar"
+    # req["headers"]  — dict
+    # req["body"]     — string
 
     params = http.parse_query(req["query"])
-    dry = params["dry_run"]   # "1" atau null
+    http.respond(req, 200, {"Content-Type": "text/plain"}, "OK")
+
+http.close(srv)
 ```
 
----
-
-#### 16.3.5 `http.respond(req, status, headers, body)` → bool
-
-Mengirim satu HTTP response ke client, lalu menutup koneksi.
+**Utilitas:**
 
 ```flux
-ok = http.respond(req, 200,
-    {"Content-Type": "application/json"},
-    '{"status": "ok"}')
+http.url_encode("hello world")   # "hello%20world"
+http.url_decode("hello%20world") # "hello world"
+http.parse_query("a=1&b=2")      # {"a": "1", "b": "2"}
+http.close_conn(req)             # tutup koneksi tanpa mengirim response
 ```
 
-**Parameter:**
-- `req` — dict dari `http.accept`.
-- `status` — int, HTTP status code (200, 201, 400, 404, 500, …).
-- `headers` — dict string→string, header response custom (boleh dict kosong `{}`).
-- `body` — string, response body.
-
-**Return:** `true` jika response terkirim penuh, `false` jika koneksi putus saat pengiriman.
-
-**Header yang selalu ditambahkan otomatis:**
-
-| Header | Nilai |
-|--------|-------|
-| `Server` | `Flux/1.0` |
-| `Connection` | `close` |
-| `Date` | Waktu UTC saat ini (format RFC 7231) |
-| `Content-Length` | Panjang body efektif yang dikirim |
-| `Content-Type` | `text/plain; charset=utf-8` — **hanya** jika tidak ada di `headers` dan body tidak kosong |
-
-**Body tidak dikirim untuk:**
-- `HEAD` request (header dikirim, body tidak — sesuai RFC 7230 §3.3)
-- Status `204 No Content`
-- Status `304 Not Modified`
-- Status `1xx` (100–199)
-
-Dalam kasus ini `Content-Length: 0` tetap dikirim di header.
-
-**Status code yang dikenali** (reason phrase diisi otomatis): 100–103, 200–208, 226, 300–308, 400–418, 421–426, 428–429, 431, 451, 500–511. Status lain menggunakan reason phrase `"Unknown"`.
-
-```flux
-# 200 OK dengan JSON
-http.respond(req, 200, {"Content-Type": "application/json"}, '{"ok": true}')
-
-# 201 Created dengan Location
-http.respond(req, 201, {"Location": "/api/users/42"}, "")
-
-# 301 Redirect permanen
-http.respond(req, 301, {"Location": "https://example.com/new"}, "")
-
-# 204 No Content (body tidak dikirim meskipun argumen diisi)
-http.respond(req, 204, {}, "")
-
-# 404 Not Found
-http.respond(req, 404, {"Content-Type": "text/plain"}, "Resource tidak ditemukan")
-
-# 500 Internal Server Error
-http.respond(req, 500, {}, "Terjadi kesalahan internal")
-```
-
----
-
-#### 16.3.6 `http.close_conn(req)` → null
-
-Tutup koneksi client **tanpa** mengirim response apapun. Berguna untuk menolak koneksi yang tidak memenuhi syarat sebelum sempat memproses lebih lanjut.
-
-```flux
-req = http.accept(srv, 30)
-if req == null:
-    continue
-
-# Tolak jika bukan HTTPS (contoh: proxy membutuhkan X-Forwarded-Proto)
-proto = req["headers"]["x-forwarded-proto"]
-if proto != "https":
-    http.close_conn(req)
-    continue
-
-http.respond(req, 200, {}, "OK")
-```
-
-Setelah `http.close_conn(req)` dipanggil, memanggil `http.respond(req, ...)` pada `req` yang sama menghasilkan runtime error.
-
----
-
-#### 16.3.7 `http.close(server)` → null
-
-Tutup listening socket dan bebaskan semua resource yang dialokasikan oleh `http.listen`.
-
-```flux
-srv = http.listen("0.0.0.0", 8080)
-
-# ... jalankan server ...
-
-http.close(srv)   # pastikan dipanggil saat selesai
-```
-
-Setelah `http.close` dipanggil, memanggil `http.accept` dengan handle yang sama menghasilkan perilaku tidak terdefinisi.
-
----
-
-### 16.4 Utilitas
-
-#### `http.url_encode(str)` → string
-
-Percent-encode string sesuai RFC 3986. Karakter *unreserved* (`A–Z`, `a–z`, `0–9`, `-`, `_`, `.`, `~`) tidak di-encode; semua karakter lain di-encode sebagai `%XX` uppercase.
-
-```flux
-http.url_encode("hello world")        # "hello%20world"
-http.url_encode("a=1&b=2")            # "a%3D1%26b%3D2"
-http.url_encode("nama: Budi Santoso") # "nama%3A%20Budi%20Santoso"
-```
-
-Berguna untuk membangun query string atau meng-encode nilai parameter URL:
-
-```flux
-q = http.url_encode(user_input)
-r = http.get("https://api.example.com/search?q=" + q)
-```
-
----
-
-#### `http.url_decode(str)` → string
-
-Decode string percent-encoded. Sekuens `%XX` dikembalikan ke karakter aslinya. `+` diubah menjadi spasi (kompatibel dengan `application/x-www-form-urlencoded`).
-
-```flux
-http.url_decode("hello%20world%21")   # "hello world!"
-http.url_decode("nama%3DBudi+S")      # "nama=Budi S"
-http.url_decode("100%25%20benar")     # "100% benar"
-```
-
----
-
-#### `http.parse_query(query_str)` → dict
-
-Parse query string `"key=val&key2=val2"` menjadi dict. Key dan value di-URL-decode secara otomatis (termasuk konversi `+` → spasi). Pasangan tanpa `=` menghasilkan value string kosong.
-
-```flux
-params = http.parse_query("page=2&q=hello+world&tag=flux%20lang")
-params["page"]   # "2"
-params["q"]      # "hello world"
-params["tag"]    # "flux lang"
-
-# Key tanpa value
-params = http.parse_query("verbose&limit=10")
-params["verbose"]  # ""
-params["limit"]    # "10"
-
-# Penggunaan dalam server
-req = http.accept(srv, 30)
-if req != null:
-    params = http.parse_query(req["query"])
-    page = params["page"]
-    if page == null:
-        page = "1"
-    http.respond(req, 200, {}, "Halaman: " + page)
-```
-
----
-
-### 16.5 Contoh Lengkap: REST API Client
-
-```flux
-import http
-
-base = "https://jsonplaceholder.typicode.com"
-
-# GET — baca satu resource
-r = http.get(base + "/posts/1")
-if r["ok"] and r["status"] == 200:
-    print("Body: " + r["body"])
-
-# POST JSON — buat resource baru
-r = http.post(base + "/posts",
-    '{"title": "Flux", "body": "Halo!", "userId": 1}',
-    {"Content-Type": "application/json"})
-print("Buat post: " + str(r["status"]))   # 201
-
-# PUT — ganti resource sepenuhnya
-r = http.put(base + "/posts/1",
-    '{"title": "Updated", "body": "Diperbarui", "userId": 1}',
-    {"Content-Type": "application/json"})
-print("Update: " + str(r["status"]))      # 200
-
-# PATCH — perbarui sebagian field
-r = http.patch(base + "/posts/1",
-    '{"title": "Judul Baru"}',
-    {"Content-Type": "application/json"})
-print("Patch: " + str(r["status"]))       # 200
-
-# DELETE — hapus resource
-r = http.delete(base + "/posts/1")
-print("Hapus: " + str(r["status"]))       # 200
-
-# HEAD — cek resource tanpa download body
-r = http.request("HEAD", base + "/posts/1", "", {})
-print("Ada: " + str(r["status"]))                   # 200
-print("Type: " + r["headers"]["content-type"])      # body kosong
-
-# Penanganan error
-r = http.get("https://host-tidak-ada.invalid/", {}, 5)
-if r["ok"] == false:
-    print("Error: " + r["error"])   # pesan dari libcurl
-```
-
----
-
-### 16.6 Contoh Lengkap: HTTP Server dengan Routing
-
-```flux
-import http
-
-func handle(req):
-    method = req["method"]
-    path   = req["path"]
-    params = http.parse_query(req["query"])
-
-    if path == "/":
-        http.respond(req, 200,
-            {"Content-Type": "text/html; charset=utf-8"},
-            "<h1>Flux HTTP Server</h1><p>Selamat datang!</p>")
-
-    elif path == "/api/echo" and method == "POST":
-        # Echo body request sebagai JSON
-        http.respond(req, 200,
-            {"Content-Type": "application/json"},
-            '{"echo": "' + req["body"] + '"}')
-
-    elif path == "/api/search" and method == "GET":
-        q = params["q"]
-        if q == null:
-            http.respond(req, 400,
-                {"Content-Type": "application/json"},
-                '{"error": "parameter q wajib diisi"}')
-        else:
-            http.respond(req, 200,
-                {"Content-Type": "application/json"},
-                '{"query": "' + q + '", "results": []}')
-
-    elif path == "/healthz":
-        http.respond(req, 200, {"Content-Type": "text/plain"}, "ok")
-
-    else:
-        http.respond(req, 404,
-            {"Content-Type": "application/json"},
-            '{"error": "not found", "path": "' + path + '"}')
-
-srv = http.listen("0.0.0.0", 8080)
-print("Server berjalan di :8080")
-
-while true:
-    req = http.accept(srv, 60)
-    if req == null:
-        continue   # timeout 60 detik, tidak ada request — coba lagi
-    handle(req)
-```
-
----
-
-## 17. Modul WebSocket
-
-Modul `ws` menyediakan **WebSocket server** dan **WebSocket client** berbasis [wslay](https://github.com/tatsuhiro-t/wslay) (RFC 6455) dengan raw POSIX socket. wslay hanya mengurus framing WebSocket; semua I/O dilakukan via callback sehingga tidak ada event loop tambahan dan tidak konflik dengan async runtime Flux.
-
-```flux
-import ws
-```
-
----
-
-### 17.1 Batasan & Aturan Penting
-
-| # | Aturan |
-|---|--------|
-| 1 | **Hanya `ws://` yang didukung.** Koneksi terenkripsi (`wss://`) belum diimplementasikan; gunakan reverse proxy (nginx/caddy) yang meng-upgrade TLS ke ws:// lokal jika diperlukan. |
-| 2 | **Single-threaded per koneksi.** `ws.accept` dan `ws.connect` memblok; gunakan `spawn` Flux untuk menangani banyak koneksi secara konkuren. |
-| 3 | **Ukuran pesan dibatasi 16 MB per frame.** Pesan lebih besar dari batas ini menghasilkan runtime error. |
-| 4 | **Setiap `ws.accept` atau `ws.connect` harus diakhiri dengan `ws.close`.** Tidak menutup koneksi menyebabkan kebocoran file descriptor. |
-| 5 | **Setiap `ws.listen` harus diakhiri dengan `ws.close_server`.** |
-| 6 | **`ws.recv` mengembalikan `null` saat timeout** — bukan error. Gunakan loop jika ingin menunggu lebih lama. |
-| 7 | **Ping/pong ditangani otomatis oleh wslay** — tidak perlu membalas ping secara manual. `ws.recv` tetap mengembalikan frame ping agar aplikasi dapat memantaunya. |
-| 8 | **SIGPIPE diblokir** — pengiriman ke koneksi yang sudah putus mengembalikan `false`, bukan crash. |
-| 9 | **Header HTTP upgrade dibatasi 16 KB.** Lebih dari itu, koneksi ditolak. |
-| 10 | **Timeout di semua fungsi bersifat deadline absolut** (implementasi `select()`). Client/server lambat tidak dapat memblok proses Flux selamanya. |
-
----
-
-### 17.2 WebSocket Server
-
-#### 17.2.1 Contoh Minimal Server
+### `ws` — WebSocket
 
 ```flux
 import ws
 
+# Server
 srv = ws.listen("0.0.0.0", 9001)
-print("WS server di ws://0.0.0.0:9001")
+conn = ws.accept(srv, 30)        # timeout 30 detik
 
-while true:
-    conn = ws.accept(srv, 30)
-    if conn == null:
-        continue   # timeout, tunggu lagi
+msg = ws.recv(conn, 30)
+# msg["type"]    — "text" / "binary" / "ping" / "close"
+# msg["data"]    — string
 
-    msg = ws.recv(conn, 60)
-    if msg != null and msg["type"] == "text":
-        ws.send(conn, "Echo: " + msg["data"])
+ws.send_text(conn, "Halo!")
+ws.send_binary(conn, data)
+ws.ping(conn)
+ws.close_conn(conn)
+ws.close_server(srv)
 
-    ws.close(conn)
-```
-
----
-
-#### 17.2.2 `ws.listen(host, port)` → server_handle
-
-Membuat TCP socket, bind, dan mulai mendengarkan koneksi WebSocket masuk.
-
-```flux
-srv = ws.listen("0.0.0.0", 9001)     # semua interface IPv4
-srv = ws.listen("127.0.0.1", 9001)   # hanya loopback
-srv = ws.listen("::", 9001)           # dual-stack IPv4+IPv6
-```
-
-**Parameter:**
-- `host` — string IP atau hostname. `"0.0.0.0"` berarti semua interface IPv4, `"::"` berarti dual-stack.
-- `port` — int, **1–65535**.
-
-**Perilaku:**
-- Mencoba socket IPv6 dual-stack terlebih dahulu, fallback ke IPv4 jika tidak tersedia.
-- `SO_REUSEADDR` dan `SO_REUSEPORT` diset — restart server tidak perlu menunggu TIME_WAIT.
-- Backlog listen queue = **128**.
-- Gagal bind langsung menghasilkan **runtime error**.
-
-**Return:** opaque server handle (FluxDict internal). Jangan akses field-nya.
-
----
-
-#### 17.2.3 `ws.accept(server [, timeout_sec])` → conn_handle | null
-
-Menunggu satu koneksi WebSocket masuk, melakukan HTTP upgrade handshake, dan mengembalikan handle koneksi.
-
-```flux
-conn = ws.accept(srv)       # timeout default 30 detik
-conn = ws.accept(srv, 60)   # tunggu hingga 60 detik
-conn = ws.accept(srv, 0)    # non-blocking (langsung return null jika tidak ada)
-
-if conn == null:
-    continue   # timeout
-```
-
-**Parameter:**
-- `timeout_sec` — int, opsional. Default: **30**. `0` = non-blocking.
-
-**Return:** conn_handle jika ada koneksi masuk dan handshake berhasil; `null` jika timeout.
-
-**Perilaku handshake:**
-- Baca HTTP `GET` request dengan header `Upgrade: websocket`.
-- Verifikasi `Sec-WebSocket-Version: 13`.
-- Hitung `Sec-WebSocket-Accept` = base64(SHA1(key + GUID)).
-- Kirim respons `HTTP/1.1 101 Switching Protocols`.
-- Koneksi TCP yang bukan HTTP WebSocket yang valid dibuang secara senyap; accept melanjutkan ke koneksi berikutnya.
-
----
-
-### 17.3 WebSocket Client
-
-#### 17.3.1 Contoh Minimal Client
-
-```flux
-import ws
-
-conn = ws.connect("ws://echo.example.com:9001/echo")
-if conn == null:
-    print("Gagal terhubung")
-else:
-    ws.send(conn, "Halo server!")
-    msg = ws.recv(conn, 10)
-    if msg != null:
-        print("Balasan: " + msg["data"])
-    ws.close(conn)
-```
-
----
-
-#### 17.3.2 `ws.connect(url [, headers [, timeout_sec]])` → conn_handle | null
-
-Membuat koneksi WebSocket ke server. Melakukan TCP connect, lalu HTTP upgrade handshake sisi client.
-
-```flux
-# Koneksi dasar
+# Client
 conn = ws.connect("ws://localhost:9001/")
-
-# Dengan path spesifik
-conn = ws.connect("ws://api.example.com:8080/live/feed")
-
-# Dengan header custom (contoh: autentikasi)
-conn = ws.connect("ws://api.example.com:9001/stream",
-    {"Authorization": "Bearer eyJhbGci...",
-     "X-Client-ID": "flux-app-1"})
-
-# Dengan timeout 10 detik
-conn = ws.connect("ws://api.example.com:9001/", {}, 10)
-
-if conn == null:
-    print("Koneksi gagal atau timeout")
+ws.send_text(conn, "halo server")
+msg = ws.recv(conn, 10)
+ws.close_conn(conn)
 ```
 
-**Format URL:** `ws://host:port/path`
-- Skema harus `ws://` (bukan `wss://`).
-- Port wajib dicantumkan secara eksplisit jika bukan 80.
-- Path boleh kosong (diisi `/` secara otomatis).
-
-**Parameter:**
-- `url` — string URL WebSocket (`ws://…`).
-- `headers` — dict string→string, header HTTP custom yang dikirim saat handshake (opsional).
-- `timeout_sec` — int, opsional. Default: **30**. Batas waktu untuk TCP connect + HTTP handshake.
-
-**Return:** conn_handle jika berhasil; `null` jika:
-- URL tidak valid atau skema bukan `ws://`
-- TCP connect gagal (host tidak ada, port ditolak, timeout)
-- Server tidak merespons `101 Switching Protocols`
-- `Sec-WebSocket-Accept` tidak valid
-
-**Perilaku handshake (sisi client):**
-1. Generate 16-byte random nonce, base64-encode → `Sec-WebSocket-Key`.
-2. Kirim HTTP `GET /path HTTP/1.1` dengan header WebSocket upgrade.
-3. Baca respons server; verifikasi status `101`.
-4. Verifikasi `Sec-WebSocket-Accept` = base64(SHA1(key + GUID)).
-5. Inisialisasi wslay context mode **client** (dengan masking otomatis sesuai RFC 6455 §5.3).
-
----
-
-### 17.4 Fungsi Bersama (Server & Client)
-
-Semua fungsi berikut bekerja identik pada conn_handle dari `ws.accept` **maupun** `ws.connect`.
-
----
-
-#### 17.4.1 `ws.recv(conn [, timeout_sec])` → dict | null
-
-Menunggu dan menerima satu pesan WebSocket.
+### `mysql`
 
 ```flux
-msg = ws.recv(conn)        # timeout default 30 detik
-msg = ws.recv(conn, 60)    # tunggu hingga 60 detik
-msg = ws.recv(conn, 0)     # non-blocking
+import mysql
 
-if msg == null:
-    # timeout atau koneksi ditutup
-else:
-    print(msg["type"])   # "text", "binary", "ping", "pong", atau "close"
-    print(msg["data"])   # isi pesan (string)
+db = mysql.connect("localhost", "user", "password", "dbname", 3306)
+
+rows = mysql.query(db, "SELECT id, nama FROM pengguna WHERE aktif = 1")
+# rows adalah list of dict
+
+mysql.exec(db, "UPDATE pengguna SET aktif = 0 WHERE id = ?", [42])
+
+last_id = mysql.insert_id(db)
+aman    = mysql.escape(db, user_input)
+ok      = mysql.ping(db)
+mysql.close(db)
 ```
 
-**Return:** dict dengan field berikut, atau `null` jika timeout/koneksi putus:
-
-| Field | Tipe | Keterangan |
-|-------|------|------------|
-| `type` | string | Jenis frame: `"text"`, `"binary"`, `"ping"`, `"pong"`, atau `"close"` |
-| `data` | string | Isi payload. Binary disajikan apa adanya (raw bytes). `"close"` mungkin punya payload kosong. |
-
-**Perilaku:**
-- Frame **ping** dibalas otomatis dengan **pong** oleh wslay — tidak perlu membalas manual.
-- Frame **close** dikembalikan ke Flux sebagai `{type: "close", data: "…"}`. Setelah ini, panggil `ws.close(conn)` untuk menyelesaikan closing handshake.
-- Pesan multi-frame (fragmented) dirakit ulang secara otomatis oleh wslay sebelum dikembalikan.
-
----
-
-#### 17.4.2 `ws.send(conn, text)` → bool
-
-Mengirim pesan teks (UTF-8) sebagai satu WebSocket text frame.
-
-```flux
-ok = ws.send(conn, "Halo!")
-ok = ws.send(conn, '{"event": "update", "id": 42}')
-if ok == false:
-    print("Koneksi putus saat pengiriman")
-```
-
-**Parameter:**
-- `conn` — conn_handle dari `ws.accept` atau `ws.connect`.
-- `text` — string, isi pesan.
-
-**Return:** `true` jika frame terkirim penuh; `false` jika koneksi putus.
-
----
-
-#### 17.4.3 `ws.send_binary(conn, data)` → bool
-
-Mengirim data biner sebagai satu WebSocket binary frame.
-
-```flux
-ok = ws.send_binary(conn, raw_bytes)
-```
-
-Identik dengan `ws.send` tetapi menggunakan opcode `binary` (0x02). Berguna untuk protokol biner di atas WebSocket.
-
----
-
-#### 17.4.4 `ws.ping(conn [, data])` → bool
-
-Mengirim WebSocket ping frame.
-
-```flux
-ws.ping(conn)               # ping tanpa payload
-ws.ping(conn, "heartbeat")  # ping dengan payload (maks 125 byte)
-```
-
-**Parameter:**
-- `data` — string payload opsional, maks **125 byte** (batas RFC 6455 untuk control frame).
-
-**Return:** `true` jika ping terkirim; `false` jika koneksi putus.
-
-**Catatan:** Pong dari server akan dikembalikan oleh `ws.recv` sebagai `{type: "pong", data: "…"}`.
-
----
-
-#### 17.4.5 `ws.close(conn [, code])` → bool
-
-Memulai WebSocket closing handshake dan menutup koneksi.
-
-```flux
-ws.close(conn)         # close normal (kode 1000)
-ws.close(conn, 1001)   # close "going away"
-ws.close(conn, 1008)   # close "policy violation"
-```
-
-**Parameter:**
-- `code` — int, WebSocket close status code (opsional). Default: **1000** (Normal Closure).
-
-**Kode close umum (RFC 6455 §7.4.1):**
-
-| Kode | Nama | Kapan digunakan |
-|------|------|----------------|
-| 1000 | Normal Closure | Sesi selesai secara normal |
-| 1001 | Going Away | Server shutdown atau client navigasi |
-| 1002 | Protocol Error | Pelanggaran protokol WebSocket |
-| 1003 | Unsupported Data | Tipe data tidak didukung |
-| 1008 | Policy Violation | Pelanggaran kebijakan aplikasi |
-| 1009 | Message Too Big | Pesan melebihi batas yang diizinkan |
-| 1011 | Internal Error | Kondisi tak terduga di server |
-
-**Perilaku:**
-1. Kirim close frame dengan kode yang ditentukan.
-2. Tunggu close frame balik dari peer (timeout 5 detik).
-3. Shutdown TCP dan tutup socket.
-4. Bebaskan semua resource wslay.
-
-**Return:** `true` jika closing handshake selesai dengan bersih; `false` jika timeout atau koneksi sudah putus sebelumnya.
-
----
-
-#### 17.4.6 `ws.close_server(server)` → bool
-
-Menutup listening socket server dan membebaskan resource.
-
-```flux
-ws.close_server(srv)
-```
-
-**Return:** `true`.
-
-Setelah dipanggil, memanggil `ws.accept` dengan handle yang sama menghasilkan runtime error.
-
----
-
-### 17.5 Referensi Fungsi Lengkap
-
-| Fungsi | Arah | Arity | Return |
-|--------|------|-------|--------|
-| `ws.listen(host, port)` | Server | 2 | server_handle |
-| `ws.accept(server [, timeout])` | Server | variadic | conn_handle \| null |
-| `ws.connect(url [, headers [, timeout]])` | Client | variadic | conn_handle \| null |
-| `ws.recv(conn [, timeout])` | Keduanya | variadic | dict \| null |
-| `ws.send(conn, text)` | Keduanya | 2 | bool |
-| `ws.send_binary(conn, data)` | Keduanya | 2 | bool |
-| `ws.ping(conn [, data])` | Keduanya | variadic | bool |
-| `ws.close(conn [, code])` | Keduanya | variadic | bool |
-| `ws.close_server(server)` | Server | 1 | bool |
-
----
-
-### 17.6 Contoh Lengkap: Echo Server
-
-```flux
-import ws
-
-srv = ws.listen("0.0.0.0", 9001)
-print("Echo WS server di ws://0.0.0.0:9001")
-
-while true:
-    conn = ws.accept(srv, 30)
-    if conn == null:
-        continue
-
-    print("Client terhubung")
-
-    while true:
-        msg = ws.recv(conn, 60)
-
-        if msg == null:
-            print("Timeout atau koneksi putus")
-            break
-
-        if msg["type"] == "close":
-            print("Client menutup koneksi")
-            break
-
-        if msg["type"] == "text":
-            ws.send(conn, "Echo: " + msg["data"])
-
-        elif msg["type"] == "binary":
-            ws.send_binary(conn, msg["data"])
-
-        elif msg["type"] == "ping":
-            print("Ping diterima (pong otomatis dikirim)")
-
-    ws.close(conn)
-    print("Koneksi ditutup")
-
-ws.close_server(srv)
-```
-
----
-
-### 17.7 Contoh Lengkap: Multi-Client Chat (menggunakan spawn)
-
-```flux
-import ws
-
-func handle_client(conn):
-    print("Client baru terhubung")
-    while true:
-        msg = ws.recv(conn, 120)
-        if msg == null or msg["type"] == "close":
-            break
-        if msg["type"] == "text":
-            print("Pesan: " + msg["data"])
-            ws.send(conn, "[server] Diterima: " + msg["data"])
-    ws.close(conn)
-    print("Client selesai")
-
-srv = ws.listen("0.0.0.0", 9001)
-print("Chat server di ws://0.0.0.0:9001")
-
-while true:
-    conn = ws.accept(srv, 60)
-    if conn == null:
-        continue
-    spawn handle_client(conn)   # setiap client di coroutine terpisah
-
-ws.close_server(srv)
-```
-
----
-
-### 17.8 Contoh Lengkap: WebSocket Client
-
-```flux
-import ws
-
-# Koneksi ke echo server publik
-conn = ws.connect("ws://echo.websocket.events:80/", {}, 10)
-if conn == null:
-    print("Gagal terhubung ke server")
-else:
-    # Kirim beberapa pesan
-    ws.send(conn, "Halo dari Flux!")
-    ws.send(conn, '{"cmd": "ping", "id": 1}')
-
-    # Terima balasan
-    i = 0
-    while i < 2:
-        msg = ws.recv(conn, 10)
-        if msg == null:
-            print("Timeout menunggu balasan")
-            break
-        if msg["type"] == "text":
-            print("Balasan " + str(i + 1) + ": " + msg["data"])
-        i = i + 1
-
-    ws.close(conn)
-    print("Selesai")
-```
-
----
-
-### 17.9 Contoh: Client dengan Header Autentikasi
-
-```flux
-import ws
-
-token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-
-conn = ws.connect(
-    "ws://api.example.com:9001/realtime",
-    {"Authorization": "Bearer " + token,
-     "X-App-Version": "1.0"},
-    15
-)
-
-if conn == null:
-    print("Autentikasi gagal atau server tidak tersedia")
-else:
-    ws.send(conn, '{"action": "subscribe", "channel": "updates"}')
-
-    while true:
-        msg = ws.recv(conn, 30)
-        if msg == null or msg["type"] == "close":
-            break
-        print(msg["data"])
-
-    ws.close(conn)
-```
-
----
-
-## 18. FFI — Import dan Panggil Library C Native
-
-Modul `native` memungkinkan Flux memanggil fungsi dari shared library (`.so`) secara langsung.
-
-```flux
-from native import load, bind, invoke, sym, close
-
-# Muat shared library
-libm = load("libm.so.6")
-
-# Bind fungsi ke callable Flux
-sqrt_fn = bind(libm, "sqrt", "f64", ["f64"])
-pow_fn  = bind(libm, "pow",  "f64", ["f64", "f64"])
-
-print(sqrt_fn(16.0))       # 4.0
-print(pow_fn(2.0, 10.0))   # 1024.0
-
-# invoke — panggil sekali tanpa bind
-print(invoke(libm, "sqrt", "f64", ["f64"], [9.0]))   # 3.0
-
-# sym — dapatkan pointer raw fungsi sebagai integer
-ptr = sym(libm, "sqrt")
-print(ptr != 0)   # true
-
-# Tipe yang didukung untuk signature: "f64", "f32", "i64", "i32", "str", "ptr"
-libc = load("libc.so.6")
-strlen_fn = bind(libc, "strlen", "i64", ["str"])
-print(strlen_fn("hello"))   # 5
-
-# Tutup library
-close(libm)
-close(libc)
-```
-
----
-
-## 19. Ekstensi Native (.so Plugin)
-
-Ekstensi native adalah shared library C yang mengimplementasikan modul Flux. Contoh tersedia di `extension/postgresql/`.
-
-**Plugin ABI** (lihat `include/flux/extension.h`):
-
-```c
-// Setiap ekstensi harus mengekspor fungsi ini
-FluxExtensionResult flux_extension_init(FluxVM *vm);
-```
-
-Di dalam `flux_extension_init`, daftarkan fungsi-fungsi modul Anda ke VM, lalu return `FLUX_EXT_OK`.
-
-**Contoh penggunaan ekstensi PostgreSQL:**
+### `postgresql`
 
 ```flux
 import postgresql
 
-# Koneksi
-conn = postgresql.connect("postgresql://user:pass@host:5432/dbname")
+db = postgresql.connect("host=localhost dbname=mydb user=admin password=secret")
 
-# Query — SELECT mengembalikan list of dict
-rows = postgresql.query(conn, "SELECT id, name FROM users LIMIT 10")
-for row in rows:
-    print(row["id"], row["name"])
+rows = postgresql.query(db, "SELECT id, nama FROM pengguna")
+# rows adalah list of dict
 
-# Command — INSERT/UPDATE/DELETE mengembalikan jumlah baris terpengaruh
-n = postgresql.query(conn, "INSERT INTO logs (msg) VALUES ('hello')")
-print("rows affected:", n)
-
-# Escape nilai agar aman dari SQL injection
-safe = postgresql.escape_literal(conn, user_input)
-postgresql.query(conn, "SELECT * FROM t WHERE name = " + safe)
-
-# Cek status koneksi
-print(postgresql.status(conn))   # true jika terhubung
-
-# Tutup koneksi
-postgresql.close(conn)
+aman = postgresql.escape_literal(db, user_input)
+stat = postgresql.status(db)    # status koneksi
+postgresql.close(db)
 ```
-
-**Build ekstensi:**
-```bash
-make extensions
-```
-Hasilnya: `extension/postgresql/libpostgresql.so`
 
 ---
 
-## 20. Embed libflux ke Program C
+## 19. FFI — Panggil Library C Native
 
-`libflux` tersedia sebagai static library (`libflux.a`) dan shared library (`libflux.so`).
+Modul `native` memungkinkan pemanggilan fungsi dari file `.so` secara langsung:
+
+```flux
+import native
+
+# Load shared library
+lib = native.load("/usr/lib/libm.so.6")
+
+# Bind fungsi: native.func(lib, nama, tipe_return, [tipe_arg...])
+# Tipe yang didukung: "double", "int", "float", "string", "void", "pointer"
+fn_sqrt = native.func(lib, "sqrt", "double", ["double"])
+
+# Panggil fungsi
+hasil = native.call(fn_sqrt, [16.0])   # 4.0
+
+# Cari alamat simbol
+addr = native.sym(lib, "M_PI")
+
+# Tutup library
+native.close(lib)
+```
+
+---
+
+## 20. Package Manager
+
+Flux memiliki package manager sederhana berbasis direktori lokal:
+
+```bash
+# Inisialisasi proyek
+flux package init
+# → membuat file flux.pkg (manifest JSON)
+
+# Daftar paket terinstal
+flux package list
+
+# Install dari direktori lokal
+flux package install ./path/ke/paket
+
+# Hapus paket
+flux package remove nama_paket
+
+# Detail paket
+flux package info nama_paket
+```
+
+> **Catatan:** Instalasi dari registry jaringan (`flux package add`) belum tersedia.
+
+---
+
+## 21. C API (libflux)
+
+Untuk menyematkan Flux ke program C:
 
 ```c
 #include "flux/flux.h"
 
 int main(void) {
-    // Buat VM baru
     FluxVM *vm = flux_vm_new();
-
-    // Muat standard library
     flux_load_stdlib(vm);
 
-    // Evaluasi kode Flux dari string
-    FluxResult result = flux_eval(vm, "print('Hello from C!')", "<inline>");
-    if (result != FLUX_OK) {
-        // Error sudah dicetak oleh runtime
+    // Evaluasi string
+    FluxResult r = flux_eval(vm, "print('Halo dari C!')", "<embed>");
+
+    // Jalankan file
+    r = flux_execute_file(vm, "script.flx");
+
+    if (r != FLUX_OK) {
+        const char *err = flux_get_error(vm);
+        fprintf(stderr, "Error: %s\n", err);
     }
 
-    // Atau jalankan file .flx
-    FluxResult r2 = flux_exec_file(vm, "script.flx");
-
-    // Bersihkan VM
     flux_vm_destroy(vm);
-    return 0;
+    return r == FLUX_OK ? 0 : 1;
 }
 ```
 
 **Kompilasi:**
+
 ```bash
-gcc -Iinclude -o myapp myapp.c -L./build_make -lflux -lm -ldl -luv
+gcc -Iinclude -o program program.c build_make/libflux.a -lm -ldl -luv
 ```
 
-**Header utama:** `include/flux/flux.h` — public API  
-**Tipe penting:** `FluxVM`, `FluxResult` (`FLUX_OK`, `FLUX_RUNTIME_ERROR`, dll.)
+**Fungsi API Utama:**
 
----
-
-## 21. Struktur Proyek
-
-```
-flux/
-├── src/
-│   ├── main.c              # Entry point CLI
-│   ├── lexer/lexer.c       # Lexer / tokenizer
-│   ├── ast/ast.c           # AST node definitions
-│   ├── parser/parser.c     # Recursive-descent parser
-│   ├── compiler/compiler.c # Bytecode compiler
-│   ├── vm/
-│   │   ├── vm.c            # Virtual machine
-│   │   └── chunk.c         # Bytecode chunk
-│   ├── object/object.c     # Runtime object types
-│   ├── gc/gc.c             # Garbage collector
-│   ├── runtime/runtime.c   # Runtime support
-│   ├── stdlib/stdlib.c     # Core stdlib (statically linked)
-│   ├── api/api.c           # Public C API
-│   └── util/util.c         # Utilities
-│
-├── include/flux/
-│   ├── flux.h              # Public API header
-│   ├── common.h            # Shared types & macros
-│   ├── vm.h                # VM internals
-│   ├── compiler.h          # Compiler internals
-│   ├── object.h            # Object model
-│   ├── value.h             # Value representation
-│   ├── extension.h         # Native extension ABI
-│   └── ext_helpers.h       # Extension helper macros
-│
-├── stdlib/
-│   ├── math/               # math module (.so)
-│   ├── json/               # json module (.so)
-│   ├── os/                 # os module (.so)
-│   ├── time/               # time module (.so)
-│   ├── fsio/               # fs + io module (.so)
-│   ├── sys/                # sys module (.so)
-│   ├── aio/                # aio async module (.so, needs libuv)
-│   ├── async/              # async support (.so)
-│   ├── shell/              # shell module (.so)
-│   └── native/             # FFI module (.so)
-│
-├── extension/
-│   ├── postgresql/         # PostgreSQL extension (.so)
-│   └── ws/                 # WebSocket extension (.so, server + client)
-│
-├── tests/                  # Test suite (.flx dan .c)
-│   ├── hello.flx
-│   ├── fibonacci.flx
-│   ├── test_*.flx          # Tes per fitur
-│   └── modules/            # Contoh modul
-│
-├── Makefile                # Build system utama
-├── CMakeLists.txt          # Build system alternatif (CMake)
-└── replit.nix              # Dependensi Nix (Replit)
-```
+| Fungsi | Keterangan |
+|--------|-----------|
+| `flux_vm_new()` | Buat instance VM baru |
+| `flux_vm_destroy(vm)` | Bebaskan VM dan semua resource |
+| `flux_load_stdlib(vm)` | Load standard library |
+| `flux_eval(vm, source, name)` | Evaluasi source string |
+| `flux_execute_file(vm, path)` | Jalankan file .flx |
+| `flux_get_error(vm)` | Ambil pesan error terakhir |
+| `flux_version()` | Versi sebagai string |
 
 ---
 
 ## 22. Arsitektur Internal
 
-Flux diimplementasikan sebagai **bytecode-compiled, stack-based virtual machine** dengan komponen berikut:
-
 ### Pipeline Eksekusi
 
-![Pipeline Eksekusi Flux](docs/pipeline.svg)
+```
+Source (.flx)
+    ↓  Lexer  (src/lexer/lexer.c)
+Token stream (dengan INDENT/DEDENT)
+    ↓  Parser  (src/parser/parser.c)
+AST (include/flux/ast.h)
+    ↓  Compiler  (src/compiler/compiler.c)
+Bytecode (Chunk)
+    ↓  VM  (src/vm/vm.c)
+Hasil eksekusi
+```
 
 ### Komponen Utama
 
-| Komponen       | File                    | Tanggung Jawab                                           |
-|----------------|-------------------------|----------------------------------------------------------|
-| **Lexer**      | `src/lexer/lexer.c`     | Mengubah source text menjadi token                       |
-| **Parser**     | `src/parser/parser.c`   | Recursive-descent parser → AST                           |
-| **Compiler**   | `src/compiler/compiler.c`| Mengubah AST menjadi bytecode                           |
-| **VM**         | `src/vm/vm.c`           | Stack-based interpreter bytecode                         |
-| **GC**         | `src/gc/gc.c`           | Mark-and-sweep garbage collector                         |
-| **Object**     | `src/object/object.c`   | Representasi runtime: string, list, dict, closure, class |
-| **Runtime**    | `src/runtime/runtime.c` | Fungsi built-in, error handling                          |
-| **Stdlib**     | `src/stdlib/stdlib.c`   | Modul core yang di-link statik                           |
-| **API**        | `src/api/api.c`         | Public C API (`flux_vm_new`, `flux_eval`, dll.)         |
+| Komponen | File | Tanggung Jawab |
+|----------|------|----------------|
+| **Lexer** | `src/lexer/lexer.c` | Source text → token stream; INDENT/DEDENT injection |
+| **Parser** | `src/parser/parser.c` | Recursive-descent parser → AST |
+| **Compiler** | `src/compiler/compiler.c` | AST → bytecode |
+| **VM** | `src/vm/vm.c` | Stack-based bytecode interpreter |
+| **GC** | `src/gc/gc.c` | Mark-and-sweep garbage collector |
+| **Object** | `src/object/object.c` | Runtime types: string, list, dict, closure, class |
+| **Runtime** | `src/runtime/runtime.c` | Built-in type methods (string/list/dict) |
+| **Stdlib Core** | `src/stdlib/stdlib_core.c` | Built-in functions selalu tersedia |
+| **API** | `src/api/api.c` | Public C API |
+
+### Lexer
+
+- Indentation-aware: menginjeksi `INDENT`/`DEDENT` ala Python
+- Melanjutkan baris di dalam kurung yang belum ditutup secara otomatis
+- Mendukung f-string dengan ekspresi bersarang `{expr}` dan escaped `{{`/`}}`
+- Token khusus: `|>` (pipeline), `=>` (fat arrow), `@>` (decorator), `:=` (walrus), `..` (ellipsis)
 
 ### Model Objek
 
-Semua nilai Flux adalah tagged union (`Value` di `include/flux/value.h`) yang bisa berisi:
-- **Primitif:** `int`, `float`, `bool`, `null`
-- **Heap-allocated:** `ObjString`, `ObjList`, `ObjDict`, `ObjFunction`, `ObjClosure`, `ObjClass`, `ObjInstance`, `ObjNative`
+Semua nilai Flux adalah tagged union (`Value` di `include/flux/value.h`):
+
+- **Primitif (inline):** `int` (int64), `float` (double), `bool`, `null`
+- **Heap-allocated:** `ObjString`, `ObjList`, `ObjDict`, `ObjFunction`, `ObjClosure`, `ObjNative`, `ObjClass`, `ObjInstance`, `ObjUpvalue`, `ObjTask`
 
 ### Garbage Collector
 
-Flux menggunakan **tri-color mark-and-sweep GC**:
-1. **Mark** — mulai dari root (stack, globals, upvalues), tandai semua objek yang reachable
-2. **Sweep** — bebaskan semua objek yang tidak tertandai
-3. GC dipicu otomatis ketika heap melampaui threshold; threshold digandakan setiap siklus
+Flux menggunakan **mark-and-sweep GC** dengan grey stack:
 
-### Modul & Ekstensi
-
-- **Stdlib modules** (`stdlib/*/lib<name>.so`) — di-`dlopen()` secara lazy saat pertama kali diimpor
-- **Native extensions** (`extension/*/lib<name>.so`) — sama, tapi untuk ekstensi pihak ketiga
-- Semua plugin mengimplementasikan ABI di `include/flux/extension.h`
+1. **Mark** — mulai dari root (stack, globals, frame closures, upvalue terbuka), tandai semua objek yang reachable
+2. **Sweep** — bebaskan objek yang tidak tertandai
+3. GC dipicu otomatis saat heap melampaui threshold; threshold digandakan setiap siklus
 
 ### Async Runtime
 
-Fitur `async`/`await`/`spawn` diimplementasikan di atas **libuv** (event loop). Coroutine direpresentasikan sebagai objek VM khusus; `spawn` mendaftarkan coroutine ke event loop, dan `await` men-suspend coroutine saat ini hingga hasilnya tersedia.
+`async func` / `await` / `spawn` diimplementasikan di atas **libuv**:
+
+- Setiap coroutine adalah objek `FluxTask` dengan VM state tersendiri
+- `spawn expr` mengeksekusi fungsi async tanpa menunggu
+- `await task` men-suspend coroutine saat ini dan melanjutkan saat task selesai
+- VM mengelola scheduler kooperatif internal
+
+### Modul & Loading
+
+- **Core stdlib** (`stdlib_core.c`): di-link statik ke dalam `libflux.a`
+- **Stdlib modules** (`stdlib/*/lib<name>.so`): di-`dlopen()` lazy saat pertama `import`
+- **Extensions** (`extension/*/lib<name>.so`): sama, tapi bergantung pada library eksternal
+- Semua plugin mengimplementasikan ABI `flux_extension_init()` dari `include/flux/extension.h`
+
+---
+
+## 23. Struktur Proyek
+
+```
+flux/
+├── include/flux/          # Public headers
+│   ├── ast.h              # Definisi node AST
+│   ├── chunk.h            # Bytecode & opcode
+│   ├── common.h           # Makro & utilitas
+│   ├── compiler.h
+│   ├── extension.h        # ABI untuk plugin .so
+│   ├── ext_helpers.h      # Helper untuk modul eksternal
+│   ├── flux.h             # Public C API
+│   ├── gc.h
+│   ├── lexer.h
+│   ├── object.h           # Runtime object types
+│   ├── parser.h
+│   ├── value.h            # Tagged union Value
+│   └── vm.h
+├── src/
+│   ├── api/api.c          # Public C API implementation
+│   ├── ast/ast.c          # AST allocator & printer
+│   ├── compiler/compiler.c
+│   ├── gc/gc.c
+│   ├── lexer/lexer.c
+│   ├── main.c             # CLI entry point
+│   ├── object/object.c
+│   ├── parser/parser.c
+│   ├── runtime/runtime.c  # Built-in type methods
+│   ├── stdlib/
+│   │   ├── stdlib.c       # Modul loader
+│   │   ├── stdlib_core.c  # Built-in functions
+│   │   └── stdlib_internal.h
+│   ├── tools/
+│   │   ├── build.c        # flux build
+│   │   ├── doc.c          # flux doc
+│   │   ├── fmt.c          # flux fmt
+│   │   ├── lint.c         # flux lint
+│   │   ├── pkg.c          # flux package
+│   │   └── tools.h
+│   ├── util/util.c
+│   └── vm/
+│       ├── chunk.c        # Bytecode chunk
+│       └── vm.c
+├── stdlib/                # Standard library (.so)
+│   ├── aio/               # Async I/O (libuv)
+│   ├── async/             # Async utilities
+│   ├── fs/                # Filesystem
+│   ├── io/                # I/O dasar
+│   ├── json/              # JSON encode/decode
+│   ├── math/              # Matematika
+│   ├── native/            # FFI
+│   ├── os/                # OS & path
+│   ├── shell/             # Shell execution
+│   ├── socket/            # TCP/UDP/raw socket
+│   ├── sys/               # sys.exit, stdin, stdout
+│   └── time/              # Waktu & tanggal
+├── extension/             # Ekstensi native (.so)
+│   ├── http/              # HTTP client + server (libcurl)
+│   ├── mysql/             # MySQL client (libmysqlclient)
+│   ├── postgresql/        # PostgreSQL client (libpq)
+│   └── ws/                # WebSocket (wslay)
+├── tests/                 # Test suite
+├── docs/                  # Dokumentasi tambahan
+├── Makefile
+├── CMakeLists.txt
+├── replit.nix
+└── flux.pkg               # Manifest paket
+```

@@ -2,7 +2,7 @@ enum Color:
     Red
 
 class Child(Color):
-    fn init(self):
+    func init(self):
         pass
 
 let c = Child()

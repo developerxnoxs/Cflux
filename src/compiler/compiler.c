@@ -2289,16 +2289,26 @@ static void compile_node(Compiler *c, AstNode *node) {
             const char *name    = node->as.class_def.name;
             AstNode    *body    = node->as.class_def.body;
 
-            /* Collect field names from let declarations */
+            /* Collect field names from let declarations AND bare identifier statements.
+             * Bare identifiers (e.g. struct Point:\n    x\n    y) are parsed as
+             * AST_EXPR_STMT(AST_IDENT) and treated identically to `let x`. */
             int   n_fields  = 0;
-            for (int i = 0; i < body->as.block.stmts.count; i++)
-                if (body->as.block.stmts.data[i]->kind == AST_LET_DECL) n_fields++;
+            for (int i = 0; i < body->as.block.stmts.count; i++) {
+                AstNode *s = body->as.block.stmts.data[i];
+                if (s->kind == AST_LET_DECL) n_fields++;
+                else if (s->kind == AST_EXPR_STMT &&
+                         s->as.expr_stmt.expr->kind == AST_IDENT) n_fields++;
+            }
 
             const char **fields = (n_fields > 0) ? FLUX_ALLOC(const char *, n_fields) : NULL;
             int fi = 0;
             for (int i = 0; i < body->as.block.stmts.count; i++) {
                 AstNode *s = body->as.block.stmts.data[i];
-                if (s->kind == AST_LET_DECL) fields[fi++] = s->as.let_decl.name;
+                if (s->kind == AST_LET_DECL)
+                    fields[fi++] = s->as.let_decl.name;
+                else if (s->kind == AST_EXPR_STMT &&
+                         s->as.expr_stmt.expr->kind == AST_IDENT)
+                    fields[fi++] = s->as.expr_stmt.expr->as.ident.name;
             }
 
             /* Emit OP_CLASS */
@@ -2503,9 +2513,16 @@ static void compile_node(Compiler *c, AstNode *node) {
                 emit_byte(c, OP_PUSH_CONST, line);
                 emit_uint16(c, mname_const, line);
 
-                /* Push ordinal */
-                emit_byte(c, OP_PUSH_INT, line);
-                chunk_write_int64(current_chunk(c), (int64_t)i, line);
+                /* Push explicit value if provided, otherwise use auto-ordinal */
+                AstNode *explicit_val = (node->as.enum_def.values.count > i)
+                                        ? node->as.enum_def.values.data[i]
+                                        : NULL;
+                if (explicit_val != NULL) {
+                    compile_expr(c, explicit_val);
+                } else {
+                    emit_byte(c, OP_PUSH_INT, line);
+                    chunk_write_int64(current_chunk(c), (int64_t)i, line);
+                }
 
                 /* Call EnumClass(name, ordinal) → instance */
                 emit_byte(c, OP_CALL, line);

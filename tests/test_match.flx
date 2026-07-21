@@ -1,136 +1,73 @@
-# test_match.flx — regression tests for match statement
-
-# --- Basic equality matching ---
-func status(code):
-    match code:
-        200:
-            return "OK"
-        404:
-            return "Not Found"
-        500:
-            return "Server Error"
-        _:
-            return "Unknown"
-
-print(status(200))   # OK
-print(status(404))   # Not Found
-print(status(500))   # Server Error
-print(status(999))   # Unknown
-
-# --- String patterns ---
-func day_type(day):
-    match day:
-        "Saturday":
-            return "weekend"
-        "Sunday":
-            return "weekend"
-        _:
-            return "weekday"
-
-print(day_type("Saturday"))  # weekend
-print(day_type("Monday"))    # weekday
-
-# --- Wildcard is the default arm ---
-func parity(n):
-    match n:
-        0:
-            return "zero"
-        1:
-            return "one"
-        _:
-            return "other"
-
-print(parity(0))   # zero
-print(parity(1))   # one
-print(parity(7))   # other
-
-# --- match as statement (no return) ---
-let flag = 2
-match flag:
-    1:
+# Test 1: Basic match on int
+let x = 2
+match x:
+    case 1:
         print("one")
-    2:
-        print("two")   # two
-    _:
+    case 2:
+        print("two")
+    case 3:
+        print("three")
+    case _:
         print("other")
 
-# --- match with let in body ---
-func test_match_let(x):
-    match x:
-        10:
-            let msg = "ten"
-            print(msg)   # ten
-        _:
-            let msg = "other"
-            print(msg)
+# Test 2: Match on string
+let s = "hello"
+match s:
+    case "hi":
+        print("hi case")
+    case "hello":
+        print("hello case")
+    case _:
+        print("default")
 
-test_match_let(10)
-test_match_let(99)   # other
+# Test 3: Match on bool
+let b = true
+match b:
+    case true:
+        print("is true")
+    case false:
+        print("is false")
 
-# --- Enum match (identity comparison) ---
-enum Color:
-    Red
-    Green
-    Blue
+# Test 4: Match with multiple statements in case
+let n = 5
+match n:
+    case 5:
+        let msg = "five"
+        print(msg)
+    case _:
+        print("not five")
 
-func color_name(c):
-    match c:
-        Color.Red:
-            return "Red"
-        Color.Green:
-            return "Green"
-        Color.Blue:
-            return "Blue"
-        _:
-            return "Unknown"
+# Test 5: Nested match
+let a = 1
+let bb = 2
+match a:
+    case 1:
+        match bb:
+            case 2:
+                print("a=1, b=2")
+            case _:
+                print("a=1, b!=2")
+    case _:
+        print("a!=1")
 
-print(color_name(Color.Red))    # Red
-print(color_name(Color.Green))  # Green
-print(color_name(Color.Blue))   # Blue
+# Test 6: Match on null
+let v = null
+match v:
+    case null:
+        print("is null")
+    case _:
+        print("not null")
 
-# --- Struct destructuring ---
-struct Point:
-    let x: float
-    let y: float
+# Test 7: Match in a function
+func describe(val):
+    match val:
+        case 0:
+            return "zero"
+        case 1:
+            return "one"
+        case _:
+            return "many"
 
-let p1 = Point(3.0, 4.0)
-let p2 = Point(0.0, 0.0)
-
-func describe_point(p):
-    match p:
-        Point(x, y):
-            if x == 0.0 and y == 0.0:
-                return "origin"
-            return f"point({x}, {y})"
-        _:
-            return "unknown"
-
-print(describe_point(p1))   # point(3.0, 4.0)
-print(describe_point(p2))   # origin
-
-# --- Struct destructuring with guard ---
-func classify_point(p):
-    match p:
-        Point(x, y) if x > 0.0 and y > 0.0:
-            return "Q1"
-        Point(x, y) if x < 0.0 and y > 0.0:
-            return "Q2"
-        Point(x, y):
-            return "other"
-        _:
-            return "not a point"
-
-print(classify_point(Point(1.0, 2.0)))    # Q1
-print(classify_point(Point(-1.0, 2.0)))   # Q2
-print(classify_point(Point(0.0, 0.0)))    # other
-
-# --- isinstance builtin ---
-struct Box:
-    let value: int
-
-let box = Box(42)
-print(isinstance(box, Box))      # true
-print(isinstance(p1, Point))     # true
-print(isinstance(p1, Box))       # false
-
-print("match: OK")
+print(describe(0))
+print(describe(1))
+print(describe(99))

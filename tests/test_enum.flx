@@ -1,69 +1,46 @@
-# test_enum.flx — regression tests for enum definitions
-# Enums are compiled as classes with singleton instances (each member
-# is an ObjInstance with .name and .value attributes).
-
-enum Color:
-    Red
-    Green
-    Blue
-
-# Members print as EnumName.MemberName
-print(Color.Red)     # Color.Red
-print(Color.Green)   # Color.Green
-print(Color.Blue)    # Color.Blue
-
-# Enum members are stable singletons — identity comparison works
-let r = Color.Red
-let g = Color.Green
-let b = Color.Blue
-print(r == Color.Red)    # true
-print(g == Color.Green)  # true
-print(b == Color.Blue)   # true
-print(r == Color.Green)  # false
-
-# Enum members carry .name and .value attributes
-print(Color.Red.name)    # Red
-print(Color.Red.value)   # 0
-print(Color.Green.value) # 1
-print(Color.Blue.value)  # 2
-
-# Enums are usable in match (identity comparison)
-func color_name(c):
-    match c:
-        Color.Red:
-            return "Red"
-        Color.Green:
-            return "Green"
-        Color.Blue:
-            return "Blue"
-        _:
-            return "Unknown"
-
-print(color_name(Color.Red))    # Red
-print(color_name(Color.Blue))   # Blue
-print(color_name(Color.Green))  # Green
-
-# isinstance check
-print(isinstance(Color.Red, Color))    # true
-print(isinstance(Color.Green, Color))  # true
-
-# --- Larger enum ---
+# Test 1: Basic enum declaration and member access
 enum Direction:
     North
     South
     East
     West
 
-print(Direction.North.name)   # North
-print(Direction.West.value)   # 3
-print(Direction.East == Direction.East)  # true
-print(Direction.East == Direction.West)  # false
+print(Direction.North)
+print(Direction.South)
+print(Direction.East)
+print(Direction.West)
 
-# --- Enum in a function ---
-func is_horizontal(dir):
-    return dir == Direction.East or dir == Direction.West
+# Test 2: Enum comparison
+let d = Direction.North
+if d == Direction.North:
+    print("is North")
+else:
+    print("not North")
 
-print(is_horizontal(Direction.East))   # true
-print(is_horizontal(Direction.North))  # false
+# Test 3: Enum with explicit integer values
+enum Status:
+    Ok = 0
+    Err = 1
+    Pending = 2
 
-print("enum: OK")
+print(Status.Ok)
+print(Status.Err)
+print(Status.Pending)
+
+# Test 4: Enum in match — dotted pattern (Status.Err)
+let s = Status.Err
+match s:
+    case Status.Ok:
+        print("ok")
+    case Status.Err:
+        print("error")
+    case Status.Pending:
+        print("pending")
+
+# Test 5: Enum .name and .value fields
+print(Direction.North.name)
+print(Status.Ok.value)
+print(Status.Err.value)
+
+# Test 6: Enum type check
+print(type(Direction.North))

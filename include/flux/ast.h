@@ -257,6 +257,7 @@ struct AstNode {
         struct {
             char   *name;
             AstList members; /* list of AST_IDENT nodes (member names) */
+            AstList values;  /* parallel list: explicit value expr or NULL (auto-ordinal) */
         } enum_def;
 
         /* AST_IMPORT */

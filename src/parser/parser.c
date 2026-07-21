@@ -1011,6 +1011,7 @@ static AstNode *parse_enum_def(Parser *p) {
     AstNode *n = ast_node_alloc(p->arena, AST_ENUM_DEF, line, col);
     n->as.enum_def.name = name_buf;
     ast_list_init(&n->as.enum_def.members);
+    ast_list_init(&n->as.enum_def.values);
 
     while (!check(p, TOK_DEDENT) && !check(p, TOK_EOF)) {
         skip_newlines(p);
@@ -1024,6 +1025,12 @@ static AstNode *parse_enum_def(Parser *p) {
                                         p->current.start, p->current.length);
             ast_list_push(&n->as.enum_def.members, member);
             advance(p);
+            /* Optional explicit value: MemberName = <expr> */
+            AstNode *explicit_val = NULL;
+            if (match(p, TOK_ASSIGN)) {
+                explicit_val = parse_expr(p);
+            }
+            ast_list_push(&n->as.enum_def.values, explicit_val);
             match(p, TOK_NEWLINE);
         } else {
             parser_error(p, "Expected enum member name");
@@ -1066,6 +1073,13 @@ static AstNode *parse_match(Parser *p) {
     while (!check(p, TOK_DEDENT) && !check(p, TOK_EOF)) {
         skip_newlines(p);
         if (check(p, TOK_DEDENT) || check(p, TOK_EOF)) break;
+
+        /* Consume optional 'case' keyword (contextual — not reserved in the lexer) */
+        if (check(p, TOK_IDENT) &&
+            p->current.length == 4 &&
+            strncmp(p->current.start, "case", 4) == 0) {
+            advance(p);
+        }
 
         /* Check for wildcard _ */
         bool is_wildcard = false;

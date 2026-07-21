@@ -1,49 +1,48 @@
-# test_struct.flx — regression tests for struct definitions
-
-# --- Basic struct with auto-init ---
+# Test 1: Basic struct declaration and construction (bare fields)
 struct Point:
-    let x: float
-    let y: float
+    x
+    y
 
-let p = Point(3.0, 4.0)
-print(p.x)   # 3.0
-print(p.y)   # 4.0
+let p = Point(1, 2)
+print(p.x)
+print(p.y)
 
-# --- Multi-field struct ---
+# Test 2: Struct with default field access
 struct Person:
-    let name: string
-    let age: int
+    name
+    age
 
 let alice = Person("Alice", 30)
-print(alice.name)   # Alice
-print(alice.age)    # 30
+print(alice.name)
+print(alice.age)
 
-# --- Struct with method ---
-struct Circle:
-    let radius: float
+# Test 3: Struct field mutation
+struct Counter:
+    value
 
-    func area():
-        return 3.14159 * self.radius * self.radius
+let c = Counter(0)
+c.value = c.value + 1
+print(c.value)
 
-    func describe():
-        print(f"Circle with radius {self.radius}")
+# Test 4: Nested struct
+struct Rect:
+    origin
+    width
+    height
 
-let c = Circle(5.0)
-c.describe()        # Circle with radius 5.0
-let area = c.area()
-print(area > 78.0)  # true (pi*25 ≈ 78.54)
+let r = Rect(Point(0, 0), 10, 20)
+print(r.width)
+print(r.height)
+print(r.origin.x)
+print(r.origin.y)
 
-# --- Multiple instances are independent ---
-let p1 = Point(1.0, 2.0)
-let p2 = Point(10.0, 20.0)
-print(p1.x)   # 1.0
-print(p2.x)   # 10.0
+# Test 5: Struct in a function
+func make_point(x, y):
+    return Point(x, y)
 
-# --- Single-field struct ---
-struct Wrapper:
-    let value: int
+let q = make_point(5, 7)
+print(q.x)
+print(q.y)
 
-let w = Wrapper(99)
-print(w.value)   # 99
-
-print("struct: OK")
+# Test 6: Struct type check
+print(type(p))

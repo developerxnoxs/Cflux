@@ -172,6 +172,237 @@ static Value string_replace(FluxVM *vm, int argc, Value *argv) {
     return value_object((FluxObject *)object_string_take(vm, buf, (int)(out - buf)));
 }
 
+/* find(sub [, start]) → int: index of first occurrence, or -1 */
+static Value string_find(FluxVM *vm, int argc, Value *argv) {
+    (void)vm;
+    FluxString *s   = AS_STRING(argv[0]);
+    if (argc < 2 || !IS_STRING(argv[1])) return value_int(-1);
+    FluxString *sub = AS_STRING(argv[1]);
+    int start = (argc >= 3 && value_is_int(argv[2])) ? (int)value_as_int(argv[2]) : 0;
+    if (start < 0) start = 0;
+    if (sub->length == 0) return value_int(start);
+    for (int i = start; i <= s->length - sub->length; i++) {
+        if (memcmp(s->chars + i, sub->chars, (size_t)sub->length) == 0)
+            return value_int(i);
+    }
+    return value_int(-1);
+}
+
+/* index(sub [, start]) → int: like find but raises ValueError if not found */
+static Value string_index_of(FluxVM *vm, int argc, Value *argv) {
+    Value result = string_find(vm, argc, argv);
+    if (value_is_int(result) && value_as_int(result) == -1) {
+        vm_runtime_error(vm, "ValueError: substring not found");
+        return value_null();
+    }
+    return result;
+}
+
+/* count(sub) → int: number of non-overlapping occurrences */
+static Value string_count(FluxVM *vm, int argc, Value *argv) {
+    (void)vm;
+    FluxString *s = AS_STRING(argv[0]);
+    if (argc < 2 || !IS_STRING(argv[1])) return value_int(0);
+    FluxString *sub = AS_STRING(argv[1]);
+    if (sub->length == 0) return value_int(s->length + 1);
+    int count = 0;
+    const char *p   = s->chars;
+    const char *end = s->chars + s->length;
+    while (p + sub->length <= end) {
+        if (memcmp(p, sub->chars, (size_t)sub->length) == 0) {
+            count++;
+            p += sub->length;
+        } else {
+            p++;
+        }
+    }
+    return value_int(count);
+}
+
+/* lstrip() → string: strip leading whitespace */
+static Value string_lstrip(FluxVM *vm, int argc, Value *argv) {
+    (void)argc;
+    FluxString *s = AS_STRING(argv[0]);
+    int start = 0;
+    while (start < s->length && (s->chars[start] == ' '  || s->chars[start] == '\t' ||
+                                  s->chars[start] == '\n' || s->chars[start] == '\r'))
+        start++;
+    return value_object((FluxObject *)object_string_copy(vm, s->chars + start, s->length - start));
+}
+
+/* rstrip() → string: strip trailing whitespace */
+static Value string_rstrip(FluxVM *vm, int argc, Value *argv) {
+    (void)argc;
+    FluxString *s = AS_STRING(argv[0]);
+    int end = s->length - 1;
+    while (end >= 0 && (s->chars[end] == ' '  || s->chars[end] == '\t' ||
+                         s->chars[end] == '\n' || s->chars[end] == '\r'))
+        end--;
+    int len = end + 1;
+    if (len <= 0) return value_object((FluxObject *)object_string_copy(vm, "", 0));
+    return value_object((FluxObject *)object_string_copy(vm, s->chars, len));
+}
+
+/* format(*args) → string: replace each {} placeholder with the next argument */
+static Value string_format(FluxVM *vm, int argc, Value *argv) {
+    FluxString *s     = AS_STRING(argv[0]);
+    int         arg_i = 1;   /* argv[0] = receiver; args start at 1 */
+
+    int   capacity = s->length * 2 + 64;
+    char *buf      = FLUX_ALLOC(char, capacity);
+    int   pos      = 0;
+
+#define FORMAT_ENSURE(need) \
+    if (pos + (need) >= capacity) { \
+        capacity = (pos + (need)) * 2 + 64; \
+        buf = FLUX_REALLOC(buf, char, capacity); \
+    }
+
+    for (int i = 0; i < s->length; i++) {
+        if (s->chars[i] == '{' && i + 1 < s->length && s->chars[i + 1] == '}') {
+            i++; /* skip '}' */
+            if (arg_i < argc) {
+                Value   arg = argv[arg_i++];
+                char    tmp[64];
+                const char *str;
+                int         str_len;
+
+                if (IS_STRING(arg)) {
+                    str     = AS_STRING(arg)->chars;
+                    str_len = AS_STRING(arg)->length;
+                } else if (value_is_int(arg)) {
+                    snprintf(tmp, sizeof(tmp), "%lld", (long long)value_as_int(arg));
+                    str = tmp; str_len = (int)strlen(tmp);
+                } else if (value_is_float(arg)) {
+                    snprintf(tmp, sizeof(tmp), "%g", value_as_float(arg));
+                    str = tmp; str_len = (int)strlen(tmp);
+                } else if (value_is_bool(arg)) {
+                    str = value_as_bool(arg) ? "true" : "false";
+                    str_len = (int)strlen(str);
+                } else if (value_is_null(arg)) {
+                    str = "null"; str_len = 4;
+                } else {
+                    str = "?"; str_len = 1;
+                }
+                FORMAT_ENSURE(str_len);
+                memcpy(buf + pos, str, (size_t)str_len);
+                pos += str_len;
+            }
+        } else {
+            FORMAT_ENSURE(1);
+            buf[pos++] = s->chars[i];
+        }
+    }
+#undef FORMAT_ENSURE
+
+    buf[pos] = '\0';
+    return value_object((FluxObject *)object_string_take(vm, buf, pos));
+}
+
+/* isdigit() → bool: all chars are ASCII digits */
+static Value string_isdigit(FluxVM *vm, int argc, Value *argv) {
+    (void)vm; (void)argc;
+    FluxString *s = AS_STRING(argv[0]);
+    if (s->length == 0) return value_bool(false);
+    for (int i = 0; i < s->length; i++)
+        if (s->chars[i] < '0' || s->chars[i] > '9') return value_bool(false);
+    return value_bool(true);
+}
+
+/* isalpha() → bool: all chars are ASCII letters */
+static Value string_isalpha(FluxVM *vm, int argc, Value *argv) {
+    (void)vm; (void)argc;
+    FluxString *s = AS_STRING(argv[0]);
+    if (s->length == 0) return value_bool(false);
+    for (int i = 0; i < s->length; i++) {
+        char c = s->chars[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) return value_bool(false);
+    }
+    return value_bool(true);
+}
+
+/* isalnum() → bool: all chars are ASCII letters or digits */
+static Value string_isalnum(FluxVM *vm, int argc, Value *argv) {
+    (void)vm; (void)argc;
+    FluxString *s = AS_STRING(argv[0]);
+    if (s->length == 0) return value_bool(false);
+    for (int i = 0; i < s->length; i++) {
+        char c = s->chars[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9'))) return value_bool(false);
+    }
+    return value_bool(true);
+}
+
+/* isupper() → bool: all cased chars are uppercase (at least one cased char) */
+static Value string_isupper(FluxVM *vm, int argc, Value *argv) {
+    (void)vm; (void)argc;
+    FluxString *s = AS_STRING(argv[0]);
+    bool has_cased = false;
+    for (int i = 0; i < s->length; i++) {
+        char c = s->chars[i];
+        if (c >= 'a' && c <= 'z') return value_bool(false);
+        if (c >= 'A' && c <= 'Z') has_cased = true;
+    }
+    return value_bool(has_cased);
+}
+
+/* islower() → bool: all cased chars are lowercase (at least one cased char) */
+static Value string_islower(FluxVM *vm, int argc, Value *argv) {
+    (void)vm; (void)argc;
+    FluxString *s = AS_STRING(argv[0]);
+    bool has_cased = false;
+    for (int i = 0; i < s->length; i++) {
+        char c = s->chars[i];
+        if (c >= 'A' && c <= 'Z') return value_bool(false);
+        if (c >= 'a' && c <= 'z') has_cased = true;
+    }
+    return value_bool(has_cased);
+}
+
+/* substring(start [, end]) → string: slice by byte index (end exclusive, default = len) */
+static Value string_substring(FluxVM *vm, int argc, Value *argv) {
+    FluxString *s = AS_STRING(argv[0]);
+    int start = (argc >= 2 && value_is_int(argv[1])) ? (int)value_as_int(argv[1]) : 0;
+    int end   = (argc >= 3 && value_is_int(argv[2])) ? (int)value_as_int(argv[2]) : s->length;
+
+    /* Python-style negative indices */
+    if (start < 0) start = s->length + start;
+    if (end   < 0) end   = s->length + end;
+
+    if (start < 0) start = 0;
+    if (end   > s->length) end = s->length;
+    if (start >= end) return value_object((FluxObject *)object_string_copy(vm, "", 0));
+
+    return value_object((FluxObject *)object_string_copy(vm, s->chars + start, end - start));
+}
+
+/* encode() → list[int]: UTF-8 byte values of the string */
+static Value string_encode(FluxVM *vm, int argc, Value *argv) {
+    (void)argc;
+    FluxString *s    = AS_STRING(argv[0]);
+    FluxList   *list = object_list_new(vm);
+    vm_push(vm, value_object((FluxObject *)list)); /* GC protect */
+    for (int i = 0; i < s->length; i++)
+        value_array_write(&list->elements, value_int((unsigned char)s->chars[i]));
+    vm_pop(vm);
+    return value_object((FluxObject *)list);
+}
+
+/* repeat(n) → string: repeat string n times */
+static Value string_repeat(FluxVM *vm, int argc, Value *argv) {
+    FluxString *s = AS_STRING(argv[0]);
+    int n = (argc >= 2 && value_is_int(argv[1])) ? (int)value_as_int(argv[1]) : 0;
+    if (n <= 0 || s->length == 0)
+        return value_object((FluxObject *)object_string_copy(vm, "", 0));
+    int  total = s->length * n;
+    char *buf  = FLUX_ALLOC(char, total + 1);
+    for (int i = 0; i < n; i++)
+        memcpy(buf + i * s->length, s->chars, (size_t)s->length);
+    buf[total] = '\0';
+    return value_object((FluxObject *)object_string_take(vm, buf, total));
+}
+
 /* -------------------------------------------------------------------------
  * List built-in methods
  * ---------------------------------------------------------------------- */
@@ -316,6 +547,21 @@ static const MethodEntry string_methods[] = {
     { "ends_with",   string_ends_with,   1 },
     { "replace",     string_replace,     2 },
     { "len",         string_len,         0 },
+    /* --- new methods --- */
+    { "find",        string_find,       -1 },
+    { "index",       string_index_of,   -1 },
+    { "count",       string_count,       1 },
+    { "lstrip",      string_lstrip,      0 },
+    { "rstrip",      string_rstrip,      0 },
+    { "format",      string_format,     -1 },
+    { "isdigit",     string_isdigit,     0 },
+    { "isalpha",     string_isalpha,     0 },
+    { "isalnum",     string_isalnum,     0 },
+    { "isupper",     string_isupper,     0 },
+    { "islower",     string_islower,     0 },
+    { "substring",   string_substring,  -1 },
+    { "encode",      string_encode,      0 },
+    { "repeat",      string_repeat,      1 },
     { NULL, NULL, 0 },
 };
 

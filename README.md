@@ -850,31 +850,64 @@ Fungsi berikut selalu tersedia tanpa `import`:
 | `s.upper()` | Ubah semua huruf menjadi kapital |
 | `s.lower()` | Ubah semua huruf menjadi kecil |
 | `s.trim()` / `s.strip()` | Hapus spasi di awal dan akhir |
+| `s.lstrip()` | Hapus spasi di awal (kiri) saja |
+| `s.rstrip()` | Hapus spasi di akhir (kanan) saja |
 | `s.split(sep)` | Pecah string menjadi list berdasarkan `sep` |
 | `sep.join(list)` | Gabungkan list menjadi string dengan pemisah `sep` |
 | `s.contains(sub)` | `true` jika `sub` ada di dalam `s` |
 | `s.starts_with(prefix)` | `true` jika `s` diawali `prefix` |
 | `s.ends_with(suffix)` | `true` jika `s` diakhiri `suffix` |
 | `s.replace(lama, baru)` | Ganti semua kemunculan `lama` dengan `baru` |
+| `s.find(sub [, start])` | Indeks kemunculan pertama `sub`, atau `-1` jika tidak ada |
+| `s.index(sub [, start])` | Seperti `find`, tetapi melempar `ValueError` jika tidak ditemukan |
+| `s.count(sub)` | Jumlah kemunculan `sub` yang tidak tumpang-tindih |
+| `s.format(*args)` | Ganti setiap `{}` dengan argumen berikutnya secara berurutan |
+| `s.isdigit()` | `true` jika semua karakter adalah angka ASCII |
+| `s.isalpha()` | `true` jika semua karakter adalah huruf ASCII |
+| `s.isalnum()` | `true` jika semua karakter adalah huruf atau angka ASCII |
+| `s.isupper()` | `true` jika semua huruf berhuruf kapital (minimal satu huruf) |
+| `s.islower()` | `true` jika semua huruf berhuruf kecil (minimal satu huruf) |
+| `s.substring(start [, end])` | Ambil substring dari indeks `start` sampai `end` (eksklusif); mendukung indeks negatif |
+| `s.encode()` | Kembalikan list berisi nilai byte (int) dari string (UTF-8) |
+| `s.repeat(n)` | Ulangi string sebanyak `n` kali |
 | `s.len()` | Panjang string (sama dengan `len(s)`) |
 
 ```flux
 s = "Hello, World!"
 
-s.upper()                  # "HELLO, WORLD!"
-s.lower()                  # "hello, world!"
-s.trim()                   # "Hello, World!" (hapus spasi tepi)
-s.split(", ")              # ["Hello", "World!"]
-"-".join(["a", "b", "c"]) # "a-b-c"
-s.contains("World")        # true
-s.starts_with("Hello")     # true
-s.ends_with("!")           # true
-s.replace("World", "Flux") # "Hello, Flux!"
-s.len()                    # 13
+# Metode lama
+s.upper()                      # "HELLO, WORLD!"
+s.lower()                      # "hello, world!"
+s.trim()                       # "Hello, World!" (hapus spasi tepi)
+s.split(", ")                  # ["Hello", "World!"]
+"-".join(["a", "b", "c"])     # "a-b-c"
+s.contains("World")            # true
+s.starts_with("Hello")         # true
+s.ends_with("!")               # true
+s.replace("World", "Flux")     # "Hello, Flux!"
+s.len()                        # 13
+
+# Metode baru
+"  hello  ".lstrip()           # "hello  "
+"  hello  ".rstrip()           # "  hello"
+s.find("World")                # 7
+s.find("xyz")                  # -1
+s.index("World")               # 7  (ValueError jika tidak ada)
+"banana".count("an")           # 2
+"Hello, {}!".format("Flux")    # "Hello, Flux!"
+"{} + {} = {}".format(1, 2, 3) # "1 + 2 = 3"
+"12345".isdigit()              # true
+"Hello".isalpha()              # true
+"abc123".isalnum()             # true
+"HELLO".isupper()              # true
+"hello".islower()              # true
+s.substring(7, 12)             # "World"
+s.substring(-6, -1)            # "World"
+"Hi".encode()                  # [72, 105]
+"ab".repeat(3)                 # "ababab"
 ```
 
-> **Catatan:** Method seperti `find`, `index`, `count`, `lstrip`, `rstrip`,
-> `isdigit`, `isalpha`, `format`, dan slicing (`s[1:3]`) belum tersedia.
+> **Catatan:** Slicing sintaks `s[1:3]` belum tersedia; gunakan `s.substring(1, 3)` sebagai alternatif.
 
 ### List Methods
 

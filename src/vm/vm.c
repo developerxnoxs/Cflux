@@ -1586,6 +1586,52 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                 break;
             }
 
+            case OP_SLICE: {
+                Value end_val   = vm_pop(vm);
+                Value start_val = vm_pop(vm);
+                Value obj_val   = vm_pop(vm);
+
+                if (IS_STRING(obj_val)) {
+                    FluxString *str   = AS_STRING(obj_val);
+                    int         start = value_is_null(start_val) ? 0          : (int)value_as_int(start_val);
+                    int         end   = value_is_null(end_val)   ? str->length : (int)value_as_int(end_val);
+                    if (start < 0) start += str->length;
+                    if (end   < 0) end   += str->length;
+                    if (start < 0) start  = 0;
+                    if (end > str->length) end = str->length;
+                    if (start >= end) {
+                        vm_push(vm, value_object((FluxObject *)object_string_copy(vm, "", 0)));
+                    } else {
+                        vm_push(vm, obj_val); /* GC-protect source string */
+                        FluxString *res = object_string_copy(vm,
+                                              AS_STRING(obj_val)->chars + start, end - start);
+                        vm_pop(vm);
+                        vm_push(vm, value_object((FluxObject *)res));
+                    }
+                } else if (IS_LIST(obj_val)) {
+                    FluxList *src   = AS_LIST(obj_val);
+                    int       start = value_is_null(start_val) ? 0                   : (int)value_as_int(start_val);
+                    int       end   = value_is_null(end_val)   ? src->elements.count  : (int)value_as_int(end_val);
+                    if (start < 0) start += src->elements.count;
+                    if (end   < 0) end   += src->elements.count;
+                    if (start < 0) start  = 0;
+                    if (end > src->elements.count) end = src->elements.count;
+                    if (start > end) start = end;
+                    vm_push(vm, obj_val); /* GC-protect source list */
+                    FluxList *result = object_list_new(vm);
+                    vm_push(vm, value_object((FluxObject *)result)); /* GC-protect result */
+                    src = AS_LIST(obj_val); /* re-fetch after potential GC */
+                    for (int i = start; i < end; i++)
+                        value_array_write(&result->elements, src->elements.data[i]);
+                    vm_pop(vm); /* pop result GC-protect */
+                    vm_pop(vm); /* pop obj GC-protect   */
+                    vm_push(vm, value_object((FluxObject *)result));
+                } else {
+                    RUNTIME_ERROR("Slice not supported on this type");
+                }
+                break;
+            }
+
             case OP_GET_ITER: {
                 /* If TOS is an instance with on_iter(), call it and replace TOS
                  * with the returned iterable.  Otherwise: no-op. */

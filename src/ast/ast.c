@@ -331,6 +331,12 @@ void ast_print(AstNode *node, int indent) {
             ast_print(node->as.index_expr.object, indent + 1);
             ast_print(node->as.index_expr.index,  indent + 1);
             break;
+        case AST_SLICE:
+            printf("Slice\n");
+            ast_print(node->as.slice_expr.object, indent + 1);
+            if (node->as.slice_expr.start) ast_print(node->as.slice_expr.start, indent + 1);
+            if (node->as.slice_expr.end)   ast_print(node->as.slice_expr.end,   indent + 1);
+            break;
         case AST_ATTR:
             printf("Attr(.%s)\n", node->as.attr.attr);
             ast_print(node->as.attr.object, indent + 1);

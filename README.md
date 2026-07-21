@@ -905,9 +905,17 @@ s.substring(7, 12)             # "World"
 s.substring(-6, -1)            # "World"
 "Hi".encode()                  # [72, 105]
 "ab".repeat(3)                 # "ababab"
+
+# Slicing sintaks (didukung langsung)
+s[7:12]    # "World"
+s[:5]      # "Hello"
+s[7:]      # "World!"
+s[:]       # "Hello, World!"
+s[-6:]     # "World!"
+s[-6:-1]   # "World"
 ```
 
-> **Catatan:** Slicing sintaks `s[1:3]` belum tersedia; gunakan `s.substring(1, 3)` sebagai alternatif.
+> **Sintaks slice `s[start:end]`** didukung langsung di tingkat bahasa — tidak perlu memanggil method apapun. `start` dan `end` keduanya opsional dan mendukung indeks negatif.
 
 ### List Methods
 
@@ -920,21 +928,44 @@ s.substring(-6, -1)            # "World"
 | `lst.remove(x)` | Hapus kemunculan pertama nilai `x` |
 | `lst.contains(x)` | `true` jika `x` ada di dalam list |
 | `lst.reverse()` | Balik urutan list secara in-place |
+| `lst.sort()` | Urutkan list secara in-place (angka & string) |
+| `lst.extend(other)` | Tambahkan semua elemen dari list `other` ke akhir |
+| `lst.find(x)` | Indeks kemunculan pertama `x`, atau `-1` jika tidak ada |
+| `lst.index(x)` | Seperti `find`, tetapi melempar `ValueError` jika tidak ditemukan |
+| `lst.count(x)` | Jumlah kemunculan nilai `x` |
+| `lst.clear()` | Hapus semua elemen secara in-place |
+| `lst.copy()` | Kembalikan shallow copy dari list |
 
 ```flux
 angka = [3, 1, 4, 1, 5]
 
-angka.append(9)       # [3, 1, 4, 1, 5, 9]
-angka.pop()           # hapus 9, kembalikan 9
-angka.insert(0, 0)    # [0, 3, 1, 4, 1, 5]
-angka.remove(1)       # hapus 1 pertama → [0, 3, 4, 1, 5]
-angka.contains(4)     # true
-angka.reverse()       # [5, 1, 4, 3, 0]
-angka.len()           # 5
+angka.append(9)           # [3, 1, 4, 1, 5, 9]
+angka.pop()               # hapus 9, kembalikan 9
+angka.insert(0, 0)        # [0, 3, 1, 4, 1, 5]
+angka.remove(1)           # hapus 1 pertama → [0, 3, 4, 1, 5]
+angka.contains(4)         # true
+angka.reverse()           # [5, 1, 4, 3, 0]
+angka.len()               # 5
+angka.sort()              # [0, 1, 3, 4, 5]
+angka.extend([6, 7])      # [0, 1, 3, 4, 5, 6, 7]
+angka.find(3)             # 2
+angka.find(99)            # -1
+angka.index(3)            # 2  (ValueError jika tidak ada)
+[1, 2, 1, 3].count(1)    # 2
+salinan = angka.copy()    # shallow copy
+angka.clear()             # []
 
-# Untuk mengurutkan, gunakan built-in sorted():
-terurut = sorted(angka)   # kembalikan list baru yang terurut
+# Slicing sintaks (didukung langsung)
+lst = [0, 1, 2, 3, 4, 5]
+lst[1:4]    # [1, 2, 3]
+lst[:3]     # [0, 1, 2]
+lst[3:]     # [3, 4, 5]
+lst[-3:]    # [3, 4, 5]
+lst[-3:-1]  # [3, 4]
+lst[:]      # [0, 1, 2, 3, 4, 5]  (salinan)
 ```
+
+> **Sintaks slice `lst[start:end]`** menghasilkan list baru (copy independen) — mengubah hasil slice tidak mempengaruhi list aslinya.
 
 
 ### Dict Methods

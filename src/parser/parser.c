@@ -658,12 +658,34 @@ static AstNode *parse_postfix(Parser *p) {
             consume(p, TOK_RPAREN, "Expected ')' after arguments");
             node = call;
         } else if (match(p, TOK_LBRACKET)) {
-            /* Index */
-            AstNode *idx = ast_node_alloc(p->arena, AST_INDEX, line, col);
-            idx->as.index_expr.object = node;
-            idx->as.index_expr.index  = parse_expr(p);
-            consume(p, TOK_RBRACKET, "Expected ']' after index");
-            node = idx;
+            /* Index a[i]  or slice a[start:end] */
+            if (match(p, TOK_COLON)) {
+                /* a[:end] — start omitted */
+                AstNode *sl = ast_node_alloc(p->arena, AST_SLICE, line, col);
+                sl->as.slice_expr.object = node;
+                sl->as.slice_expr.start  = NULL;
+                sl->as.slice_expr.end    = check(p, TOK_RBRACKET) ? NULL : parse_expr(p);
+                consume(p, TOK_RBRACKET, "Expected ']' after slice");
+                node = sl;
+            } else {
+                AstNode *first = parse_expr(p);
+                if (match(p, TOK_COLON)) {
+                    /* a[start:end] or a[start:] */
+                    AstNode *sl = ast_node_alloc(p->arena, AST_SLICE, line, col);
+                    sl->as.slice_expr.object = node;
+                    sl->as.slice_expr.start  = first;
+                    sl->as.slice_expr.end    = check(p, TOK_RBRACKET) ? NULL : parse_expr(p);
+                    consume(p, TOK_RBRACKET, "Expected ']' after slice");
+                    node = sl;
+                } else {
+                    /* plain index a[i] */
+                    AstNode *idx = ast_node_alloc(p->arena, AST_INDEX, line, col);
+                    idx->as.index_expr.object = node;
+                    idx->as.index_expr.index  = first;
+                    consume(p, TOK_RBRACKET, "Expected ']' after index");
+                    node = idx;
+                }
+            }
         } else if (match(p, TOK_DOT)) {
             /* Attribute */
             /* Allow keywords as attribute names (e.g. obj.import) */

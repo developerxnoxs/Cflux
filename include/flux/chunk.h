@@ -37,6 +37,7 @@ typedef enum {
     OP_SET_ATTR,         /* operand: uint16 constant (name)    */
     OP_GET_INDEX,        /* TOS = index, TOS-1 = container     */
     OP_SET_INDEX,        /* TOS = value, TOS-1 = index, TOS-2 = cont */
+    OP_SLICE,            /* TOS=end, TOS-1=start, TOS-2=obj → slice */
 
     /* Stack manipulation */
     OP_POP,

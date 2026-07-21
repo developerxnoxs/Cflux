@@ -636,6 +636,19 @@ static void compile_expr(Compiler *c, AstNode *node) {
             emit_byte(c, OP_GET_INDEX, line);
             break;
 
+        case AST_SLICE:
+            compile_expr(c, node->as.slice_expr.object);
+            if (node->as.slice_expr.start)
+                compile_expr(c, node->as.slice_expr.start);
+            else
+                emit_byte(c, OP_PUSH_NULL, line);
+            if (node->as.slice_expr.end)
+                compile_expr(c, node->as.slice_expr.end);
+            else
+                emit_byte(c, OP_PUSH_NULL, line);
+            emit_byte(c, OP_SLICE, line);
+            break;
+
         case AST_ATTR: {
             compile_expr(c, node->as.attr.object);
             const char *attr = node->as.attr.attr;

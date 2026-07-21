@@ -35,6 +35,7 @@ typedef enum {
     AST_UNARY,
     AST_CALL,
     AST_INDEX,           /* a[i]   */
+    AST_SLICE,           /* a[i:j] */
     AST_ATTR,            /* a.b    */
     AST_LIST,
     AST_DICT,
@@ -170,6 +171,9 @@ struct AstNode {
 
         /* AST_INDEX */
         struct { AstNode *object; AstNode *index; } index_expr;
+
+        /* AST_SLICE: a[start:end] — start or end may be NULL (omitted) */
+        struct { AstNode *object; AstNode *start; AstNode *end; } slice_expr;
 
         /* AST_ATTR */
         struct { AstNode *object; char *attr; } attr;

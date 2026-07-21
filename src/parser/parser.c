@@ -35,8 +35,7 @@
  * "Expected expression" error that appears on the trailing ':'. */
 static const char *keyword_suggestion(const char *id, int len) {
     /* Function definition aliases (most common mistake) */
-    if ((len == 2 && memcmp(id, "fn",       2) == 0) ||
-        (len == 3 && memcmp(id, "def",      3) == 0) ||
+    if ((len == 3 && memcmp(id, "def",      3) == 0) ||
         (len == 3 && memcmp(id, "fun",      3) == 0) ||
         (len == 6 && memcmp(id, "method",   6) == 0) ||
         (len == 8 && memcmp(id, "function", 8) == 0) ||

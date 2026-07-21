@@ -1,224 +1,63 @@
 # Flux Programming Language
 
-Flux adalah bahasa pemrograman modern yang diimplementasikan dalam C, dengan VM berbasis bytecode, garbage collector, dan standard library lengkap.
+Flux adalah bahasa pemrograman modern yang diimplementasikan dalam C. Menggunakan VM berbasis bytecode, garbage collector mark-and-sweep, sistem tipe dinamis, coroutine async/await berbasis libuv, dan standard library yang di-load secara lazy.
 
-## Cara Menjalankan
-
-### Build
+## How to run
 
 ```bash
-make all
-```
-
-Menghasilkan `build_make/flux` (executable), `build_make/libflux.a`, dan semua modul stdlib.
-
-### Jalankan Program Flux
-
-```bash
-./build_make/flux <file.flx>
-./build_make/flux -e 'print("hello")'
-./build_make/flux repl
-```
-
-### Bersihkan Build
-
-```bash
-make clean
-```
-
-## Stack Teknologi
-
-- **Bahasa:** C (C17)
-- **Build:** GNU Make (utama), CMake (alternatif)
-- **Dependensi:** libuv (async), libpq/postgresql (ekstensi opsional)
-- **VM:** Stack-based bytecode interpreter
-- **GC:** Tri-color mark-and-sweep
-
-## Struktur Direktori
-
-- `src/` — source code VM, compiler, lexer, parser, GC, runtime, stdlib, API
-- `include/flux/` — header publik (termasuk `flux.h` dan `extension.h`)
-- `stdlib/` — modul standard library (.so, lazy-loaded)
-- `extension/` — ekstensi native (.so), contoh: postgresql
-- `tests/` — test suite (.flx dan .c)
-- `build_make/` — output build (dibuat oleh `make all`)
-
-## Perubahan Terkini
-
-### Awaitable Protocol (`__await__`)
-`await` kini mendukung objek custom yang mengimplementasikan method `__await__(self)`.
-Method tersebut dipanggil untuk mendapatkan nilai yang sebenarnya di-await (bisa berupa
-Future, Coroutine, nilai biasa, atau awaitable lain — OP_AWAIT di-rerun secara otomatis
-pada nilai kembalian `__await__`).
-
-```flux
-class DelayedValue:
-    func __init__(self, val):
-        self.val = val
-    func __await__(self):
-        return self.val   # bisa juga return Future/Coroutine
-
-async func run():
-    dv = DelayedValue(42)
-    result = await dv     # memanggil dv.__await__() → 42
-```
-
-Objek instance tanpa `__await__` menghasilkan runtime error yang jelas:
-`"object of type 'X' is not awaitable (implement '__await__ to make it awaitable)"`.
-
-**Lokasi:** `src/vm/vm.c` (OP_AWAIT), `include/flux/vm.h` (konstanta limits).
-
-### Multi-line Pipeline (`|>` di baris baru)
-`|>` kini dapat ditulis di awal baris berikutnya (indentasi sama dengan ekspresi sebelumnya).
-
-```flux
-# Semua bentuk ini valid:
-result = value |> f |> g                # satu baris (lama)
-
-result = value                          # |> di baris baru, kolom 0
-|> f
-|> g
-
-result = value |> f                     # campuran
-|> g
-
-func process(n):
-    r = n                               # |> di dalam fungsi,
-    |> double                           #    sejajar dengan baris sebelumnya
-    |> add10
-    return r
-```
-
-**Aturan:** `|>` harus berada di indentasi yang **sama** dengan ekspresi yang di-pipe (bukan lebih dalam). Gunakan tanda kurung jika perlu indentasi berbeda.
-
-**Lokasi:** `src/parser/parser.c` (fungsi `parse_pipeline`).
-
-### Circular Import — Pesan Error Berantai
-Deteksi circular import sudah ada dan kini menampilkan rantai import lengkap sehingga
-sumber siklus mudah ditemukan.
-
-```
-runtime error: Circular import detected: a → b → a
-```
-
-Sebelumnya hanya: `Circular import detected while loading 'a'`.
-
-**Lokasi:** `src/vm/vm.c` (fungsi `do_import`), `include/flux/vm.h` (field `import_stack_names`/`import_stack_count` di struct `FluxVM`).
-
----
-
-## Fitur Bahasa & Modul
-
-- **Operator ternary**: `kondisi ? nilai_jika_benar : nilai_jika_salah`
-- **Modul socket** (`stdlib/socket/`): TCP client/server, UDP, raw socket, DNS resolve, select — semua fungsi kembalikan `{ok, error, ...}` sehingga error tidak pernah diam-diam hilang
-- **Modul mysql** (`extension/mysql/`): koneksi ke MySQL/MariaDB, query/exec/insert_id/escape/ping/close — tipe data kolom dikonversi otomatis (INT→int, FLOAT→float, NULL→null)
-- **Modul http** (`extension/http/`): HTTP/1.1 client (via libcurl — HTTPS, redirect, chunked, IPv6) + HTTP server (raw POSIX socket, deadline-timeout, validasi Content-Length). API identik v2.
-
-## Menjalankan Test WebSocket Client
-
-```bash
-# Pastikan sudah build terlebih dahulu
+# Build semua (executable + stdlib .so + extensions)
 make all
 
-# Jalankan test suite ws client (termasuk server fixture di background)
-./build_make/flux tests/ws_client_flux_test.flx
+# Jalankan file Flux
+./build_make/flux run <file.flx>
+
+# Jalankan semua test (file .flx di folder tests/)
+for f in tests/*.flx; do ./build_make/flux run "$f"; done
 ```
 
-File fixture:
-- `tests/ws_echo_server.flx` — echo server pada port 19001 (dipakai Test 1)
-- `tests/ws_header_echo_server.flx` — echo server pada port 19002 (dipakai Test 4)
+## Build output
 
-Catatan penting tentang Flux + WebSocket:
-- `ws.accept()`, `ws.recv()`, `ws.send()` adalah blocking POSIX call — tidak kompatibel dengan `spawn` (coroutine)
-- Untuk test in-process server+client, gunakan `shell.exec("... &")` agar server berjalan di proses terpisah
-- Hindari blank line di antara cabang `if/elif/else` — Flux memisahkan blok berdasarkan indentasi/baris kosong
-- Kondisi `and` kompleks di `elif` sebaiknya diekstrak ke variabel terlebih dahulu
+| Output | Keterangan |
+|--------|-----------|
+| `build_make/flux` | Executable CLI |
+| `build_make/libflux.a` | Static library untuk embedding |
+| `stdlib/*/lib*.so` | Modul standard library (lazy-loaded) |
+| `extension/*/lib*.so` | Ekstensi native (HTTP, WebSocket, MySQL, PostgreSQL) |
 
-## Fitur Baru yang Ditambahkan
+## CLI commands
 
-### Walrus Operator (`:=`) — Assignment Expression
-Operator `:=` mengevaluasi ekspresi, menyimpan ke variabel, dan mengembalikan nilai dalam satu langkah.
-
-```flux
-# Assign dan gunakan sekaligus dalam kondisi
-if (n := len(items)) > 3:
-    print(f"Ada {n} item")
-
-# Dalam while loop
-while (line := read_next()) != "":
-    process(line)
+```
+flux run <file.flx>     Jalankan file Flux
+flux build <file.flx>   Compile-only check
+flux test <file.flx>    Jalankan sebagai test suite
+flux fmt <file.flx>     Format file sumber
+flux lint <file.flx>    Lint (syntax + semantic warnings)
+flux doc <file.flx>     Generate dokumentasi Markdown
 ```
 
-Diimplementasikan di: `src/lexer/lexer.c` (token `TOK_WALRUS`), `src/parser/parser.c`, `src/compiler/compiler.c` (case `AST_WALRUS`).
+## Stack
 
-### List Comprehension
-```flux
-# Dasar
-squares = [x * x for x in [1, 2, 3, 4, 5]]   # → [1, 4, 9, 16, 25]
+- **Language**: C (C17 / gnu17)
+- **Build**: GNU Make + CMake (alternatif)
+- **Async runtime**: libuv
+- **HTTP extension**: libcurl + openssl
+- **WebSocket extension**: wslay
+- **Database extensions**: libpq (PostgreSQL), libmysqlclient (MySQL)
+- **Nix dependencies**: dikonfigurasi di `replit.nix`
 
-# Dengan filter
-evens = [x for x in items if x % 2 == 0]
+## Project structure
 
-# Transform + filter
-result = [v * 2 for v in data if v > 10]
-```
+- `src/` — Implementasi VM, compiler, parser, lexer, GC, stdlib
+- `stdlib/` — Modul standard library (.so): math, fs, os, io, json, time, sys, shell, socket, native
+- `extension/` — Ekstensi native (.so): http, ws, mysql, postgresql
+- `tests/` — Test suite dalam Flux (.flx)
+- `include/` — Header files publik
+- `docs/` — Dokumentasi tambahan
 
-### Dict Comprehension
-```flux
-# Dasar
-lengths = {word: len(word) for word in words}
+## Bugs fixed
 
-# Dengan filter
-short = {k: v for k, v in pairs if len(k) <= 3}
-```
+- **`fn` as identifier** (`src/parser/parser.c`): Parser secara keliru melarang `fn` sebagai nama variabel/parameter karena dianggap keyword alias. Dihapus dari daftar alias agar `fn` bisa dipakai sebagai identifier biasa.
 
-Comprehension dikompilasi sebagai closure anonymous yang langsung dipanggil (pola CPython), sehingga scoping bersih dan tidak ada slot lokal yang bocor ke frame pemanggil.
+## User preferences
 
-Test suite: `tests/test_walrus_comprehension.flx`
-
-> **Catatan:** Walrus operator (`:=`) di dalam kondisi `if` di dalam comprehension (misal `[y for x in list if (y := expr) > 0]`) belum didukung — gunakan `[expr for x in list if expr > 0]` sebagai alternatif.
-
-## Perubahan Terbaru
-
-- **Fix ws client — message queue** (`extension/ws/ws_ext.c`): Ganti single-slot `pending` dengan circular buffer 16 slot (`WsMsgQueue`). Sebelumnya, jika server mengirim TEXT frame lalu langsung CLOSE frame dalam satu `wslay_event_recv()`, frame TEXT hilang tertimpa CLOSE. Sekarang kedua frame masuk antrian dan `ws.recv()` mengambilnya satu per satu.
-- **Fix ws client — timing** (`extension/ws/ws_ext.c`): Kalkulasi `remain` di `tcp_connect_timeout()` dan loop send handshake mengabaikan nanosecond, sehingga bisa timeout prematur jika sisa waktu kurang dari 1 detik. Diperbaiki ke kalkulasi nsec-aware.
-- **Fix ws client — URL tidak valid** (`extension/ws/ws_ext.c`): `ws.connect()` dengan URL bukan `ws://` sebelumnya melempar runtime error; sekarang mengembalikan `null` sesuai kontrak API (kembalikan null jika gagal, bukan exception).
-- **Fix print() buffering** (`src/stdlib/stdlib_core.c`): Tambah `fflush(stdout)` di `native_print` sehingga output `print()` langsung muncul bahkan saat stdout bukan TTY (misalnya saat server HTTP menunggu koneksi). Sebelumnya hanya `write()` yang flush, `print()` tidak.
-
-
-
-- **Modul HTTP v3** (`extension/http/http_ext.c`): Upgrade keamanan dan stabilitas — lihat detail di bawah.
-- **Sintaksis class**: Konstruktor kini menggunakan `func __init__(...)` (Python-style). Compiler juga menerima `func init(...)` sebagai alias untuk kompatibilitas mundur.
-- **Stack overflow protection**: `FLUX_FRAMES_MAX` dikurangi dari 6000 → 500 untuk mencegah segfault di Replit; ditambahkan bounds check pada `vm_push` dan `call_closure`.
-
-### Modul HTTP v3 — Ringkasan Perubahan
-
-**Masalah yang diatasi (killed / hang / segfault):**
-
-| Masalah | Root Cause | Fix |
-|---------|-----------|-----|
-| **Segfault di hardened kernel** | GCC nested function (`auto void set_str(...)`) membuat stack trampoline — SIGILL/SIGSEGV jika stack non-executable | Ganti dengan fungsi `static` biasa (`dict_set_str`, `dict_set_bool_`, `dict_set_int_`) |
-| **Server hang dari client lambat** | `SO_RCVTIMEO` hanya batas waktu per `recv()` call — client yang kirim 1 byte/9 detik bisa gantung server berjam-jam | `recv_headers_deadline()`: setiap `select()` dihitung dari deadline absolut, bukan per-call |
-| **OOM / killed** | Server tidak validasi `Content-Length` sebelum alokasi — `Content-Length: 10GB` memicu loop malloc sampai proses di-kill | Tolak `Content-Length > HTTP_MAX_BODY_LEN` (64 MB) langsung setelah parse header |
-| **Chunk-size overflow** | `strtoul("FFFFFFFFFFFF", NULL, 16)` → `ULONG_MAX` → `need = 1` → heap corruption | `strtoull` + cap eksplisit: `chunk_size > HTTP_MAX_BODY_LEN` → tolak |
-| **SSL hang / memory leak (client)** | Implementasi raw-socket SSL/redirect/chunked punya edge-case deadlock dan leak | Client ditulis ulang dengan **libcurl** (battle-tested, zero SSL bug) |
-
-**Peningkatan lain (server):**
-- `TCP_NODELAY` pada setiap accepted socket — latensi respons lebih rendah
-- `SO_REUSEPORT` jika tersedia — lebih baik untuk multi-instance
-- Backlog `listen()` ditingkatkan dari 128 → 256
-- Body reading menggunakan deadline-based `select()` (bukan blocking `recv`)
-
-**HTTP Client (libcurl):**
-- HTTPS (TLS 1.2+), verifikasi sertifikat aktif
-- Redirect otomatis hingga 10 hop (301/302 → GET, 307/308 → preserve method)
-- Chunked encoding, IPv4+IPv6, timeout conn+recv
-- Response body dibatasi 64 MB (`CURLOPT_MAXFILESIZE_LARGE`)
-- `CURLOPT_NOSIGNAL=1` — aman untuk multi-thread
-
-**API tidak berubah** — semua kode Flux yang menggunakan `import http` tetap berjalan tanpa modifikasi.
-
-## User Preferences
-
-- Dokumentasi menggunakan Bahasa Indonesia
-- README harus akurat dan berbasis kode aktual
+- Run and test in Indonesian context; README and docs are in Indonesian.

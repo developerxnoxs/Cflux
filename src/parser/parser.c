@@ -1084,8 +1084,13 @@ static AstNode *parse_match(Parser *p) {
         AstNode *body = parse_block(p);
 
         if (is_wildcard) {
+            if (n->as.match_stmt.wildcard_body != NULL)
+                parser_error(p, "Duplicate wildcard '_' in match statement; "
+                                "only one '_' arm is allowed");
             n->as.match_stmt.wildcard_body  = body;
             n->as.match_stmt.wildcard_guard = guard;
+            while (check(p, TOK_NEWLINE)) advance(p);
+            break; /* '_' must be the last arm — stop parsing more patterns */
         } else {
             ast_list_push(&n->as.match_stmt.patterns, pattern);
             ast_list_push(&n->as.match_stmt.bodies,   body);

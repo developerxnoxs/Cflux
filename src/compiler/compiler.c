@@ -2355,21 +2355,92 @@ static void compile_node(Compiler *c, AstNode *node) {
                 add_local(c, name, line);
             }
 
-            /* Load the class for member attachment */
+            /* Load the class for method/member attachment.
+             * Stack: [EnumClass]
+             * OP_MARK_ENUM is emitted AFTER member creation so the class is
+             * still callable (vm_call_value rejects is_enum classes) when we
+             * instantiate the singleton members below. */
             emit_load_var(c, name, line);
 
-            /* Mark as enum */
-            emit_byte(c, OP_MARK_ENUM, line);
+            /* Auto-generate init(self, name, value) so that calling the enum
+             * class produces a properly-typed instance with .name and .value. */
+            {
+                CompilerFrame init_f;
+                frame_init(c, &init_f, FUNC_INIT, "init", 4);
+                scope_begin(c);
+                c->frame->function->arity = 2; /* name, value (self is slot 0) */
+                add_local(c, "name",  line);   /* slot 1 */
+                add_local(c, "value", line);   /* slot 2 */
 
-            /* Attach each member as a class attribute (integer ordinal) */
+                /* self.name = name */
+                emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, 0, line);
+                emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, 1, line);
+                emit_byte(c, OP_SET_ATTR, line);
+                emit_uint16(c, identifier_constant(c, "name", 4, line), line);
+
+                /* self.value = value */
+                emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, 0, line);
+                emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, 2, line);
+                emit_byte(c, OP_SET_ATTR, line);
+                emit_uint16(c, identifier_constant(c, "value", 5, line), line);
+
+                /* return self */
+                emit_byte(c, OP_LOAD_LOCAL, line); emit_byte(c, 0, line);
+                emit_byte(c, OP_RETURN, line);
+
+                scope_end(c, line);
+                FluxFunction *init_fn = frame_end(c, line);
+                uint16_t init_idx = make_constant(c, value_object((FluxObject *)init_fn), line);
+                emit_byte(c, OP_CLOSURE, line);
+                emit_uint16(c, init_idx, line);
+                for (int i = 0; i < init_fn->upvalue_count; i++) {
+                    emit_byte(c, init_f.upvalues[i].is_local ? 1 : 0, line);
+                    emit_byte(c, init_f.upvalues[i].index, line);
+                }
+                emit_byte(c, OP_METHOD, line);
+                emit_uint16(c, identifier_constant(c, "init", 4, line), line);
+            }
+
+            /* For each member, instantiate the enum class to produce a typed
+             * singleton, then store it as a class attribute.
+             *
+             * Stack before each iteration: [EnumClass]
+             *   emit_load_var → [EnumClass, EnumClass]   (callee for OP_CALL)
+             *   push string   → [EnumClass, EnumClass, "MemberName"]
+             *   push int      → [EnumClass, EnumClass, "MemberName", ordinal]
+             *   OP_CALL 2     → [EnumClass, instance]    (EnumClass(name, ordinal))
+             *   OP_METHOD     → [EnumClass]               (stores instance, pops it)
+             */
             for (int i = 0; i < count; i++) {
                 AstNode    *m     = node->as.enum_def.members.data[i];
                 const char *mname = m->as.ident.name;
+                int         mlen  = (int)strlen(mname);
+
+                /* Load callee (class) */
+                emit_load_var(c, name, line);
+
+                /* Push member name as string constant */
+                FluxString *mname_str = object_string_copy(c->vm, mname, mlen);
+                uint16_t    mname_const = make_constant(c, value_object((FluxObject *)mname_str), line);
+                emit_byte(c, OP_PUSH_CONST, line);
+                emit_uint16(c, mname_const, line);
+
+                /* Push ordinal */
                 emit_byte(c, OP_PUSH_INT, line);
                 chunk_write_int64(current_chunk(c), (int64_t)i, line);
+
+                /* Call EnumClass(name, ordinal) → instance */
+                emit_byte(c, OP_CALL, line);
+                emit_byte(c, 2, line);
+
+                /* Store instance as EnumClass.MemberName */
                 emit_byte(c, OP_METHOD, line);
-                emit_uint16(c, identifier_constant(c, mname, (int)strlen(mname), line), line);
+                emit_uint16(c, identifier_constant(c, mname, mlen, line), line);
             }
+
+            /* Now that all singletons are created, seal the class as an enum.
+             * From this point on, calling the class directly is a runtime error. */
+            emit_byte(c, OP_MARK_ENUM, line);
 
             /* Pop the class */
             emit_byte(c, OP_POP, line);

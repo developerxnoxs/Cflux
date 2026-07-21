@@ -1525,6 +1525,20 @@ AstNode *parser_parse(Parser *p) {
 
     skip_newlines(p);
     while (!check(p, TOK_EOF)) {
+        /* At module level, INDENT and DEDENT are structural tokens that only
+         * belong inside blocks.  If error recovery leaves them stranded here
+         * (e.g. the user wrote an unsupported keyword like "fn" instead of
+         * "func", causing the indented body to be orphaned), consume them
+         * silently rather than spinning in an infinite loop.  parse_primary
+         * intentionally does NOT advance past DEDENT (so it can signal the
+         * end of a block to parse_block), and synchronize returns immediately
+         * when previous==NEWLINE, so without this guard the parser hangs. */
+        if (check(p, TOK_INDENT) || check(p, TOK_DEDENT)) {
+            advance(p);
+            skip_newlines(p);
+            continue;
+        }
+
         AstNode *stmt = parse_stmt(p);
         if (stmt) ast_list_push(&module->as.block.stmts, stmt);
         if (p->panic_mode) synchronize(p);

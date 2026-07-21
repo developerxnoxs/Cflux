@@ -807,14 +807,28 @@ static AstNode *parse_or(Parser *p) {
 
 static AstNode *parse_pipeline(Parser *p) {
     AstNode *left = parse_or(p);
-    while (check(p, TOK_PIPE_ARROW) ||
-           /* Allow newline before |> for multi-line pipelines */
-           (check(p, TOK_NEWLINE) && false /* disabled; see comment below */)) {
-        /* Skip newlines before |> to enable multi-line pipelines:
-         *   value
-         *   |> transform
-         * This would require look-ahead beyond NEWLINE. For now, single-line
-         * pipelines work: value |> f |> g */
+    for (;;) {
+        if (check(p, TOK_PIPE_ARROW)) {
+            /* Single-line: expr |> func |> func  (same line) */
+        } else if (check(p, TOK_NEWLINE)) {
+            /* Multi-line: peek past the newline to see if |> follows.
+             *
+             *   value
+             *   |> transform
+             *   |> another
+             *
+             * We use a temporary copy of the lexer so the real lexer
+             * state is not disturbed — same technique used elsewhere in
+             * this file (e.g. the type-annotation lookahead above). */
+            Lexer lex_copy = *p->lex;
+            Token next     = lexer_next(&lex_copy);
+            if (next.kind != TOK_PIPE_ARROW) break; /* normal end-of-statement */
+            advance(p); /* consume NEWLINE — continuation confirmed */
+            /* current is now TOK_PIPE_ARROW, fall through */
+        } else {
+            break;
+        }
+
         int line = p->current.line, col = p->current.column;
         advance(p); /* consume |> */
         AstNode *right = parse_or(p);

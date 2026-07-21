@@ -68,6 +68,31 @@ Objek instance tanpa `__await__` menghasilkan runtime error yang jelas:
 
 **Lokasi:** `src/vm/vm.c` (OP_AWAIT), `include/flux/vm.h` (konstanta limits).
 
+### Multi-line Pipeline (`|>` di baris baru)
+`|>` kini dapat ditulis di awal baris berikutnya (indentasi sama dengan ekspresi sebelumnya).
+
+```flux
+# Semua bentuk ini valid:
+result = value |> f |> g                # satu baris (lama)
+
+result = value                          # |> di baris baru, kolom 0
+|> f
+|> g
+
+result = value |> f                     # campuran
+|> g
+
+func process(n):
+    r = n                               # |> di dalam fungsi,
+    |> double                           #    sejajar dengan baris sebelumnya
+    |> add10
+    return r
+```
+
+**Aturan:** `|>` harus berada di indentasi yang **sama** dengan ekspresi yang di-pipe (bukan lebih dalam). Gunakan tanda kurung jika perlu indentasi berbeda.
+
+**Lokasi:** `src/parser/parser.c` (fungsi `parse_pipeline`).
+
 ### Circular Import — Pesan Error Berantai
 Deteksi circular import sudah ada dan kini menampilkan rantai import lengkap sehingga
 sumber siklus mudah ditemukan.

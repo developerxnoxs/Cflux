@@ -44,3 +44,80 @@ print(Status.Err.value)
 
 # Test 6: Enum type check
 print(type(Direction.North))
+
+# Test 7: All Direction variants in match
+func describe_dir(dir):
+    match dir:
+        case Direction.North:
+            return "north"
+        case Direction.South:
+            return "south"
+        case Direction.East:
+            return "east"
+        case Direction.West:
+            return "west"
+        case _:
+            return "unknown"
+
+print(describe_dir(Direction.East))
+print(describe_dir(Direction.West))
+print(describe_dir(Direction.South))
+
+# Test 8: Enum in a list and iteration
+let dirs = [Direction.North, Direction.East, Direction.South, Direction.West]
+for dir in dirs:
+    print(dir.name)
+
+# Test 9: Enum used in ternary expression (Flux syntax: cond ? then : else)
+let flag = Status.Ok
+let msg = flag == Status.Ok ? "pass" : "fail"
+print(msg)
+
+# Test 10: Enum passed to and returned from a function
+func next_status(st):
+    if st == Status.Ok:
+        return Status.Pending
+    if st == Status.Pending:
+        return Status.Err
+    return Status.Ok
+
+print(next_status(Status.Ok))
+print(next_status(Status.Pending))
+print(next_status(Status.Err))
+
+# Test 11: Enum .value used in arithmetic
+let combined = Status.Err.value + Status.Pending.value
+print(combined)
+
+# Test 12: Enum inequality
+print(Direction.North != Direction.South)
+print(Direction.East  != Direction.East)
+
+# Test 13: All Status variants in match to cover wildcard arm
+func status_code(st):
+    match st:
+        case Status.Ok:
+            return 200
+        case Status.Err:
+            return 500
+        case _:
+            return 202
+
+print(status_code(Status.Ok))
+print(status_code(Status.Err))
+print(status_code(Status.Pending))
+
+# Test 14: Enum .value used in arithmetic
+let sum_vals = Status.Err.value + Status.Pending.value
+print(sum_vals)
+
+# Test 15: Consecutive auto-ordinal values
+enum Color:
+    Red
+    Green
+    Blue
+
+print(Color.Red.value)
+print(Color.Green.value)
+print(Color.Blue.value)
+print(Color.Red.name)

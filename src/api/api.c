@@ -26,6 +26,25 @@ void flux_load_stdlib(FluxVM *vm);
 void flux_load_module(FluxVM *vm, const char *module_name);
 
 /* -------------------------------------------------------------------------
+ * Command-line arguments — stored here (public API layer) so that the
+ * lazily-loaded sys module can call flux_get_argv() without depending on
+ * stdlib internals.  Previously lived in stdlib.c, which caused an ABI
+ * layering violation: public symbols implemented in an internal file.
+ * ---------------------------------------------------------------------- */
+static int    s_argc = 0;
+static char **s_argv = NULL;
+
+void flux_set_argv(int argc, char **argv) {
+    s_argc = argc;
+    s_argv = argv;
+}
+
+void flux_get_argv(int *out_argc, char ***out_argv) {
+    if (out_argc) *out_argc = s_argc;
+    if (out_argv) *out_argv = s_argv;
+}
+
+/* -------------------------------------------------------------------------
  * VM lifecycle
  * ---------------------------------------------------------------------- */
 

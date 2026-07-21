@@ -24,7 +24,7 @@ let c = Counter(0)
 c.value = c.value + 1
 print(c.value)
 
-# Test 4: Nested struct
+# Test 4: Nested struct (one level)
 struct Rect:
     origin
     width
@@ -46,3 +46,77 @@ print(q.y)
 
 # Test 6: Struct type check
 print(type(p))
+
+# Test 7: Deeply nested struct (three levels)
+struct Line:
+    a
+    b
+
+let ln = Line(Point(1, 2), Point(3, 4))
+print(ln.a.x)
+print(ln.a.y)
+print(ln.b.x)
+print(ln.b.y)
+
+struct Triangle:
+    ab
+    bc
+    ca
+
+let t_ab = Line(Point(0,0), Point(1,0))
+let t_bc = Line(Point(1,0), Point(0,1))
+let t_ca = Line(Point(0,1), Point(0,0))
+let tri = Triangle(t_ab, t_bc, t_ca)
+print(tri.ab.a.x)
+print(tri.bc.b.y)
+
+# Test 8: Struct stored in a list
+let pts = [Point(10, 20), Point(30, 40), Point(50, 60)]
+print(pts[0].x)
+print(pts[1].y)
+print(pts[2].x)
+
+# Test 9: Struct stored in a dict
+let named = {"origin": Point(0, 0), "tip": Point(9, 9)}
+print(named["origin"].x)
+print(named["tip"].y)
+
+# Test 10: Struct with a null field (explicit)
+struct Maybe:
+    value
+    has_value
+
+let nothing = Maybe(null, false)
+let something = Maybe(42, true)
+print(nothing.value)
+print(nothing.has_value)
+print(something.value)
+print(something.has_value)
+
+# Test 11: Struct passed through multiple function frames
+func shift(pt, dx, dy):
+    return Point(pt.x + dx, pt.y + dy)
+
+func double_shift(pt, dx, dy):
+    return shift(shift(pt, dx, dy), dx, dy)
+
+let moved = double_shift(Point(1, 1), 3, 4)
+print(moved.x)
+print(moved.y)
+
+# Test 12: Struct instance comparison (identity, not value)
+let pa = Point(1, 2)
+let pb = Point(1, 2)
+let pc = pa
+print(pa == pc)
+print(pa == pb)
+
+# Test 13: Struct with string fields, including field that holds a struct
+struct Named:
+    label
+    data
+
+let n = Named("hello", Point(7, 8))
+print(n.label)
+print(n.data.x)
+print(n.data.y)

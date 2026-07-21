@@ -22,23 +22,10 @@
  */
 #include "stdlib_internal.h"
 
-/* -------------------------------------------------------------------------
- * Command-line arguments — stashed here (not in the `sys` module, which is
- * now a lazily-loaded .so) so flux_set_argv() can be called once at process
- * startup, well before any script has a chance to `import sys`.
- * ---------------------------------------------------------------------- */
-static int    s_argc = 0;
-static char **s_argv = NULL;
-
-void flux_set_argv(int argc, char **argv) {
-    s_argc = argc;
-    s_argv = argv;
-}
-
-void flux_get_argv(int *out_argc, char ***out_argv) {
-    if (out_argc) *out_argc = s_argc;
-    if (out_argv) *out_argv = s_argv;
-}
+/* flux_set_argv / flux_get_argv are public API symbols; their canonical
+ * implementation now lives in src/api/api.c so they remain in the correct
+ * ABI layer.  stdlib.c only needs flux_get_argv (called by the lazily-loaded
+ * sys module) — the linker resolves it from api.c / libflux.a. */
 
 void flux_load_stdlib(FluxVM *vm) {
     flux_stdlib_load_core(vm);

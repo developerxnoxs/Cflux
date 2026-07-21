@@ -9,6 +9,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <math.h>
 
 /* -------------------------------------------------------------------------
  * Error helpers
@@ -419,6 +420,106 @@ static void compile_expr(Compiler *c, AstNode *node) {
                 compile_expr(c, node->as.binary.right);
                 patch_jump(c, end_jump);
                 break;
+            }
+
+            /* Constant folding: both operands are integer/float literals */
+            {
+                AstNode *lhs = node->as.binary.left;
+                AstNode *rhs = node->as.binary.right;
+                bool lhs_int   = lhs->kind == AST_INT;
+                bool lhs_float = lhs->kind == AST_FLOAT;
+                bool rhs_int   = rhs->kind == AST_INT;
+                bool rhs_float = rhs->kind == AST_FLOAT;
+                bool both_numeric = (lhs_int || lhs_float) && (rhs_int || rhs_float);
+                if (both_numeric) {
+                    /* Promote to float if either operand is float */
+                    bool use_float = lhs_float || rhs_float ||
+                                     op == TOK_SLASH;
+                    int64_t li = lhs_int   ? lhs->as.integer.value  : (int64_t)lhs->as.floating.value;
+                    int64_t ri = rhs_int   ? rhs->as.integer.value  : (int64_t)rhs->as.floating.value;
+                    double  lf = lhs_float ? lhs->as.floating.value : (double)lhs->as.integer.value;
+                    double  rf = rhs_float ? rhs->as.floating.value : (double)rhs->as.integer.value;
+                    bool folded = true;
+                    if (use_float) {
+                        double result = 0.0;
+                        switch (op) {
+                            case TOK_PLUS:        result = lf + rf; break;
+                            case TOK_MINUS:       result = lf - rf; break;
+                            case TOK_STAR:        result = lf * rf; break;
+                            case TOK_SLASH:       result = rf != 0.0 ? lf / rf : 0.0; break;
+                            case TOK_SLASH_SLASH: result = (double)(rf != 0.0 ? (int64_t)(lf / rf) : 0); break;
+                            case TOK_PERCENT:     result = rf != 0.0 ? lf - (double)(int64_t)(lf / rf) * rf : 0.0; break;
+                            case TOK_STAR_STAR:   result = pow(lf, rf); break;
+                            default: folded = false; break;
+                        }
+                        if (folded) {
+                            emit_byte(c, OP_PUSH_FLOAT, line);
+                            chunk_write_double(current_chunk(c), result, line);
+                            break;
+                        }
+                    } else {
+                        int64_t result = 0;
+                        switch (op) {
+                            case TOK_PLUS:        result = li + ri; break;
+                            case TOK_MINUS:       result = li - ri; break;
+                            case TOK_STAR:        result = li * ri; break;
+                            case TOK_SLASH_SLASH: result = ri != 0 ? li / ri : 0; break;
+                            case TOK_PERCENT:     result = ri != 0 ? li % ri : 0; break;
+                            case TOK_STAR_STAR: {
+                                /* integer exponentiation */
+                                int64_t base = li, exp = ri, acc = 1;
+                                if (exp < 0) { use_float = true; folded = false; break; }
+                                while (exp > 0) { if (exp & 1) acc *= base; base *= base; exp >>= 1; }
+                                result = acc;
+                                break;
+                            }
+                            case TOK_AMPERSAND:   result = li & ri;  break;
+                            case TOK_PIPE:        result = li | ri;  break;
+                            case TOK_CARET:       result = li ^ ri;  break;
+                            case TOK_LSHIFT:      result = li << ri; break;
+                            case TOK_RSHIFT:      result = li >> ri; break;
+                            /* comparison operators → bool result */
+                            case TOK_EQ:  case TOK_IS:
+                                emit_byte(c, OP_PUSH_BOOL, line);
+                                emit_byte(c, li == ri ? 1 : 0, line);
+                                goto binary_fold_done;
+                            case TOK_NEQ:
+                                emit_byte(c, OP_PUSH_BOOL, line);
+                                emit_byte(c, li != ri ? 1 : 0, line);
+                                goto binary_fold_done;
+                            case TOK_LT:
+                                emit_byte(c, OP_PUSH_BOOL, line);
+                                emit_byte(c, li < ri ? 1 : 0, line);
+                                goto binary_fold_done;
+                            case TOK_LTE:
+                                emit_byte(c, OP_PUSH_BOOL, line);
+                                emit_byte(c, li <= ri ? 1 : 0, line);
+                                goto binary_fold_done;
+                            case TOK_GT:
+                                emit_byte(c, OP_PUSH_BOOL, line);
+                                emit_byte(c, li > ri ? 1 : 0, line);
+                                goto binary_fold_done;
+                            case TOK_GTE:
+                                emit_byte(c, OP_PUSH_BOOL, line);
+                                emit_byte(c, li >= ri ? 1 : 0, line);
+                                goto binary_fold_done;
+                            default: folded = false; break;
+                        }
+                        if (folded && !use_float) {
+                            emit_byte(c, OP_PUSH_INT, line);
+                            chunk_write_int64(current_chunk(c), result, line);
+                            break;
+                        } else if (folded && use_float) {
+                            /* ** with negative exp fell through */
+                            double result_f = pow((double)li, (double)ri);
+                            emit_byte(c, OP_PUSH_FLOAT, line);
+                            chunk_write_double(current_chunk(c), result_f, line);
+                            break;
+                        }
+                    }
+                    binary_fold_done:;
+                    if (folded) break;
+                }
             }
 
             compile_expr(c, node->as.binary.left);

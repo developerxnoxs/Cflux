@@ -94,7 +94,7 @@ int flux_build_file(const char *path, bool verbose) {
     FluxVM *vm = flux_vm_new();
     flux_load_stdlib(vm);   /* needed so the compiler can resolve stdlib names */
 
-    FluxFunction *fn = compiler_compile(vm, module, path);
+    FluxFunction *fn = compiler_compile(vm, module, path, src);
     ast_arena_free(arena);
     free(src);
 

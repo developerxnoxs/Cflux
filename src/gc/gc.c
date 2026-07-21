@@ -140,6 +140,7 @@ static void blacken_object(FluxVM *vm, FluxObject *obj) {
         case OBJ_FUNCTION: {
             FluxFunction *fn = (FluxFunction *)obj;
             gc_mark_object(vm, (FluxObject *)fn->name);
+            gc_mark_object(vm, (FluxObject *)fn->source_file);
             gc_mark_array(vm, &fn->chunk.constants);
             break;
         }

@@ -505,6 +505,7 @@ FluxFunction *object_function_new(FluxVM *vm) {
     fn->arity         = 0;
     fn->upvalue_count = 0;
     fn->name          = NULL;
+    fn->source_file   = NULL;
     fn->is_async      = false;
     chunk_init(&fn->chunk);
     return fn;

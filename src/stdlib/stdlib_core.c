@@ -869,7 +869,7 @@ static void register_error_classes(FluxVM *vm) {
         ast_arena_free(arena);
         return;
     }
-    FluxFunction *fn = compiler_compile(vm, module, "<builtins>");
+    FluxFunction *fn = compiler_compile(vm, module, "<builtins>", k_error_classes_src);
     ast_arena_free(arena);
     if (!fn) return;
     FluxClosure *cl = object_closure_new(vm, fn);

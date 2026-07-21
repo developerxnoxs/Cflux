@@ -129,6 +129,28 @@ void vm_track_extension_handle(FluxVM *vm, void *dlopen_handle) {
  * Error reporting
  * ---------------------------------------------------------------------- */
 
+/* Print one line of source text at `line` with an optional caret at `col`.
+ * col <= 0 means show the line only (no caret). */
+static void vm_print_source_context(const char *source, int line, int col) {
+    if (!source || line < 1) return;
+    const char *p = source;
+    for (int l = 1; l < line && *p; l++) {
+        while (*p && *p != '\n') p++;
+        if (*p) p++;
+    }
+    if (!*p) return;
+    const char *end = p;
+    while (*end && *end != '\n') end++;
+    int len = (int)(end - p);
+    if (len <= 0) return;
+    fprintf(stderr, "\n  %.*s\n  ", len, p);
+    if (col > 0) {
+        for (int i = 1; i < col; i++) fprintf(stderr, " ");
+        fprintf(stderr, "^\n");
+    }
+    fprintf(stderr, "\n");
+}
+
 void vm_runtime_error(FluxVM *vm, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -137,17 +159,55 @@ void vm_runtime_error(FluxVM *vm, const char *fmt, ...) {
     vm->has_error     = true;
     vm->error_printed = true;
 
-    /* Print stack trace (cap at 20 frames to avoid flooding on stack overflow) */
-    fprintf(stderr, "Runtime error: %s\n", vm->error_msg);
+    /* Determine file and line from the top call frame.
+     * Use fn->source_file (set per-function at compile time) for correct
+     * multi-file provenance even when vm->source_file has been restored to
+     * a different file (e.g. after an import completes). */
+    int         err_line = -1;
+    const char *err_file = NULL;
+    if (vm->frame_count > 0) {
+        CallFrame    *top_frame = &vm->frames[vm->frame_count - 1];
+        FluxFunction *top_fn    = top_frame->closure->function;
+        int           offset    = (int)(top_frame->ip - top_fn->chunk.code - 1);
+        err_line = chunk_get_line(&top_fn->chunk, offset);
+        err_file = top_fn->source_file ? top_fn->source_file->chars
+                 : (vm->source_file ? vm->source_file : NULL);
+    }
+
+    /* Header: filename:line: runtime error: message */
+    if (err_file && err_line > 0)
+        fprintf(stderr, "%s:%d: runtime error: %s\n", err_file, err_line, vm->error_msg);
+    else if (err_line > 0)
+        fprintf(stderr, "line %d: runtime error: %s\n", err_line, vm->error_msg);
+    else
+        fprintf(stderr, "Runtime error: %s\n", vm->error_msg);
+
+    /* Source context snippet: use vm->source_text only when it matches the
+     * top frame's file to avoid showing a snippet from the wrong source. */
+    if (err_line > 0) {
+        const char *ctx_src = NULL;
+        if (err_file && vm->source_file && strcmp(err_file, vm->source_file) == 0)
+            ctx_src = vm->source_text;
+        /* If the error is in a different file we skip the snippet — showing
+         * the wrong source is worse than showing none at all. */
+        if (ctx_src)
+            vm_print_source_context(ctx_src, err_line, 0);
+    }
+
+    /* Stack trace (cap at 20 frames to avoid flooding on stack overflow) */
     int total = vm->frame_count;
     int shown = total < 20 ? total : 20;
-    for (int i = total - 1; i >= total - shown; i--) {
+    if (shown > 0) fprintf(stderr, "Stack trace (most recent call last):\n");
+    for (int i = total - shown; i < total; i++) {
         CallFrame    *frame  = &vm->frames[i];
         FluxFunction *fn     = frame->closure->function;
         int           offset = (int)(frame->ip - fn->chunk.code - 1);
         int           line   = chunk_get_line(&fn->chunk, offset);
-        fprintf(stderr, "  at %s (line %d)\n",
-                fn->name ? fn->name->chars : "<script>", line);
+        const char   *fname  = fn->name ? fn->name->chars : "<script>";
+        /* Use the per-function source_file for correct multi-file stacks */
+        const char   *src    = fn->source_file  ? fn->source_file->chars
+                             : (vm->source_file ? vm->source_file : "<unknown>");
+        fprintf(stderr, "  File \"%s\", line %d, in %s\n", src, line, fname);
     }
     if (total > 20)
         fprintf(stderr, "  ... (%d more frames)\n", total - 20);
@@ -1154,11 +1214,14 @@ static bool do_import(FluxVM *vm, FluxString *module_name, Value *out) {
         return false;
     }
 
-    FluxFunction *fn = compiler_compile(vm, module_ast, resolved);
+    FluxFunction *fn = compiler_compile(vm, module_ast, resolved, buf);
     ast_arena_free(arena);
-    FLUX_FREE(buf);
+    /* NOTE: buf is NOT freed here — it must stay alive until after vm_run()
+     * so that vm->source_text (set below) remains valid for error reporting
+     * during module execution.  It is freed after vm_run() returns. */
 
     if (!fn) {
+        FLUX_FREE(buf);
         vm_pop(vm); /* cache_key */
         vm_runtime_error(vm, "Failed to compile module '%s'", module_name->chars);
         dict_delete(vm->modules, cache_key);
@@ -1182,11 +1245,24 @@ static bool do_import(FluxVM *vm, FluxString *module_name, Value *out) {
     path_dirname(resolved, mod_dir, sizeof(mod_dir));
     vm_push_import_dir(vm, mod_dir);
 
+    /* Save the caller's source context and install the module's own context
+     * so that any runtime error originating in this module is reported with
+     * the correct file name and source snippet rather than the importer's. */
+    const char *saved_source_text = vm->source_text;
+    const char *saved_source_file = vm->source_file;
+    vm->source_text = buf;
+    vm->source_file = resolved;
+
     FluxClosure *closure = object_closure_new(vm, fn);
     vm_push(vm, value_object((FluxObject *)closure));
     int base = vm->frame_count;
     bool called = call_closure(vm, closure, 0);
     VMResult r = called ? vm_run(vm, base, false) : VM_RUNTIME_ERROR;
+
+    /* Restore the caller's source context and release the module buffer. */
+    vm->source_text = saved_source_text;
+    vm->source_file = saved_source_file;
+    FLUX_FREE(buf);
 
     vm_pop_import_dir(vm);
 

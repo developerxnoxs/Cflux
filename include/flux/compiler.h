@@ -96,6 +96,7 @@ typedef struct {
     ClassCompiler *class_ctx;   /* current class context (may be NULL)  */
     bool           had_error;
     const char    *source_name;
+    const char    *source_text; /* full source text for error context   */
 
     /* Loop context for break/continue */
     int   loop_start;
@@ -135,12 +136,15 @@ typedef struct {
  * ---------------------------------------------------------------------- */
 
 /* Compile a module AST into a top-level FluxFunction.
- * Returns NULL on compile error; error is printed to stderr.             */
+ * Returns NULL on compile error; error is printed to stderr.
+ * source_text (may be NULL) is used to print source context on errors.  */
 FluxFunction *compiler_compile(FluxVM *vm, AstNode *module_ast,
-                                const char *source_name);
+                                const char *source_name,
+                                const char *source_text);
 
 /* Internal helpers (exposed for testing) */
-void compiler_init(Compiler *c, FluxVM *vm, const char *source_name);
+void compiler_init(Compiler *c, FluxVM *vm, const char *source_name,
+                   const char *source_text);
 void compiler_free(Compiler *c);
 
 #endif /* FLUX_COMPILER_H */

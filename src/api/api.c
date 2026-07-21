@@ -99,12 +99,18 @@ static FluxResult compile_and_run(FluxVM *vm, const char *source, const char *na
         return FLUX_COMPILE_ERROR;
     }
 
-    FluxFunction *fn = compiler_compile(vm, module, name);
+    FluxFunction *fn = compiler_compile(vm, module, name, source);
     ast_arena_free(arena);
 
     if (!fn) return FLUX_COMPILE_ERROR;
 
+    /* Make source text available to the VM so runtime errors can show context */
+    vm->source_text = source;
+    vm->source_file = name;
     VMResult result = vm_execute(vm, fn);
+    vm->source_text = NULL;
+    vm->source_file = NULL;
+
     return result == VM_OK ? FLUX_OK :
            result == VM_COMPILE_ERROR ? FLUX_COMPILE_ERROR : FLUX_RUNTIME_ERROR;
 }
@@ -166,7 +172,7 @@ FluxResult flux_compile(FluxVM *vm, const char *source, const char *source_name)
         return FLUX_COMPILE_ERROR;
     }
 
-    FluxFunction *fn = compiler_compile(vm, module, source_name);
+    FluxFunction *fn = compiler_compile(vm, module, source_name, source);
     ast_arena_free(arena);
 
     if (!fn) return FLUX_COMPILE_ERROR;

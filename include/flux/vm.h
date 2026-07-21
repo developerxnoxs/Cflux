@@ -138,6 +138,13 @@ struct FluxVM {
      * already reported the error (prevents duplicate "Runtime error:" lines). */
     bool error_printed;
 
+    /* Source text / file for the currently executing script.
+     * Set by flux_eval / flux_execute_file before vm_execute() so that
+     * vm_runtime_error() can print source-context snippets with carets.
+     * Both pointers are owned by the caller and must outlive execution. */
+    const char *source_text;
+    const char *source_file;
+
     /* Exception handling state (try/catch/finally) */
     ExceptionHandler exception_handlers[FLUX_EXCEPTION_HANDLER_MAX];
     int              exception_handler_count;

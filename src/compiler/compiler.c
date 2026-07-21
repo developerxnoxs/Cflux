@@ -15,6 +15,29 @@
  * Error helpers
  * ---------------------------------------------------------------------- */
 
+/* Print the source line at `line` with an optional caret at column `col`.
+ * col <= 0 means "no caret". */
+static void compiler_print_source_context(const char *source, int line, int col) {
+    if (!source || line < 1) return;
+    const char *p = source;
+    for (int l = 1; l < line && *p; l++) {
+        while (*p && *p != '\n') p++;
+        if (*p) p++;
+    }
+    if (!*p) return;
+    const char *end = p;
+    while (*end && *end != '\n') end++;
+    int len = (int)(end - p);
+    if (len <= 0) return;
+    fprintf(stderr, "\n  %.*s\n  ", len, p);
+    if (col > 0) {
+        for (int i = 1; i < col; i++) fprintf(stderr, " ");
+        fprintf(stderr, "^\n");
+    }
+    fprintf(stderr, "\n");
+}
+
+/* Report a compile error at a specific line (no column info). */
 static void compile_error(Compiler *c, int line, const char *fmt, ...) {
     char buf[512];
     va_list ap;
@@ -23,6 +46,22 @@ static void compile_error(Compiler *c, int line, const char *fmt, ...) {
     va_end(ap);
     fprintf(stderr, "%s:%d: compile error: %s\n",
             c->source_name ? c->source_name : "<script>", line, buf);
+    if (c->source_text)
+        compiler_print_source_context(c->source_text, line, 0);
+    c->had_error = true;
+}
+
+/* Report a compile error with precise line:column and a caret indicator. */
+static void compile_error_at(Compiler *c, int line, int col, const char *fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    fprintf(stderr, "%s:%d:%d: compile error: %s\n",
+            c->source_name ? c->source_name : "<script>", line, col, buf);
+    if (c->source_text)
+        compiler_print_source_context(c->source_text, line, col);
     c->had_error = true;
 }
 
@@ -233,6 +272,12 @@ static void frame_init(Compiler *c, CompilerFrame *frame, FuncKind kind,
     if (name && name_len > 0)
         frame->function->name = object_string_copy(c->vm, name, name_len);
 
+    /* Record the source file so runtime errors in this function can be
+     * attributed to the correct file regardless of vm->source_file state. */
+    if (c->source_name)
+        frame->function->source_file = object_string_copy(
+            c->vm, c->source_name, (int)strlen(c->source_name));
+
     c->frame = frame;
 
     /* Reserve slot 0 for the function/self */
@@ -367,6 +412,7 @@ static void emit_store_var(Compiler *c, const char *name, int line) {
 static void compile_expr(Compiler *c, AstNode *node) {
     if (!node || c->had_error) return;
     int line = node->line;
+    int col  = node->column;
 
     switch (node->kind) {
         case AST_INT:
@@ -545,7 +591,7 @@ static void compile_expr(Compiler *c, AstNode *node) {
                 case TOK_LSHIFT:    emit_byte(c, OP_SHL, line); break;
                 case TOK_RSHIFT:    emit_byte(c, OP_SHR, line); break;
                 default:
-                    compile_error(c, line, "Unknown binary operator %d", op);
+                    compile_error_at(c, line, col, "Unknown binary operator %d", op);
             }
             break;
         }
@@ -557,7 +603,7 @@ static void compile_expr(Compiler *c, AstNode *node) {
                 case TOK_NOT:    emit_byte(c, OP_NOT,     line); break;
                 case TOK_TILDE:  emit_byte(c, OP_BIT_NOT, line); break;
                 default:
-                    compile_error(c, line, "Unknown unary operator");
+                    compile_error_at(c, line, col, "Unknown unary operator");
             }
             break;
 
@@ -660,7 +706,7 @@ static void compile_expr(Compiler *c, AstNode *node) {
                         emit_byte(c, OP_STORE_GLOBAL, line);
                         emit_uint16(c, identifier_constant(c, name, (int)strlen(name), line), line);
                     } else {
-                        compile_error(c, line,
+                        compile_error_at(c, line, col,
                             "nonlocal '%s': no binding found in any enclosing scope",
                             name);
                     }
@@ -749,7 +795,7 @@ static void compile_expr(Compiler *c, AstNode *node) {
                 emit_byte(c, OP_PUSH_NULL, line);               /* result         */
 
             } else {
-                compile_error(c, line, "Invalid assignment target");
+                compile_error_at(c, line, col, "Invalid assignment target");
             }
             break;
         }
@@ -811,7 +857,7 @@ static void compile_expr(Compiler *c, AstNode *node) {
                 emit_byte(c, OP_PUSH_NULL, line);   /* expr result */
 
             } else {
-                compile_error(c, line, "Invalid augmented assignment target");
+                compile_error_at(c, line, col, "Invalid augmented assignment target");
                 emit_byte(c, OP_PUSH_NULL, line);   /* prevent stack underflow */
             }
 
@@ -1028,7 +1074,7 @@ static void compile_expr(Compiler *c, AstNode *node) {
                     emit_byte(c, OP_STORE_GLOBAL, line);
                     emit_uint16(c, identifier_constant(c, name, (int)strlen(name), line), line);
                 } else {
-                    compile_error(c, line,
+                    compile_error_at(c, line, col,
                         "nonlocal '%s': no binding found in any enclosing scope", name);
                 }
                 /* value left on stack as expression result */
@@ -1305,7 +1351,7 @@ static void compile_expr(Compiler *c, AstNode *node) {
         }
 
         default:
-            compile_error(c, line, "Expected expression, got statement kind %d", node->kind);
+            compile_error_at(c, line, col, "Expected expression, got statement kind %d", node->kind);
             break;
     }
 }
@@ -1466,6 +1512,7 @@ static void predeclare_node_locals(Compiler *c, AstNode *node, int line) {
 static void compile_node(Compiler *c, AstNode *node) {
     if (!node || c->had_error) return;
     int line = node->line;
+    int col  = node->column;
 
     switch (node->kind) {
         case AST_MODULE:
@@ -1595,7 +1642,7 @@ static void compile_node(Compiler *c, AstNode *node) {
             /* Push try context so return/break/continue/raise inside the try
              * body can emit the handler pop and inline finally before exiting. */
             if (c->try_depth >= FLUX_TRY_DEPTH_MAX) {
-                compile_error(c, line, "try nesting too deep (max %d)", FLUX_TRY_DEPTH_MAX);
+                compile_error_at(c, line, col, "try nesting too deep (max %d)", FLUX_TRY_DEPTH_MAX);
                 break;
             }
             int ctx_idx = c->try_depth++;
@@ -1687,7 +1734,7 @@ static void compile_node(Compiler *c, AstNode *node) {
 
         case AST_BREAK:
             if (c->loop_depth == 0) {
-                compile_error(c, line, "'break' outside loop");
+                compile_error_at(c, line, col, "'break' outside loop");
                 break;
             }
             /* Unwind try contexts inside the current loop: pop handler, run
@@ -1701,7 +1748,7 @@ static void compile_node(Compiler *c, AstNode *node) {
 
         case AST_CONTINUE:
             if (c->loop_depth == 0) {
-                compile_error(c, line, "'continue' outside loop");
+                compile_error_at(c, line, col, "'continue' outside loop");
                 break;
             }
             /* Same as break: unwind and pop outer-scope locals so the stack
@@ -2651,7 +2698,7 @@ static void compile_node(Compiler *c, AstNode *node) {
          * -------------------------------------------------------------- */
         case AST_NONLOCAL: {
             if (c->frame->enclosing == NULL) {
-                compile_error(c, line, "'nonlocal' at module scope has no effect");
+                compile_error_at(c, line, col, "'nonlocal' at module scope has no effect");
                 break;
             }
             for (int i = 0; i < node->as.block.stmts.count; i++) {
@@ -2672,7 +2719,7 @@ static void compile_node(Compiler *c, AstNode *node) {
                  * which is handled at assignment time via STORE_GLOBAL. */
                 int upv = resolve_upvalue(c->frame, name, line);
                 if (upv == -1 && !compiler_has_global(c, name)) {
-                    compile_error(c, line,
+                    compile_error_at(c, line, col,
                         "nonlocal '%s': no binding found in any enclosing scope",
                         name);
                 }
@@ -2692,7 +2739,7 @@ static void compile_node(Compiler *c, AstNode *node) {
             break;
 
         default:
-            compile_error(c, line, "Unhandled AST node kind %d", node->kind);
+            compile_error_at(c, line, col, "Unhandled AST node kind %d", node->kind);
             break;
     }
 }
@@ -2701,12 +2748,14 @@ static void compile_node(Compiler *c, AstNode *node) {
  * Public entry point
  * ---------------------------------------------------------------------- */
 
-void compiler_init(Compiler *c, FluxVM *vm, const char *source_name) {
+void compiler_init(Compiler *c, FluxVM *vm, const char *source_name,
+                   const char *source_text) {
     c->vm          = vm;
     c->frame       = NULL;
     c->class_ctx   = NULL;
     c->had_error   = false;
     c->source_name = source_name;
+    c->source_text = source_text;
     c->loop_start        = 0;
     c->loop_depth        = 0;
     c->break_count       = 0;
@@ -2720,9 +2769,11 @@ void compiler_free(Compiler *c) {
     (void)c;
 }
 
-FluxFunction *compiler_compile(FluxVM *vm, AstNode *module_ast, const char *source_name) {
+FluxFunction *compiler_compile(FluxVM *vm, AstNode *module_ast,
+                                const char *source_name,
+                                const char *source_text) {
     Compiler c;
-    compiler_init(&c, vm, source_name);
+    compiler_init(&c, vm, source_name, source_text);
 
     CompilerFrame script_frame;
     frame_init(&c, &script_frame, FUNC_SCRIPT, NULL, 0);

@@ -109,6 +109,7 @@ typedef struct {
     int         upvalue_count;  /* number of captured upvalues           */
     Chunk       chunk;          /* bytecode for this function body       */
     FluxString *name;           /* function name (may be NULL for anon)  */
+    FluxString *source_file;    /* source filename (for error reporting) */
     bool        is_async;       /* true if declared with `async`         */
 } FluxFunction;
 

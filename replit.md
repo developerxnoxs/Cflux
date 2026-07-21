@@ -43,6 +43,45 @@ make clean
 - `tests/` — test suite (.flx dan .c)
 - `build_make/` — output build (dibuat oleh `make all`)
 
+## Perubahan Terkini
+
+### Awaitable Protocol (`__await__`)
+`await` kini mendukung objek custom yang mengimplementasikan method `__await__(self)`.
+Method tersebut dipanggil untuk mendapatkan nilai yang sebenarnya di-await (bisa berupa
+Future, Coroutine, nilai biasa, atau awaitable lain — OP_AWAIT di-rerun secara otomatis
+pada nilai kembalian `__await__`).
+
+```flux
+class DelayedValue:
+    func __init__(self, val):
+        self.val = val
+    func __await__(self):
+        return self.val   # bisa juga return Future/Coroutine
+
+async func run():
+    dv = DelayedValue(42)
+    result = await dv     # memanggil dv.__await__() → 42
+```
+
+Objek instance tanpa `__await__` menghasilkan runtime error yang jelas:
+`"object of type 'X' is not awaitable (implement '__await__ to make it awaitable)"`.
+
+**Lokasi:** `src/vm/vm.c` (OP_AWAIT), `include/flux/vm.h` (konstanta limits).
+
+### Circular Import — Pesan Error Berantai
+Deteksi circular import sudah ada dan kini menampilkan rantai import lengkap sehingga
+sumber siklus mudah ditemukan.
+
+```
+runtime error: Circular import detected: a → b → a
+```
+
+Sebelumnya hanya: `Circular import detected while loading 'a'`.
+
+**Lokasi:** `src/vm/vm.c` (fungsi `do_import`), `include/flux/vm.h` (field `import_stack_names`/`import_stack_count` di struct `FluxVM`).
+
+---
+
 ## Fitur Bahasa & Modul
 
 - **Operator ternary**: `kondisi ? nilai_jika_benar : nilai_jika_salah`

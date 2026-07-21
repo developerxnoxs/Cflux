@@ -1173,13 +1173,31 @@ static bool do_import(FluxVM *vm, FluxString *module_name, Value *out) {
             *out = cached; /* already loaded: reuse the same namespace dict */
             return true;
         }
-        vm_runtime_error(vm, "Circular import detected while loading '%s'", module_name->chars);
+        /* Build the full import cycle chain for a clear error message,
+         * e.g. "a → b → a" so the user sees exactly where the cycle is. */
+        char chain[1024] = {0};
+        for (int ci = 0; ci < vm->import_stack_count; ci++) {
+            if (ci > 0) strncat(chain, " → ", sizeof(chain) - strlen(chain) - 1);
+            strncat(chain, vm->import_stack_names[ci], sizeof(chain) - strlen(chain) - 1);
+        }
+        if (vm->import_stack_count > 0)
+            strncat(chain, " → ", sizeof(chain) - strlen(chain) - 1);
+        strncat(chain, module_name->chars, sizeof(chain) - strlen(chain) - 1);
+        vm_runtime_error(vm, "Circular import detected: %s", chain);
         return false;
     }
     /* Mark in-progress (non-dict sentinel) so a cycle is caught above.
      * This also makes cache_key reachable via vm->modules from here on;
      * we keep it pushed too for the rest of this function for symmetry. */
     dict_set(vm, vm->modules, cache_key, value_bool(false));
+
+    /* Push this module's name onto the import chain stack so nested imports
+     * can include it in any cycle error message they produce. */
+    if (vm->import_stack_count < FLUX_IMPORT_STACK_MAX) {
+        snprintf(vm->import_stack_names[vm->import_stack_count],
+                 FLUX_MODULE_NAME_MAX, "%s", module_name->chars);
+        vm->import_stack_count++;
+    }
 
     FILE *f = fopen(resolved, "rb");
     if (!f) {
@@ -1265,6 +1283,10 @@ static bool do_import(FluxVM *vm, FluxString *module_name, Value *out) {
     FLUX_FREE(buf);
 
     vm_pop_import_dir(vm);
+
+    /* Pop this module's name from the import chain stack now that its
+     * top-level code has finished running (or failed). */
+    if (vm->import_stack_count > 0) vm->import_stack_count--;
 
     if (r != VM_OK) {
         /* The VM is erroring out entirely; leave the protective pushes
@@ -2254,8 +2276,53 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                     frame = &vm->frames[vm->frame_count - 1];
                     LOAD_IP();
 
+                /* ---- await instance with __await__ protocol ----------- */
+                } else if (IS_INSTANCE(val)) {
+                    FluxInstance *inst = AS_INSTANCE(val);
+                    /* GC-protect val on the stack before allocating the key
+                     * string — any allocation can trigger a GC sweep. */
+                    vm_push(vm, val);
+                    FluxString *await_key = object_string_copy(vm, "__await__", 9);
+                    Value method;
+                    /* Check instance fields first (overrides class methods),
+                     * then fall back to the class method table. */
+                    bool found = dict_get(inst->fields, await_key, &method) ||
+                                 dict_get(inst->klass->methods, await_key, &method);
+                    if (!found) {
+                        vm_pop(vm); /* val */
+                        RUNTIME_ERROR(
+                            "object of type '%s' is not awaitable "
+                            "(implement '__await__' to make it awaitable)",
+                            inst->klass->name->chars);
+                    }
+                    if (!IS_CLOSURE(method)) {
+                        vm_pop(vm); /* val */
+                        RUNTIME_ERROR(
+                            "'__await__' on '%s' must be a method (got %s)",
+                            inst->klass->name->chars, value_type_name(method));
+                    }
+                    /* val is at stack_top[-1] as self.
+                     * call_closure with argc=0: frame->slots = stack_top - 1,
+                     * so slots[0] = self — exactly the Flux method convention.
+                     *
+                     * Back up the CALLER frame's ip to point at OP_AWAIT before
+                     * pushing the __await__ frame.  When __await__ returns via
+                     * OP_RETURN the caller frame is restored and OP_AWAIT
+                     * re-runs automatically on whatever __await__() returned
+                     * (a Future, Coroutine, or another awaitable instance). */
+                    SYNC_IP();          /* caller frame->ip = ip (past OP_AWAIT) */
+                    frame->ip--;        /* rewind caller to the OP_AWAIT byte     */
+                    if (!call_closure(vm, AS_CLOSURE(method), 0)) {
+                        frame->ip++;    /* undo rewind if call setup failed       */
+                        HANDLE_NESTED_ERROR();
+                        return VM_RUNTIME_ERROR;
+                    }
+                    frame = &vm->frames[vm->frame_count - 1]; /* __await__ frame */
+                    LOAD_IP();
+                    break;
+
                 } else {
-                    vm_push(vm, val);  /* passthrough for plain values */
+                    vm_push(vm, val);  /* passthrough for plain values (int, float, string, …) */
                 }
                 break;
             }

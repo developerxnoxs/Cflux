@@ -25,6 +25,8 @@
 #define FLUX_GC_HEAP_GROW_FACTOR     2
 #define FLUX_IMPORT_DIR_MAX          64
 #define FLUX_IMPORT_PATH_MAX         900
+#define FLUX_IMPORT_STACK_MAX        64   /* max nested import depth for cycle detection */
+#define FLUX_MODULE_NAME_MAX         256  /* max chars stored per in-progress module name */
 #define FLUX_EXCEPTION_HANDLER_MAX   64
 
 /* -------------------------------------------------------------------------
@@ -86,6 +88,13 @@ struct FluxVM {
     FluxDict *modules;                                   /* resolved path -> module dict (cache) */
     char      import_dirs[FLUX_IMPORT_DIR_MAX][FLUX_IMPORT_PATH_MAX];
     int       import_dir_count;
+
+    /* Import chain stack — tracks module names currently being loaded so
+     * a circular-import error can print the full cycle (e.g. "a → b → a").
+     * Each entry is a copy of the user-visible module name (not the resolved
+     * path), stored in import_stack_names[][]. */
+    char import_stack_names[FLUX_IMPORT_STACK_MAX][FLUX_MODULE_NAME_MAX];
+    int  import_stack_count;
 
     /* String interning table */
     StringTable strings;

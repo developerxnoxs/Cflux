@@ -606,7 +606,9 @@ Error
 
 ## 12. Match
 
-`match` membandingkan subjek dengan serangkaian pola menggunakan `==`. Mendukung guard (`if`) dan pola wildcard `_`:
+`match` membandingkan subjek dengan serangkaian pola. Pola yang didukung saat ini:
+
+### Kesamaan Nilai
 
 ```flux
 match nilai:
@@ -618,7 +620,9 @@ match nilai:
         print("lainnya")
 ```
 
-### Guard
+### Guard (`if`)
+
+Tambahkan kondisi tambahan setelah pola:
 
 ```flux
 match x:
@@ -640,11 +644,28 @@ match titik:
         print(f"di ({px}, {py})")
 ```
 
+### Wildcard
+
+`_` menangkap semua nilai tanpa binding:
+
+```flux
+match status:
+    "ok":
+        print("berhasil")
+    _:
+        print("gagal")
+```
+
+> **Batasan saat ini:** Pola OR (`1 | 2 | 3`), pola range, pola type
+> (`is String`), pola nested, dan pola binding bertingkat belum didukung.
+
 ---
 
 ## 13. Async / Await / Spawn
 
-Flux memiliki runtime async berbasis **libuv** dengan coroutine.
+Flux memiliki runtime async berbasis **libuv** dengan coroutine native.
+
+### `async func` dan `await`
 
 ```flux
 async func ambil_data(url):
@@ -655,22 +676,57 @@ async func ambil_data(url):
 async func main():
     data = await ambil_data("https://api.example.com/data")
     print(data)
+```
 
-# Jalankan coroutine tanpa menunggu hasilnya (fire-and-forget)
+### `spawn` (fire-and-forget)
+
+`spawn` menjalankan coroutine tanpa menunggu hasilnya. Hasilnya bisa ditunggu kemudian dengan `await`:
+
+```flux
+# Jalankan tanpa menunggu
 task = spawn ambil_data("https://api.example.com/other")
 
-# Tunggu task selesai
+# Tunggu hasilnya nanti
 hasil = await task
 ```
 
-### yield (Generator)
+### `yield` (Cooperative Yield)
+
+`yield` di dalam `async func` melakukan **cooperative yield** — menyerahkan kontrol sementara ke scheduler agar coroutine lain bisa berjalan, kemudian melanjutkan sendiri. Ini bukan generator protocol; nilai yang di-`yield` tidak bisa di-iterate dari luar:
 
 ```flux
-async func generator():
-    yield 1
-    yield 2
-    yield 3
+async func tugas_panjang():
+    for i in range(1000):
+        # serahkan kontrol setiap 100 iterasi
+        if i % 100 == 0:
+            yield
+        proses(i)
 ```
+
+> **Catatan:** `yield` di Flux bukan generator. Tidak bisa menggunakan
+> `for x in tugas_panjang()` untuk mengiterasi nilai yang di-yield.
+
+### Modul `async`
+
+Modul `async` menyediakan operasi I/O non-blocking berbasis libuv.
+Semua fungsinya mengembalikan Future yang bisa di-`await`:
+
+```flux
+import async
+
+# Tunda eksekusi selama N milidetik
+await async.sleep(1000)
+
+# Baca file secara non-blocking
+isi = await async.read_file("data.txt")
+
+# Tulis file secara non-blocking
+await async.write_file("output.txt", isi)
+```
+
+> **Catatan:** Fungsi yang tersedia di modul `async` saat ini hanya
+> `sleep`, `read_file`, dan `write_file`. Fungsi seperti `gather()`,
+> `race()`, dan `timeout()` belum tersedia.
 
 ---
 
@@ -789,24 +845,97 @@ Fungsi berikut selalu tersedia tanpa `import`:
 
 ### String Methods
 
+| Method | Deskripsi |
+|--------|-----------|
+| `s.upper()` | Ubah semua huruf menjadi kapital |
+| `s.lower()` | Ubah semua huruf menjadi kecil |
+| `s.trim()` / `s.strip()` | Hapus spasi di awal dan akhir |
+| `s.split(sep)` | Pecah string menjadi list berdasarkan `sep` |
+| `sep.join(list)` | Gabungkan list menjadi string dengan pemisah `sep` |
+| `s.contains(sub)` | `true` jika `sub` ada di dalam `s` |
+| `s.starts_with(prefix)` | `true` jika `s` diawali `prefix` |
+| `s.ends_with(suffix)` | `true` jika `s` diakhiri `suffix` |
+| `s.replace(lama, baru)` | Ganti semua kemunculan `lama` dengan `baru` |
+| `s.len()` | Panjang string (sama dengan `len(s)`) |
+
 ```flux
 s = "Hello, World!"
 
-s.upper()          # "HELLO, WORLD!"
-s.lower()          # "hello, world!"
-s.trim()           # hapus spasi di awal dan akhir
-s.split(", ")      # ["Hello", "World!"]
-", ".join(list)    # gabungkan list menjadi string
-s.len()            # panjang string (sama dengan len(s))
+s.upper()                  # "HELLO, WORLD!"
+s.lower()                  # "hello, world!"
+s.trim()                   # "Hello, World!" (hapus spasi tepi)
+s.split(", ")              # ["Hello", "World!"]
+"-".join(["a", "b", "c"]) # "a-b-c"
+s.contains("World")        # true
+s.starts_with("Hello")     # true
+s.ends_with("!")           # true
+s.replace("World", "Flux") # "Hello, Flux!"
+s.len()                    # 13
 ```
+
+> **Catatan:** Method seperti `find`, `index`, `count`, `lstrip`, `rstrip`,
+> `isdigit`, `isalpha`, `format`, dan slicing (`s[1:3]`) belum tersedia.
 
 ### List Methods
 
-List mendukung operasi dinamis lengkap — `append`, `pop`, `insert`, `remove`, dan lainnya tersedia melalui metode objek.
+| Method | Deskripsi |
+|--------|-----------|
+| `lst.append(x)` | Tambah elemen `x` di akhir list |
+| `lst.pop()` | Hapus dan kembalikan elemen terakhir |
+| `lst.len()` | Jumlah elemen (sama dengan `len(lst)`) |
+| `lst.insert(i, x)` | Sisipkan `x` di posisi indeks `i` |
+| `lst.remove(x)` | Hapus kemunculan pertama nilai `x` |
+| `lst.contains(x)` | `true` jika `x` ada di dalam list |
+| `lst.reverse()` | Balik urutan list secara in-place |
+
+```flux
+angka = [3, 1, 4, 1, 5]
+
+angka.append(9)       # [3, 1, 4, 1, 5, 9]
+angka.pop()           # hapus 9, kembalikan 9
+angka.insert(0, 0)    # [0, 3, 1, 4, 1, 5]
+angka.remove(1)       # hapus 1 pertama → [0, 3, 4, 1, 5]
+angka.contains(4)     # true
+angka.reverse()       # [5, 1, 4, 3, 0]
+angka.len()           # 5
+
+# Untuk mengurutkan, gunakan built-in sorted():
+terurut = sorted(angka)   # kembalikan list baru yang terurut
+```
+
+> **Catatan:** Method `sort` (in-place), `extend`, `index`, `count`,
+> `clear`, dan `copy` belum tersedia. Gunakan `sorted()` sebagai built-in
+> untuk mendapat salinan list yang terurut.
 
 ### Dict Methods
 
-Dict mendukung `keys()`, `values()`, `items()`, dan lainnya untuk iterasi.
+| Method | Deskripsi |
+|--------|-----------|
+| `d.keys()` | List semua key |
+| `d.values()` | List semua value |
+| `d.has_key(k)` | `true` jika key `k` ada |
+| `d.get(k)` | Ambil value `k`, kembalikan `null` jika tidak ada |
+| `d.get(k, default)` | Ambil value `k`, kembalikan `default` jika tidak ada |
+
+```flux
+orang = {"nama": "Budi", "usia": 30, "kota": "Jakarta"}
+
+orang.keys()             # ["nama", "usia", "kota"]
+orang.values()           # ["Budi", 30, "Jakarta"]
+orang.has_key("usia")    # true
+orang.has_key("email")   # false
+orang.get("nama")        # "Budi"
+orang.get("email")       # null
+orang.get("email", "-")  # "-"
+
+# Iterasi key:
+for k in orang.keys():
+    print(k, orang[k])
+```
+
+> **Catatan:** Method `items()`, `update()`, `pop()`, `clear()`, `copy()`,
+> dan `setdefault()` belum tersedia. Untuk mengiterasi pasangan key-value,
+> gunakan `for k in d.keys()` kemudian akses `d[k]`.
 
 ---
 

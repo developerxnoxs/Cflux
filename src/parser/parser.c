@@ -29,6 +29,56 @@
  * Parser helpers
  * ---------------------------------------------------------------------- */
 
+/* Map common unsupported-keyword identifiers to their correct Flux spelling.
+ * Returns a suggestion string, or NULL if the identifier is not a known alias.
+ * Used to produce "did you mean 'X'?" diagnostics instead of the confusing
+ * "Expected expression" error that appears on the trailing ':'. */
+static const char *keyword_suggestion(const char *id, int len) {
+    /* Function definition aliases (most common mistake) */
+    if ((len == 2 && memcmp(id, "fn",       2) == 0) ||
+        (len == 3 && memcmp(id, "def",      3) == 0) ||
+        (len == 3 && memcmp(id, "fun",      3) == 0) ||
+        (len == 6 && memcmp(id, "method",   6) == 0) ||
+        (len == 8 && memcmp(id, "function", 8) == 0) ||
+        (len == 4 && memcmp(id, "proc",     4) == 0) ||
+        (len == 3 && memcmp(id, "sub",      3) == 0) ||
+        (len == 4 && memcmp(id, "void",     4) == 0))
+        return "func";
+
+    /* Class / type aliases */
+    if ((len == 5 && memcmp(id, "klass",     5) == 0) ||
+        (len == 4 && memcmp(id, "type",      4) == 0) ||
+        (len == 9 && memcmp(id, "interface", 9) == 0) ||
+        (len == 5 && memcmp(id, "trait",     5) == 0) ||
+        (len == 4 && memcmp(id, "impl",      4) == 0) ||
+        (len == 8 && memcmp(id, "abstract",  8) == 0) ||
+        (len == 6 && memcmp(id, "record",    6) == 0))
+        return "class";
+
+    /* Variable declaration aliases */
+    if ((len == 3 && memcmp(id, "var",  3) == 0) ||
+        (len == 3 && memcmp(id, "val",  3) == 0) ||
+        (len == 4 && memcmp(id, "auto", 4) == 0) ||
+        (len == 3 && memcmp(id, "dim",  3) == 0) ||
+        (len == 3 && memcmp(id, "int",  3) == 0) ||
+        (len == 5 && memcmp(id, "float", 5) == 0) ||
+        (len == 6 && memcmp(id, "string",6) == 0) ||
+        (len == 4 && memcmp(id, "bool", 4) == 0))
+        return "let";
+
+    /* Import aliases */
+    if ((len == 7 && memcmp(id, "include", 7) == 0) ||
+        (len == 7 && memcmp(id, "require", 7) == 0) ||
+        (len == 3 && memcmp(id, "use",     3) == 0))
+        return "import";
+
+    /* Return aliases */
+    if (len == 6 && memcmp(id, "yield_", 6) == 0)
+        return "return";
+
+    return NULL; /* not a known alias */
+}
+
 static void parser_error(Parser *p, const char *msg) {
     if (p->panic_mode) return;
     p->panic_mode = true;
@@ -95,6 +145,31 @@ static void synchronize(Parser *p) {
         }
         advance(p);
     }
+}
+
+/* Consume tokens up to (but not including) the next NEWLINE or EOF.
+ * Used by error-recovery to skip the rest of a bad statement line so that
+ * subsequent lines are parsed cleanly. */
+static void skip_to_eol(Parser *p) {
+    while (!check(p, TOK_NEWLINE) && !check(p, TOK_EOF))
+        advance(p);
+}
+
+/* Skip a full indented block (INDENT … DEDENT) that follows a bad statement.
+ * Call this right after skip_to_eol() + match(NEWLINE) when the next token
+ * is TOK_INDENT.  Consumes the INDENT, all nested content, and the matching
+ * DEDENT, so the orphaned body doesn't pollute the parent scope with
+ * cascading errors. */
+static void skip_orphan_block(Parser *p) {
+    if (!check(p, TOK_INDENT)) return;
+    advance(p); /* consume INDENT */
+    int depth = 1;
+    while (depth > 0 && !check(p, TOK_EOF)) {
+        if (check(p, TOK_INDENT))      { depth++; advance(p); }
+        else if (check(p, TOK_DEDENT)) { depth--; if (depth > 0) advance(p); }
+        else                           { advance(p); }
+    }
+    if (check(p, TOK_DEDENT)) advance(p); /* consume the final DEDENT */
 }
 
 /* -------------------------------------------------------------------------
@@ -877,6 +952,12 @@ static AstNode *parse_block(Parser *p) {
     while (!check(p, TOK_DEDENT) && !check(p, TOK_EOF)) {
         skip_newlines(p);
         if (check(p, TOK_DEDENT) || check(p, TOK_EOF)) break;
+        /* Stray INDENT inside a block means error recovery left an orphaned
+         * nested body (e.g. the body of an unsupported keyword like "fn").
+         * skip_orphan_block already tried to consume it, but if it didn't
+         * (e.g. the bad stmt was parsed without our helper), consume the
+         * INDENT here to prevent cascading "Expected expression" errors. */
+        if (check(p, TOK_INDENT)) { skip_orphan_block(p); continue; }
         AstNode *stmt = parse_stmt(p);
         if (stmt) ast_list_push(&block->as.block.stmts, stmt);
         if (p->panic_mode) synchronize(p);
@@ -1385,6 +1466,64 @@ static AstNode *parse_import(Parser *p) {
 static AstNode *parse_stmt(Parser *p) {
     skip_newlines(p);
     int line = p->current.line, col = p->current.column;
+
+    /* -----------------------------------------------------------------------
+     * Unsupported-keyword detection
+     * When the developer writes a keyword from another language (fn, def,
+     * var, include, …) at statement position, the default error is an
+     * unhelpful "Expected expression" that points at the trailing ':'.
+     * Instead we detect the pattern here and emit a specific diagnostic:
+     *   unknown keyword 'fn' — did you mean 'func'?
+     *
+     * Heuristic: current token is an identifier that matches a known alias
+     * AND the very next token looks like a declaration context (another
+     * identifier or '(' — but NOT '=' or an operator, which would indicate
+     * a regular variable use such as `fn = lambda x: x`).
+     * ---------------------------------------------------------------------- */
+    if (check(p, TOK_IDENT)) {
+        const char *id  = p->current.start;
+        int         len = p->current.length;
+        const char *suggestion = keyword_suggestion(id, len);
+        if (suggestion) {
+            /* Lookahead: peek at the token that follows the identifier */
+            /* Peek at the token that follows the current identifier.
+             * We cannot use lexer_peek() here because it pushes the peeked
+             * token as a pending entry while leaving the source pointer at
+             * the original position; the next real scan then re-reads the
+             * same character, producing a duplicate token.  Instead we scan
+             * a *temporary copy* of the lexer — this leaves p->lex untouched
+             * so the real advance() call later gets the correct token. */
+            Lexer lex_copy = *p->lex;
+            Token next = lexer_next(&lex_copy);
+            /* Only trigger when this looks like a block-opener or call-site,
+             * not when it's followed by '=', '+', '-', etc. */
+            bool looks_like_keyword_use =
+                next.kind == TOK_IDENT   ||   /* fn foo()     */
+                next.kind == TOK_LPAREN  ||   /* fn(...)      */
+                next.kind == TOK_COLON   ||   /* fn:          */
+                next.kind == TOK_NEWLINE ||   /* bare 'fn' on its own line */
+                next.kind == TOK_EOF;
+            if (looks_like_keyword_use) {
+                char buf[256];
+                snprintf(buf, sizeof(buf),
+                    "unknown keyword '%.*s' — did you mean '%s'?",
+                    len, id, suggestion);
+                parser_error(p, buf);
+                /* Consume the rest of the line so ':' etc. don't produce
+                 * cascading "Expected expression" errors. */
+                skip_to_eol(p);
+                match(p, TOK_NEWLINE);
+                /* Skip the orphaned indented body (if any) so its statements
+                 * don't pollute the outer scope with more spurious errors. */
+                skip_orphan_block(p);
+                /* Clear panic_mode: our recovery already consumed everything
+                 * relevant.  If we leave it set, the caller will invoke
+                 * synchronize() which would eat the NEXT valid statement. */
+                p->panic_mode = false;
+                return NULL;
+            }
+        }
+    }
 
     /* Decorator: @> expr \n  (one or more, then func / async func) */
     if (check(p, TOK_AT_ARROW)) {

@@ -77,7 +77,10 @@ static Value t_parse(FluxVM *vm, int argc, Value *argv) {
                       ? AS_STRING(argv[1])->chars
                       : "%Y-%m-%d %H:%M:%S";
     struct tm tm_info = {0};
-    if (!strptime(s, fmt, &tm_info)) return value_null();
+    if (!strptime(s, fmt, &tm_info)) {
+        vm_runtime_error(vm, "time.parse: cannot parse '%s' with format '%s'", s, fmt);
+        return value_null();
+    }
     time_t t = mktime(&tm_info);
     return value_float((double)t);
 }

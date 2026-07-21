@@ -51,9 +51,13 @@ static Value os_chdir(FluxVM *vm, int argc, Value *argv) {
 static Value os_listdir(FluxVM *vm, int argc, Value *argv) {
     (void)argc;
     const char *path = (IS_STRING(argv[0])) ? AS_STRING(argv[0])->chars : ".";
+#ifdef _WIN32
+    (void)path;
+    vm_runtime_error(vm, "os.listdir: not supported on Windows");
+    return value_null();
+#else
     FluxList *list = object_list_new(vm);
     vm_push(vm, value_object((FluxObject *)list));
-#ifndef _WIN32
     DIR *d = opendir(path);
     if (d) {
         struct dirent *entry;
@@ -64,9 +68,9 @@ static Value os_listdir(FluxVM *vm, int argc, Value *argv) {
         }
         closedir(d);
     }
-#endif
     vm_pop(vm);
     return value_object((FluxObject *)list);
+#endif
 }
 
 static Value os_mkdir(FluxVM *vm, int argc, Value *argv) {

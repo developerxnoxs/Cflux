@@ -179,18 +179,65 @@ static Value jp_parse_string(JsonParser *jp) {
                 case 'b':  buf[out++] = '\b'; break;
                 case 'f':  buf[out++] = '\f'; break;
                 case 'u': {
-                    /* Basic: read 4 hex digits, store as ASCII if < 128 */
+                    /* Decode 4 hex digits into a UTF-16 code unit */
                     if (jp->pos + 4 > jp->len) { jp_error(jp, "bad \\u escape"); return value_null(); }
-                    unsigned code = 0;
+                    unsigned u1 = 0;
                     for (int i = 0; i < 4; i++) {
                         char h = jp->src[jp->pos++];
-                        code <<= 4;
-                        if (h >= '0' && h <= '9') code |= (unsigned)(h - '0');
-                        else if (h >= 'a' && h <= 'f') code |= (unsigned)(h - 'a' + 10);
-                        else if (h >= 'A' && h <= 'F') code |= (unsigned)(h - 'A' + 10);
+                        u1 <<= 4;
+                        if (h >= '0' && h <= '9') u1 |= (unsigned)(h - '0');
+                        else if (h >= 'a' && h <= 'f') u1 |= (unsigned)(h - 'a' + 10);
+                        else if (h >= 'A' && h <= 'F') u1 |= (unsigned)(h - 'A' + 10);
+                        else { jp_error(jp, "invalid hex digit in \\u escape"); return value_null(); }
                     }
-                    if (code < 128) buf[out++] = (char)code;
-                    else buf[out++] = '?'; /* simplified: skip non-ASCII */
+                    /* Surrogate pair: high surrogate must be followed by \uDC00-\uDFFF */
+                    unsigned codepoint;
+                    if (u1 >= 0xD800 && u1 <= 0xDBFF) {
+                        /* high surrogate — expect \uLOW */
+                        if (jp->pos + 6 > jp->len ||
+                            jp->src[jp->pos] != '\\' || jp->src[jp->pos+1] != 'u') {
+                            jp_error(jp, "high surrogate not followed by \\u escape"); return value_null();
+                        }
+                        jp->pos += 2; /* skip \u */
+                        unsigned u2 = 0;
+                        for (int i = 0; i < 4; i++) {
+                            char h = jp->src[jp->pos++];
+                            u2 <<= 4;
+                            if (h >= '0' && h <= '9') u2 |= (unsigned)(h - '0');
+                            else if (h >= 'a' && h <= 'f') u2 |= (unsigned)(h - 'a' + 10);
+                            else if (h >= 'A' && h <= 'F') u2 |= (unsigned)(h - 'A' + 10);
+                            else { jp_error(jp, "invalid hex digit in surrogate \\u escape"); return value_null(); }
+                        }
+                        if (u2 < 0xDC00 || u2 > 0xDFFF) {
+                            jp_error(jp, "expected low surrogate after high surrogate"); return value_null();
+                        }
+                        codepoint = 0x10000u + ((u1 - 0xD800u) << 10) + (u2 - 0xDC00u);
+                    } else if (u1 >= 0xDC00 && u1 <= 0xDFFF) {
+                        /* lone low surrogate — invalid */
+                        jp_error(jp, "unexpected low surrogate in \\u escape"); return value_null();
+                    } else {
+                        codepoint = u1;
+                    }
+                    /* Encode codepoint as UTF-8 */
+                    if (codepoint < 0x80) {
+                        if (out + 1 > 4090) { jp_error(jp, "string too long"); return value_null(); }
+                        buf[out++] = (char)codepoint;
+                    } else if (codepoint < 0x800) {
+                        if (out + 2 > 4090) { jp_error(jp, "string too long"); return value_null(); }
+                        buf[out++] = (char)(0xC0 | (codepoint >> 6));
+                        buf[out++] = (char)(0x80 | (codepoint & 0x3F));
+                    } else if (codepoint < 0x10000) {
+                        if (out + 3 > 4090) { jp_error(jp, "string too long"); return value_null(); }
+                        buf[out++] = (char)(0xE0 | (codepoint >> 12));
+                        buf[out++] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+                        buf[out++] = (char)(0x80 | (codepoint & 0x3F));
+                    } else {
+                        if (out + 4 > 4090) { jp_error(jp, "string too long"); return value_null(); }
+                        buf[out++] = (char)(0xF0 | (codepoint >> 18));
+                        buf[out++] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
+                        buf[out++] = (char)(0x80 | ((codepoint >> 6)  & 0x3F));
+                        buf[out++] = (char)(0x80 | (codepoint & 0x3F));
+                    }
                     break;
                 }
                 default: buf[out++] = esc; break;

@@ -8,13 +8,15 @@
 #include "flux/ext_helpers.h"
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 #include <sys/stat.h>
 
 static Value fs_read(FluxVM *vm, int argc, Value *argv) {
     (void)argc;
     if (!IS_STRING(argv[0])) { vm_runtime_error(vm, "fs.read: path must be string"); return value_null(); }
-    FILE *f = fopen(AS_STRING(argv[0])->chars, "rb");
-    if (!f) return value_null();
+    const char *path = AS_STRING(argv[0])->chars;
+    FILE *f = fopen(path, "rb");
+    if (!f) { vm_runtime_error(vm, "fs.read: cannot open '%s': %s", path, strerror(errno)); return value_null(); }
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
     fseek(f, 0, SEEK_SET);

@@ -238,9 +238,14 @@ void object_print(Value v) {
         case OBJ_COROUTINE:
             printf("<coroutine>");
             break;
-        case OBJ_FUTURE:
-            printf("<future>");
+        case OBJ_FUTURE: {
+            FluxFuture *fut = AS_FUTURE(v);
+            if (fut->resolved)
+                printf("<future:resolved>");
+            else
+                printf("<future:pending>");
             break;
+        }
         case OBJ_UPVALUE:
             printf("<upvalue>");
             break;

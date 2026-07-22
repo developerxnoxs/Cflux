@@ -34,7 +34,14 @@ else:
 print("")
 print("-- Test 3: CREATE TABLE --")
 mysql.exec(conn, "DROP TABLE IF EXISTS flux_test")
-aff = mysql.exec(conn, "CREATE TABLE flux_test (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, score FLOAT, active TINYINT(1))")
+aff = mysql.exec(conn, """
+    CREATE TABLE flux_test (
+        id     INT AUTO_INCREMENT PRIMARY KEY,
+        name   VARCHAR(100) NOT NULL,
+        score  FLOAT,
+        active TINYINT(1)
+    )
+""")
 print("[PASS] tabel flux_test dibuat")
 
 # ── 4. INSERT & insert_id ────────────────────────────────────────────────────

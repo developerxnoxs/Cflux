@@ -8,6 +8,8 @@
  *  - Single-line (#) comments
  *  - String escapes
  *  - f-strings: f"..." / f'...'
+ *  - Triple-quoted strings: """...""" / '''...'''
+ *  - Triple-quoted f-strings: f"""...""" / f'''...'''
  *  - Pipeline operator |>
  *  - Fat arrow =>
  *  - Question mark ?
@@ -175,6 +177,65 @@ static Token scan_string(Lexer *lex) {
     return make_token(lex, TOK_STRING);
 }
 
+/* Scan triple-quoted string: called after consuming all three opening quotes.
+ * quote is the quote character used (' or ").
+ * Scans until the matching closing triple-quote sequence is found. */
+static Token scan_triple_string(Lexer *lex, char quote) {
+    while (!is_at_end(lex)) {
+        /* Check for closing triple-quote */
+        if (peek(lex) == quote &&
+            lex->current[1] == quote &&
+            lex->current[2] == quote) {
+            advance(lex); advance(lex); advance(lex); /* consume """ or ''' */
+            return make_token(lex, TOK_STRING3);
+        }
+        if (peek(lex) == '\\') {
+            advance(lex); /* consume backslash */
+            if (!is_at_end(lex)) {
+                if (peek(lex) == '\n') lex->line++;
+                advance(lex);
+            }
+            continue;
+        }
+        if (peek(lex) == '\n') lex->line++;
+        advance(lex);
+    }
+    return error_token(lex, "Unterminated triple-quoted string");
+}
+
+/* Scan triple-quoted f-string: called after consuming all three opening quotes.
+ * quote is the quote character used (' or "). */
+static Token scan_triple_fstring(Lexer *lex, char quote) {
+    int depth = 0;
+    while (!is_at_end(lex)) {
+        if (peek(lex) == '\\') {
+            advance(lex);
+            if (!is_at_end(lex)) {
+                if (peek(lex) == '\n') lex->line++;
+                advance(lex);
+            }
+            continue;
+        }
+        if (peek(lex) == '{') { depth++; advance(lex); continue; }
+        if (peek(lex) == '}') {
+            if (depth > 0) { depth--; }
+            advance(lex);
+            continue;
+        }
+        /* Check for closing triple-quote only outside expression braces */
+        if (depth == 0 &&
+            peek(lex) == quote &&
+            lex->current[1] == quote &&
+            lex->current[2] == quote) {
+            advance(lex); advance(lex); advance(lex);
+            return make_token(lex, TOK_FSTRING3);
+        }
+        if (peek(lex) == '\n') lex->line++;
+        advance(lex);
+    }
+    return error_token(lex, "Unterminated triple-quoted f-string");
+}
+
 /* Scan f-string: called after consuming the opening f" or f' */
 static Token scan_fstring(Lexer *lex) {
     char quote = lex->current[-1]; /* ' or " */
@@ -243,7 +304,13 @@ static Token scan_raw_token(Lexer *lex) {
         /* f-string: identifier is exactly "f" followed by a quote */
         if (len == 1 && lex->start[0] == 'f' && kind == TOK_IDENT &&
             (peek(lex) == '"' || peek(lex) == '\'')) {
-            advance(lex); /* consume opening quote */
+            char q = peek(lex);
+            advance(lex); /* consume first opening quote */
+            /* Triple-quoted f-string: f"""...""" or f'''...''' */
+            if (peek(lex) == q && peek_next(lex) == q) {
+                advance(lex); advance(lex); /* consume 2nd and 3rd quote */
+                return scan_triple_fstring(lex, q);
+            }
             return scan_fstring(lex);
         }
 
@@ -259,8 +326,15 @@ static Token scan_raw_token(Lexer *lex) {
         return scan_number(lex);
     }
 
-    /* Strings */
-    if (c == '"' || c == '\'') return scan_string(lex);
+    /* Strings: check for triple-quoted first */
+    if (c == '"' || c == '\'') {
+        /* Triple-quoted: peek at next two chars */
+        if (peek(lex) == c && peek_next(lex) == c) {
+            advance(lex); advance(lex); /* consume 2nd and 3rd quote */
+            return scan_triple_string(lex, c);
+        }
+        return scan_string(lex);
+    }
 
     /* Newline – significant */
     if (c == '\n') return make_token(lex, TOK_NEWLINE);
@@ -470,6 +544,8 @@ const char *token_kind_name(TokenKind kind) {
         case TOK_FLOAT:      return "FLOAT";
         case TOK_STRING:     return "STRING";
         case TOK_FSTRING:    return "FSTRING";
+        case TOK_STRING3:    return "STRING3";
+        case TOK_FSTRING3:   return "FSTRING3";
         case TOK_TRUE:       return "TRUE";
         case TOK_FALSE:      return "FALSE";
         case TOK_NULL:       return "NULL";

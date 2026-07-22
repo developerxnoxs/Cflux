@@ -219,8 +219,10 @@ static void skip_type_annotation(Parser *p) {
  * ---------------------------------------------------------------------- */
 
 static AstNode *parse_string_literal(Parser *p) {
-    const char *src   = p->previous.start + 1; /* skip opening quote */
-    int         raw   = p->previous.length - 2; /* strip both quotes  */
+    /* Triple-quoted strings have 3 opening + 3 closing quotes instead of 1+1 */
+    int q = (p->previous.kind == TOK_STRING3) ? 3 : 1;
+    const char *src   = p->previous.start + q; /* skip opening quote(s) */
+    int         raw   = p->previous.length - q * 2; /* strip both quote groups */
     char       *buf   = FLUX_ALLOC(char, raw + 1);
     int         out   = 0;
 
@@ -291,11 +293,14 @@ static AstNode *parse_fstring(Parser *p) {
     int  line = p->previous.line;
     int  col  = p->previous.column;
 
-    /* Determine quote char and extract content */
+    /* Determine quote char and extract content.
+     * TOK_FSTRING:  token is  f"..."   → quote at [1], content at +2, total overhead 3
+     * TOK_FSTRING3: token is  f"""...""" → quote at [1], content at +4, total overhead 7 */
     const char *tok_start = p->previous.start;
     char quote = tok_start[1]; /* char after 'f' */
-    const char *content = tok_start + 2; /* skip f" */
-    int content_len = p->previous.length - 3; /* exclude f, open-quote, close-quote */
+    int q = (p->previous.kind == TOK_FSTRING3) ? 3 : 1;
+    const char *content = tok_start + 1 + q; /* skip f + opening quote(s) */
+    int content_len = p->previous.length - (1 + q * 2); /* exclude f, open-quotes, close-quotes */
     if (content_len < 0) content_len = 0;
 
     AstNode *fstr = ast_node_alloc(p->arena, AST_FSTRING, line, col);
@@ -494,8 +499,10 @@ static AstNode *parse_primary(Parser *p) {
         buf[len] = '\0';
         return ast_float(p->arena, line, col, strtod(buf, NULL));
     }
-    if (match(p, TOK_STRING))  return parse_string_literal(p);
-    if (match(p, TOK_FSTRING)) return parse_fstring(p);
+    if (match(p, TOK_STRING))   return parse_string_literal(p);
+    if (match(p, TOK_STRING3))  return parse_string_literal(p);
+    if (match(p, TOK_FSTRING))  return parse_fstring(p);
+    if (match(p, TOK_FSTRING3)) return parse_fstring(p);
     if (match(p, TOK_TRUE))    return ast_bool(p->arena, line, col, true);
     if (match(p, TOK_FALSE))   return ast_bool(p->arena, line, col, false);
     if (match(p, TOK_NULL))    return ast_null(p->arena, line, col);

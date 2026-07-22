@@ -116,6 +116,11 @@ typedef enum {
     TOK_INDENT,
     TOK_DEDENT,
 
+    /* Triple-quoted string literals (added after all original tokens to avoid
+     * shifting existing enum values) */
+    TOK_STRING3,    /* """hello""" or '''hello''' */
+    TOK_FSTRING3,   /* f"""hello {name}""" or f'''hello {name}''' */
+
     /* Control */
     TOK_EOF,
     TOK_ERROR,

@@ -606,59 +606,69 @@ Error
 
 ## 12. Match
 
-`match` membandingkan subjek dengan serangkaian pola. Pola yang didukung saat ini:
-
-### Kesamaan Nilai
+`match` membandingkan subjek dengan serangkaian pola secara berurutan. Arm pertama yang cocok dieksekusi; arm-arm berikutnya dilewati.
 
 ```flux
-match nilai:
-    1:
-        print("satu")
-    2:
-        print("dua")
+match subjek:
+    pola1:
+        # body arm 1
+    pola2 if kondisi:
+        # body arm 2 — dengan guard opsional
+    _:
+        # wildcard / catch-all
+```
+
+Kata kunci `case` boleh ditambahkan sebelum pola (opsional, gaya alternatif):
+
+```flux
+match kode:
+    case 200:
+        print("OK")
+    case 404:
+        print("Not Found")
     _:
         print("lainnya")
 ```
 
-### Guard (`if`)
+### Ringkasan Semua Pola
 
-Tambahkan kondisi tambahan setelah pola:
+| Sintaks | Nama | Cocok jika… |
+|---------|------|-------------|
+| `42` | Kesamaan nilai | `subjek == 42` |
+| `"ok"` | Kesamaan nilai | `subjek == "ok"` |
+| `a \| b \| c` | OR pattern | `subjek == a` atau `b` atau `c` |
+| `low..high` | Range pattern | `low <= subjek <= high` (inklusif) |
+| `is Tipe` | Type pattern | `isinstance(subjek, Tipe)` |
+| `nama as pola` | Binding pattern | cocok dengan `pola`, ikat ke `nama` |
+| `Tipe(f1, f2)` | Struct destructuring | isinstance + bind field `f1`, `f2` |
+| `_` | Wildcard | selalu cocok (catch-all) |
+| `pola if ekspresi` | Guard | cocok dengan `pola` **dan** `ekspresi` bernilai `true` |
+
+---
+
+### Kesamaan Nilai
+
+Membandingkan subjek dengan `==`. Berlaku untuk angka, string, boolean, dan `null`.
 
 ```flux
-match x:
-    n if n < 0:
-        print("negatif")
-    n if n == 0:
-        print("nol")
+match kode_http:
+    200:
+        print("OK")
+    301:
+        print("Moved Permanently")
+    404:
+        print("Not Found")
+    500:
+        print("Internal Server Error")
     _:
-        print("positif")
+        print("kode tidak dikenal")
 ```
 
-### Struct Destructuring
-
-```flux
-match titik:
-    Titik(x=0, y=0):
-        print("asal-usul")
-    Titik(x=px, y=py):
-        print(f"di ({px}, {py})")
-```
-
-### Wildcard
-
-`_` menangkap semua nilai tanpa binding:
-
-```flux
-match status:
-    "ok":
-        print("berhasil")
-    _:
-        print("gagal")
-```
+---
 
 ### OR Pattern
 
-Cocokkan beberapa nilai alternatif dengan `|`:
+Cocokkan beberapa nilai alternatif dalam satu arm menggunakan `|`.
 
 ```flux
 match status:
@@ -667,66 +677,210 @@ match status:
     "err" | "error" | "fail":
         print("gagal")
     _:
-        print("tidak diketahui")
+        print("status tidak diketahui")
 ```
+
+Bekerja juga dengan angka:
+
+```flux
+match hari:
+    1 | 7:
+        print("weekend")
+    2 | 3 | 4 | 5 | 6:
+        print("weekday")
+```
+
+---
 
 ### Range Pattern
 
-Cocokkan nilai dalam rentang inklusif dengan `..`:
+Cocokkan nilai dalam rentang inklusif (kedua ujung termasuk) menggunakan `..`.
 
 ```flux
-match skor:
-    90..100:
-        print("A")
-    80..89:
-        print("B")
-    70..79:
-        print("C")
-    _:
-        print("Di bawah C")
+func nilai_huruf(skor):
+    match skor:
+        90..100:
+            return "A"
+        80..89:
+            return "B"
+        70..79:
+            return "C"
+        60..69:
+            return "D"
+        0..59:
+            return "F"
+        _:
+            return "tidak valid"
+
+print(nilai_huruf(95))  # A
+print(nilai_huruf(73))  # C
+print(nilai_huruf(55))  # F
 ```
+
+Range juga berfungsi dengan float dan string (perbandingan leksikografis untuk string).
+
+---
 
 ### Type Pattern
 
-Cocokkan tipe nilai dengan `is TypeName`:
+Cocokkan tipe objek menggunakan `is TypeName` (setara dengan `isinstance`).
 
 ```flux
-match obj:
-    is Anjing:
-        print("ini Anjing")
-    is Kucing:
-        print("ini Kucing")
-    _:
-        print("tipe lain")
+class Lingkaran:
+    func init(self, r):
+        self.r = r
+
+class Persegi:
+    func init(self, s):
+        self.s = s
+
+func luas(bentuk):
+    match bentuk:
+        is Lingkaran:
+            return 3.14159 * bentuk.r * bentuk.r
+        is Persegi:
+            return bentuk.s * bentuk.s
+        _:
+            return 0
+
+print(luas(Lingkaran(5)))   # 78.53975
+print(luas(Persegi(4)))     # 16
 ```
+
+---
 
 ### Binding Pattern
 
-Ikat subjek ke variabel sekaligus menguji pola dengan `name as pattern`:
+Ikat subjek ke sebuah variabel **sekaligus** menguji sub-pola menggunakan `nama as pola`. Variabel tersedia di dalam body arm.
 
 ```flux
-match nilai:
-    n as 1..10:
-        print(f"kecil: {n}")
-    n as 11..100:
-        print(f"sedang: {n}")
-    n as 0:
-        print(f"nol: {n}")
-    _:
-        print("di luar jangkauan")
+func kategorikan(n):
+    match n:
+        val as 0:
+            print(f"nol: {val}")
+        val as 1..9:
+            print(f"satu digit positif: {val}")
+        val as 10..99:
+            print(f"dua digit: {val}")
+        _:
+            print(f"di luar kategori: {n}")
+
+kategorikan(0)   # nol: 0
+kategorikan(7)   # satu digit positif: 7
+kategorikan(42)  # dua digit: 42
 ```
 
-Binding juga berfungsi dengan OR sub-pattern:
+Binding bekerja dengan semua sub-pola: kesamaan nilai, range, type, dan OR:
 
 ```flux
-match kode:
+match karakter:
     c as "a" | "e" | "i" | "o" | "u":
         print(f"vokal: {c}")
+    c as "0".."9":
+        print(f"angka: {c}")
     _:
-        print("konsonan atau lainnya")
+        print("lainnya")
 ```
 
-> **Batasan saat ini:** Pola nested struct-in-struct (destructuring bersarang) belum didukung.
+---
+
+### Guard (`if`)
+
+Tambahkan kondisi ekstra setelah pola. Jika pola cocok tetapi guard bernilai `false`, arm dilewati dan pencarian berlanjut ke arm berikutnya.
+
+```flux
+match suhu:
+    t as 0..100 if t < 20:
+        print(f"{t}°C — dingin")
+    t as 0..100 if t < 37:
+        print(f"{t}°C — normal")
+    t as 0..100:
+        print(f"{t}°C — panas")
+    _:
+        print("suhu di luar rentang")
+```
+
+Guard berfungsi pada semua jenis pola:
+
+```flux
+match produk:
+    is Makanan if produk.stok > 0:
+        print("makanan tersedia")
+    is Makanan:
+        print("makanan habis")
+    _:
+        print("bukan makanan")
+```
+
+---
+
+### Struct Destructuring
+
+Cocokkan objek berdasarkan tipe dan ekstrak field-nya sekaligus.
+
+```flux
+match titik:
+    Titik(x, y):
+        print(f"di ({x}, {y})")
+```
+
+Field-field diambil dari atribut objek dengan nama yang sama. Kombinasikan dengan guard untuk pencocokan lebih spesifik:
+
+```flux
+match titik:
+    Titik(x, y) if x == 0 and y == 0:
+        print("titik asal")
+    Titik(x, y) if x == 0:
+        print(f"pada sumbu Y, y={y}")
+    Titik(x, y):
+        print(f"di ({x}, {y})")
+```
+
+---
+
+### Wildcard (`_`)
+
+Mencocokkan nilai apa pun tanpa binding. Harus menjadi arm terakhir.
+
+```flux
+match perintah:
+    "keluar" | "exit" | "quit":
+        print("Sampai jumpa!")
+    "bantuan" | "help":
+        tampilkan_bantuan()
+    _:
+        print(f"perintah tidak dikenal")
+```
+
+---
+
+### Contoh Lengkap
+
+```flux
+class HTTP:
+    func init(self, kode, pesan):
+        self.kode  = kode
+        self.pesan = pesan
+
+func tangani(resp):
+    match resp:
+        is HTTP if resp.kode == 200:
+            print(f"Sukses: {resp.pesan}")
+        is HTTP if resp.kode in [301, 302]:
+            print(f"Redirect ke: {resp.pesan}")
+        r as is HTTP if r.kode >= 400 and r.kode < 500:
+            print(f"Error client {r.kode}: {r.pesan}")
+        r as is HTTP if r.kode >= 500:
+            print(f"Error server {r.kode}: {r.pesan}")
+        _:
+            print("Respon tidak dikenal")
+
+tangani(HTTP(200, "Data ditemukan"))
+tangani(HTTP(404, "Halaman tidak ada"))
+tangani(HTTP(500, "Internal server error"))
+```
+
+> **Batasan saat ini:** Nested struct destructuring (destructuring bersarang, misalnya `Luar(dalam=Dalam(x, y))`) belum didukung.
 
 ---
 

@@ -57,4 +57,13 @@ func test_bare_survives():
 
 test_bare_survives()
 
+# --- let variable can still be used as a for-loop iteration variable ---
+func test_let_as_for_var():
+    let j = 0
+    for j in range(3):
+        print(j)      # 0, 1, 2
+    print(j)          # 2
+
+test_let_as_for_var()
+
 print("let/const: OK")

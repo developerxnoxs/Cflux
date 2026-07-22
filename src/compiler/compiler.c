@@ -778,8 +778,10 @@ static void compile_expr(Compiler *c, AstNode *node) {
                     int upv = resolve_upvalue(c->frame, name, line);
                     if (upv != -1) {
                         /* Found in an enclosing function frame — use upvalue.
-                         * Reject if the captured local was declared const. */
-                        if (var_is_const(c, name)) {
+                         * Use enclosing_or_global_is_const (not var_is_const) so
+                         * a same-named parameter in the current frame does not
+                         * shadow the const check on the actual nonlocal target. */
+                        if (enclosing_or_global_is_const(c, name)) {
                             compile_error_at(c, line, col,
                                 "cannot assign to const '%s'", name);
                         } else {
@@ -789,7 +791,7 @@ static void compile_expr(Compiler *c, AstNode *node) {
                     } else if (compiler_has_global(c, name)) {
                         /* Found at module (global) scope — use STORE_GLOBAL.
                          * STORE_GLOBAL peeks (leaves value on stack). */
-                        if (var_is_const(c, name)) {
+                        if (enclosing_or_global_is_const(c, name)) {
                             compile_error_at(c, line, col,
                                 "cannot assign to const '%s'", name);
                         } else {
@@ -1185,10 +1187,12 @@ static void compile_expr(Compiler *c, AstNode *node) {
 
             if (frame_is_nonlocal(c->frame, name)) {
                 /* nonlocal name := expr → store to upvalue/global, leave on stack.
-                 * This always writes to an existing binding — reject if const. */
+                 * Use enclosing_or_global_is_const (not var_is_const) so a
+                 * same-named parameter in the current frame does not shadow the
+                 * const check on the actual nonlocal target. */
                 int upv = resolve_upvalue(c->frame, name, line);
                 if (upv != -1) {
-                    if (var_is_const(c, name)) {
+                    if (enclosing_or_global_is_const(c, name)) {
                         compile_error_at(c, line, col,
                             "cannot assign to const '%s'", name);
                     } else {
@@ -1196,7 +1200,7 @@ static void compile_expr(Compiler *c, AstNode *node) {
                         emit_byte(c, (uint8_t)upv, line);
                     }
                 } else if (compiler_has_global(c, name)) {
-                    if (var_is_const(c, name)) {
+                    if (enclosing_or_global_is_const(c, name)) {
                         compile_error_at(c, line, col,
                             "cannot assign to const '%s'", name);
                     } else {
@@ -1580,8 +1584,14 @@ static void predeclare_node_locals(Compiler *c, AstNode *node, int line) {
              * outer loop iterations when the inner for is nested. */
             {
                 const char *vname = node->as.for_stmt.var;
-                if (resolve_local(c->frame, vname) == -1 &&
-                    resolve_upvalue(c->frame, vname, line) == -1) {
+                int existing = resolve_local(c->frame, vname);
+                if (existing != -1) {
+                    /* Name already bound as a local — reject if it's const. */
+                    if (c->frame->locals[existing].is_const) {
+                        compile_error(c, node->line,
+                            "cannot use const '%s' as for-loop variable", vname);
+                    }
+                } else if (resolve_upvalue(c->frame, vname, line) == -1) {
                     emit_byte(c, OP_PUSH_NULL, node->line);
                     add_local(c, vname, node->line);
                 }
@@ -2028,6 +2038,11 @@ static void compile_node(Compiler *c, AstNode *node) {
                 resolve_upvalue(c->frame, node->as.for_stmt.var, line) == -1) {
                 emit_byte(c, OP_PUSH_NULL, line);
                 var_slot = add_local(c, node->as.for_stmt.var, line);
+            } else if (var_slot >= 0 && c->frame->locals[var_slot].is_const) {
+                /* The name resolves to an existing const local — reject. */
+                compile_error(c, line,
+                    "cannot use const '%s' as for-loop variable",
+                    node->as.for_stmt.var);
             }
 
             scope_begin(c);

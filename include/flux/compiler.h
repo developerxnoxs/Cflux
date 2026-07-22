@@ -26,6 +26,7 @@ typedef struct {
     char  name[256];
     int   depth;     /* scope depth where variable is declared */
     bool  captured;  /* true if captured by an inner closure   */
+    bool  is_const;  /* true if declared with `const`          */
 } Local;
 
 typedef struct {
@@ -113,6 +114,7 @@ typedef struct {
      * blocks must update the existing global, not shadow it with a new
      * local that gets discarded when the block's compiler scope ends. */
     char  global_names[1024][256];
+    bool  global_is_const[1024]; /* parallel array: true if declared with `const` */
     int   global_count;
 
     /* Bare `raise` support: slot of the current in-flight exception inside

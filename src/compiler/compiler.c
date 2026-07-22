@@ -183,6 +183,7 @@ static int add_local(Compiler *c, const char *name, int line) {
     local->name[255] = '\0';
     local->depth     = c->frame->scope_depth;
     local->captured  = false;
+    local->is_const  = false;
     return c->frame->local_count - 1;
 }
 
@@ -215,7 +216,71 @@ static void compiler_declare_global(Compiler *c, const char *name) {
     if (c->global_count >= 1024) return; /* silently drop; extremely unlikely */
     strncpy(c->global_names[c->global_count], name, 255);
     c->global_names[c->global_count][255] = '\0';
+    c->global_is_const[c->global_count]   = false;
     c->global_count++;
+}
+
+/* Mark an already-declared global as const. Called after compiler_declare_global
+ * when the declaration used the `const` keyword. */
+static void compiler_mark_global_const(Compiler *c, const char *name) {
+    for (int i = 0; i < c->global_count; i++) {
+        if (strcmp(c->global_names[i], name) == 0) {
+            c->global_is_const[i] = true;
+            return;
+        }
+    }
+}
+
+/* Returns true if `name` refers to a const variable visible from the current
+ * scope: checks the current frame's locals first, then enclosing frames
+ * (upvalue captures), then globals.
+ *
+ * Use this for calls where the resolved write target is in the current frame
+ * (existing local) or falls through to upvalue/global resolution.
+ * Do NOT use this for nonlocal branches — use enclosing_or_global_is_const
+ * instead, which skips current-frame locals and avoids false negatives when a
+ * same-named local/parameter shadows the actual nonlocal target. */
+static bool var_is_const(Compiler *c, const char *name) {
+    /* 1. Current frame's locals (innermost scope first) */
+    for (int i = c->frame->local_count - 1; i >= 0; i--) {
+        if (strcmp(c->frame->locals[i].name, name) == 0)
+            return c->frame->locals[i].is_const;
+    }
+    /* 2. Enclosing frames (variable is captured as an upvalue) */
+    for (CompilerFrame *f = c->frame->enclosing; f != NULL; f = f->enclosing) {
+        for (int i = f->local_count - 1; i >= 0; i--) {
+            if (strcmp(f->locals[i].name, name) == 0)
+                return f->locals[i].is_const;
+        }
+    }
+    /* 3. Globals */
+    for (int i = 0; i < c->global_count; i++) {
+        if (strcmp(c->global_names[i], name) == 0)
+            return c->global_is_const[i];
+    }
+    return false;
+}
+
+/* Returns true if the NONLOCAL target named `name` is const.
+ *
+ * Nonlocal targets always live in an enclosing frame or the global table —
+ * never in the current frame. Skipping current-frame locals is critical:
+ * without it, a same-named parameter or local declared in the current frame
+ * would shadow the enclosing const and produce a false negative. */
+static bool enclosing_or_global_is_const(Compiler *c, const char *name) {
+    /* Enclosing frames (innermost enclosing first) */
+    for (CompilerFrame *f = c->frame->enclosing; f != NULL; f = f->enclosing) {
+        for (int i = f->local_count - 1; i >= 0; i--) {
+            if (strcmp(f->locals[i].name, name) == 0)
+                return f->locals[i].is_const;
+        }
+    }
+    /* Globals */
+    for (int i = 0; i < c->global_count; i++) {
+        if (strcmp(c->global_names[i], name) == 0)
+            return c->global_is_const[i];
+    }
+    return false;
 }
 
 static int resolve_local(CompilerFrame *frame, const char *name) {
@@ -284,6 +349,7 @@ static void frame_init(Compiler *c, CompilerFrame *frame, FuncKind kind,
     Local *local    = &c->frame->locals[c->frame->local_count++];
     local->depth    = 0;
     local->captured = false;
+    local->is_const = false;
     if (kind == FUNC_METHOD || kind == FUNC_INIT)
         strncpy(local->name, "self", 255);
     else
@@ -704,20 +770,32 @@ static void compile_expr(Compiler *c, AstNode *node) {
             if (target->kind == AST_IDENT) {
                 /* ---- identifier assignment ---- */
                 const char *name = target->as.ident.name;
+
                 compile_expr(c, node->as.assign.value);
 
                 /* ---- nonlocal: resolve to upvalue or module-level global ---- */
                 if (frame_is_nonlocal(c->frame, name)) {
                     int upv = resolve_upvalue(c->frame, name, line);
                     if (upv != -1) {
-                        /* Found in an enclosing function frame — use upvalue. */
-                        emit_byte(c, OP_SET_UPVALUE, line);
-                        emit_byte(c, (uint8_t)upv,   line);
+                        /* Found in an enclosing function frame — use upvalue.
+                         * Reject if the captured local was declared const. */
+                        if (var_is_const(c, name)) {
+                            compile_error_at(c, line, col,
+                                "cannot assign to const '%s'", name);
+                        } else {
+                            emit_byte(c, OP_SET_UPVALUE, line);
+                            emit_byte(c, (uint8_t)upv,   line);
+                        }
                     } else if (compiler_has_global(c, name)) {
                         /* Found at module (global) scope — use STORE_GLOBAL.
                          * STORE_GLOBAL peeks (leaves value on stack). */
-                        emit_byte(c, OP_STORE_GLOBAL, line);
-                        emit_uint16(c, identifier_constant(c, name, (int)strlen(name), line), line);
+                        if (var_is_const(c, name)) {
+                            compile_error_at(c, line, col,
+                                "cannot assign to const '%s'", name);
+                        } else {
+                            emit_byte(c, OP_STORE_GLOBAL, line);
+                            emit_uint16(c, identifier_constant(c, name, (int)strlen(name), line), line);
+                        }
                     } else {
                         compile_error_at(c, line, col,
                             "nonlocal '%s': no binding found in any enclosing scope",
@@ -733,12 +811,18 @@ static void compile_expr(Compiler *c, AstNode *node) {
                      * STORE global, do not shadow it with a new local.
                      * NOTE: inside a function (enclosing != NULL) we always
                      * create a new local instead, matching Python semantics. */
-                    emit_store_var(c, name, line);
+                    if (var_is_const(c, name)) {
+                        compile_error_at(c, line, col,
+                            "cannot assign to const '%s'", name);
+                    } else {
+                        emit_store_var(c, name, line);
+                    }
 
                 } else if (c->frame->scope_depth == 0 &&
                     resolve_local(c->frame, name) == -1 &&
                     resolve_upvalue(c->frame, name, line) == -1) {
-                    /* New global: DEFINE_GLOBAL pops; reload for expression result */
+                    /* New global: DEFINE_GLOBAL pops; reload for expression result.
+                     * No const check: this is a fresh binding. */
                     emit_byte(c, OP_DEFINE_GLOBAL, line);
                     emit_uint16(c, identifier_constant(c, name, (int)strlen(name), line), line);
                     compiler_declare_global(c, name);
@@ -748,6 +832,8 @@ static void compile_expr(Compiler *c, AstNode *node) {
                            resolve_upvalue(c->frame, name, line) == -1 &&
                            c->frame->scope_depth > 0) {
                     /* New local: value is the local's stack slot.
+                     * No const check: this creates a fresh local that may shadow
+                     * an outer const — which is allowed (Python/Flux semantics).
                      * Emit LOAD to push a copy → gets POPped by EXPR_STMT;
                      * the original push remains as the live slot.
                      *
@@ -777,8 +863,19 @@ static void compile_expr(Compiler *c, AstNode *node) {
 
                 } else {
                     /* Existing local / upvalue / global: STORE keeps value on stack.
-                     * Do NOT emit an extra load — the STORE residual IS the result. */
-                    emit_store_var(c, name, line);
+                     * Do NOT emit an extra load — the STORE residual IS the result.
+                     * Reject if the resolved binding is const. */
+                    int slot = resolve_local(c->frame, name);
+                    bool is_const_target =
+                        (slot >= 0)
+                            ? c->frame->locals[slot].is_const
+                            : var_is_const(c, name); /* upvalue or global */
+                    if (is_const_target) {
+                        compile_error_at(c, line, col,
+                            "cannot assign to const '%s'", name);
+                    } else {
+                        emit_store_var(c, name, line);
+                    }
                 }
 
             } else if (target->kind == AST_ATTR) {
@@ -839,6 +936,14 @@ static void compile_expr(Compiler *c, AstNode *node) {
                  * Do NOT emit an extra OP_POP here — that would double-pop and
                  * destroy the local slot on the VM stack.
                  */
+
+                /* Reject augmented assignment to a const-declared variable */
+                if (var_is_const(c, target->as.ident.name)) {
+                    compile_error_at(c, line, col,
+                        "cannot assign to const '%s'", target->as.ident.name);
+                    break;
+                }
+
                 emit_load_var(c, target->as.ident.name, line);
                 compile_expr(c, node->as.aug_assign.value);
                 EMIT_AUG_OP();
@@ -1075,17 +1180,29 @@ static void compile_expr(Compiler *c, AstNode *node) {
          * -------------------------------------------------------------- */
         case AST_WALRUS: {
             const char *name = node->as.walrus.name;
+
             compile_expr(c, node->as.walrus.value);   /* push value */
 
             if (frame_is_nonlocal(c->frame, name)) {
-                /* nonlocal name := expr → store to upvalue/global, leave on stack */
+                /* nonlocal name := expr → store to upvalue/global, leave on stack.
+                 * This always writes to an existing binding — reject if const. */
                 int upv = resolve_upvalue(c->frame, name, line);
                 if (upv != -1) {
-                    emit_byte(c, OP_SET_UPVALUE, line);
-                    emit_byte(c, (uint8_t)upv, line);
+                    if (var_is_const(c, name)) {
+                        compile_error_at(c, line, col,
+                            "cannot assign to const '%s'", name);
+                    } else {
+                        emit_byte(c, OP_SET_UPVALUE, line);
+                        emit_byte(c, (uint8_t)upv, line);
+                    }
                 } else if (compiler_has_global(c, name)) {
-                    emit_byte(c, OP_STORE_GLOBAL, line);
-                    emit_uint16(c, identifier_constant(c, name, (int)strlen(name), line), line);
+                    if (var_is_const(c, name)) {
+                        compile_error_at(c, line, col,
+                            "cannot assign to const '%s'", name);
+                    } else {
+                        emit_byte(c, OP_STORE_GLOBAL, line);
+                        emit_uint16(c, identifier_constant(c, name, (int)strlen(name), line), line);
+                    }
                 } else {
                     compile_error_at(c, line, col,
                         "nonlocal '%s': no binding found in any enclosing scope", name);
@@ -1093,16 +1210,38 @@ static void compile_expr(Compiler *c, AstNode *node) {
                 /* value left on stack as expression result */
             } else if (resolve_local(c->frame, name) != -1 ||
                        resolve_upvalue(c->frame, name, line) != -1) {
-                /* Existing local or upvalue: store and leave value on stack */
-                emit_store_var(c, name, line);
+                /* Existing local or upvalue: reject if const, then store. */
+                int slot = resolve_local(c->frame, name);
+                bool is_const_target =
+                    (slot >= 0)
+                        ? c->frame->locals[slot].is_const
+                        : var_is_const(c, name); /* upvalue */
+                if (is_const_target) {
+                    compile_error_at(c, line, col,
+                        "cannot assign to const '%s'", name);
+                } else {
+                    emit_store_var(c, name, line);
+                }
+            } else if (c->frame->enclosing == NULL &&
+                       compiler_has_global(c, name)) {
+                /* Existing global at script level (walrus rewrites it).
+                 * Reject if const; otherwise STORE_GLOBAL (peeks, leaves value). */
+                if (var_is_const(c, name)) {
+                    compile_error_at(c, line, col,
+                        "cannot assign to const '%s'", name);
+                } else {
+                    emit_byte(c, OP_STORE_GLOBAL, line);
+                    emit_uint16(c, identifier_constant(c, name, (int)strlen(name), line), line);
+                }
             } else if (c->frame->scope_depth == 0) {
-                /* New global */
+                /* New global — no const check: this is a fresh binding. */
                 emit_byte(c, OP_DEFINE_GLOBAL, line);
                 emit_uint16(c, identifier_constant(c, name, (int)strlen(name), line), line);
                 compiler_declare_global(c, name);
                 emit_load_var(c, name, line);   /* reload as expression result */
             } else {
-                /* New local: value is on stack = the slot; load copy as expression result */
+                /* New local — no const check: fresh binding that may shadow an
+                 * outer const, which is allowed (Python/Flux semantics). */
                 add_local(c, name, line);
                 emit_load_var(c, name, line);
             }
@@ -2199,15 +2338,20 @@ static void compile_node(Compiler *c, AstNode *node) {
          *   - local scope : value stays on stack as local slot
          * -------------------------------------------------------------- */
         case AST_LET_DECL: {
-            const char *name = node->as.let_decl.name;
+            const char *name     = node->as.let_decl.name;
+            bool        is_const = node->as.let_decl.is_const;
             compile_expr(c, node->as.let_decl.value);
 
             if (c->frame->scope_depth == 0) {
                 emit_byte(c, OP_DEFINE_GLOBAL, line);
                 emit_uint16(c, identifier_constant(c, name, (int)strlen(name), line), line);
                 compiler_declare_global(c, name);
+                if (is_const)
+                    compiler_mark_global_const(c, name);
             } else {
-                add_local(c, name, line);
+                int slot = add_local(c, name, line);
+                if (slot >= 0)
+                    c->frame->locals[slot].is_const = is_const;
                 /* Value is already the local's stack slot — nothing more to emit. */
             }
             break;

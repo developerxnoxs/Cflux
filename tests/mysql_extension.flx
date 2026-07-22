@@ -1,0 +1,142 @@
+# Test untuk MySQL native extension (extension/mysql/).
+# Build dulu dengan: make extensions
+# Koneksi ke: sql12.freesqldatabase.com
+
+import mysql
+
+HOST = "sql12.freesqldatabase.com"
+USER = "sql12833600"
+PASS = "kdLmGq48IT"
+DB   = "sql12833600"
+PORT = 3306
+
+print("=== MySQL Extension Test ===")
+print("")
+
+# ── 1. Koneksi ──────────────────────────────────────────────────────────────
+print("-- Test 1: Koneksi --")
+conn = mysql.connect(HOST, USER, PASS, DB, PORT)
+if conn == null:
+    print("[FAIL] mysql.connect() mengembalikan null")
+else:
+    print("[PASS] mysql.connect() berhasil")
+
+# ── 2. Ping ─────────────────────────────────────────────────────────────────
+print("")
+print("-- Test 2: Ping --")
+ok = mysql.ping(conn)
+if ok:
+    print("[PASS] mysql.ping() -> true")
+else:
+    print("[FAIL] mysql.ping() -> false")
+
+# ── 3. Buat tabel ───────────────────────────────────────────────────────────
+print("")
+print("-- Test 3: CREATE TABLE --")
+mysql.exec(conn, "DROP TABLE IF EXISTS flux_test")
+aff = mysql.exec(conn, "CREATE TABLE flux_test (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, score FLOAT, active TINYINT(1))")
+print("[PASS] tabel flux_test dibuat")
+
+# ── 4. INSERT & insert_id ────────────────────────────────────────────────────
+print("")
+print("-- Test 4: INSERT & insert_id --")
+mysql.exec(conn, "INSERT INTO flux_test (name, score, active) VALUES ('Alice', 95.5, 1)")
+id1 = mysql.insert_id(conn)
+mysql.exec(conn, "INSERT INTO flux_test (name, score, active) VALUES ('Bob', 80.0, 1)")
+id2 = mysql.insert_id(conn)
+mysql.exec(conn, "INSERT INTO flux_test (name, score, active) VALUES ('Charlie', 70.25, 0)")
+id3 = mysql.insert_id(conn)
+
+if id1 > 0 and id2 > id1 and id3 > id2:
+    print("[PASS] insert_id() naik dengan benar:", id1, id2, id3)
+else:
+    print("[FAIL] insert_id() tidak sesuai:", id1, id2, id3)
+
+# ── 5. escape (cegah SQL injection) ─────────────────────────────────────────
+print("")
+print("-- Test 5: escape() --")
+raw = "O'Reilly; DROP TABLE flux_test--"
+safe = mysql.escape(conn, raw)
+mysql.exec(conn, "INSERT INTO flux_test (name, score, active) VALUES ('" + safe + "', 60.0, 1)")
+id4 = mysql.insert_id(conn)
+if id4 > 0:
+    print("[PASS] escape() aman dipakai dalam INSERT, id:", id4)
+else:
+    print("[FAIL] INSERT dengan escape() gagal")
+
+# ── 6. SELECT semua baris ────────────────────────────────────────────────────
+print("")
+print("-- Test 6: SELECT --")
+rows = mysql.query(conn, "SELECT id, name, score, active FROM flux_test ORDER BY id")
+if len(rows) == 4:
+    print("[PASS] SELECT mengembalikan 4 baris")
+else:
+    print("[FAIL] Ekspektasi 4 baris, dapat:", len(rows))
+
+for row in rows:
+    print("  id=" + str(row["id"]) + " name=" + row["name"] + " score=" + str(row["score"]) + " active=" + str(row["active"]))
+
+# ── 7. Tipe data numerik ─────────────────────────────────────────────────────
+print("")
+print("-- Test 7: Tipe data kolom numerik --")
+r = rows[0]
+if type(r["id"]) == "int":
+    print("[PASS] kolom id bertipe int")
+else:
+    print("[FAIL] kolom id bukan int, dapat:", type(r["id"]))
+
+if type(r["score"]) == "float":
+    print("[PASS] kolom score bertipe float")
+else:
+    print("[FAIL] kolom score bukan float, dapat:", type(r["score"]))
+
+# ── 8. UPDATE & affected rows ────────────────────────────────────────────────
+print("")
+print("-- Test 8: UPDATE & affected rows --")
+aff = mysql.exec(conn, "UPDATE flux_test SET score = score + 5 WHERE active = 1")
+if aff == 3:
+    print("[PASS] UPDATE mengenai 3 baris (affected:", aff, ")")
+else:
+    print("[FAIL] Ekspektasi 3 baris, dapat:", aff)
+
+# ── 9. DELETE ────────────────────────────────────────────────────────────────
+print("")
+print("-- Test 9: DELETE --")
+aff = mysql.exec(conn, "DELETE FROM flux_test WHERE active = 0")
+if aff == 1:
+    print("[PASS] DELETE 1 baris (Charlie) berhasil")
+else:
+    print("[FAIL] Ekspektasi 1 baris terhapus, dapat:", aff)
+
+# Verifikasi sisa baris
+rows2 = mysql.query(conn, "SELECT COUNT(*) as total FROM flux_test")
+total = rows2[0]["total"]
+if total == 3:
+    print("[PASS] Sisa 3 baris setelah DELETE")
+else:
+    print("[FAIL] Ekspektasi 3 baris, dapat:", total)
+
+# ── 10. NULL handling ────────────────────────────────────────────────────────
+print("")
+print("-- Test 10: NULL handling --")
+mysql.exec(conn, "INSERT INTO flux_test (name, score, active) VALUES ('Null-score', null, 1)")
+rows3 = mysql.query(conn, "SELECT score FROM flux_test WHERE name = 'Null-score'")
+if len(rows3) > 0 and rows3[0]["score"] == null:
+    print("[PASS] NULL di database -> null di Flux")
+else:
+    print("[FAIL] NULL tidak ditangani dengan benar:", rows3)
+
+# ── 11. Bersihkan ────────────────────────────────────────────────────────────
+print("")
+print("-- Test 11: DROP TABLE --")
+mysql.exec(conn, "DROP TABLE flux_test")
+print("[PASS] DROP TABLE berhasil")
+
+# ── 12. Tutup koneksi ────────────────────────────────────────────────────────
+print("")
+print("-- Test 12: Tutup koneksi --")
+mysql.close(conn)
+print("[PASS] mysql.close() selesai")
+
+print("")
+print("=== Semua test MySQL selesai ===")

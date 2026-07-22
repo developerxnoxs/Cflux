@@ -2066,6 +2066,8 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                 if (super->is_enum)
                     RUNTIME_ERROR("Cannot inherit from an enum '%s'", super->name->chars);
                 FluxClass *sub   = AS_CLASS(vm_peek(vm, 0));
+                /* Record the parent so isinstance() can walk the chain. */
+                sub->superclass = super;
                 /* Copy methods from superclass */
                 for (int i = 0; i < super->methods->capacity; i++) {
                     DictEntry *e = &super->methods->entries[i];

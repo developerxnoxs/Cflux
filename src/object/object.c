@@ -563,10 +563,11 @@ FluxClosure *object_closure_new(FluxVM *vm, FluxFunction *fn) {
 
 FluxClass *object_class_new(FluxVM *vm, FluxString *name) {
     FluxClass *k = ALLOC_OBJ(vm, FluxClass, OBJ_CLASS);
-    k->name      = name;
-    k->methods   = NULL; /* safe sentinel before second allocation */
-    k->is_struct = false;
-    k->is_enum   = false;
+    k->name       = name;
+    k->methods    = NULL; /* safe sentinel before second allocation */
+    k->superclass = NULL;
+    k->is_struct  = false;
+    k->is_enum    = false;
     /* Push k onto the VM stack so the GC can reach it if object_dict_new()
      * triggers a collection cycle.  Without this, k is live in C but not
      * reachable from any GC root and would be swept. */

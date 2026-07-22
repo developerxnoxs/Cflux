@@ -149,12 +149,13 @@ typedef struct {
 /* -------------------------------------------------------------------------
  * Class
  * ---------------------------------------------------------------------- */
-typedef struct {
-    FluxObject  obj;
-    FluxString *name;
-    FluxDict   *methods;   /* method name → FluxClosure (or enum member Value) */
-    bool        is_struct; /* true if declared as `struct` */
-    bool        is_enum;   /* true if declared as `enum`   */
+typedef struct FluxClass {
+    FluxObject        obj;
+    FluxString       *name;
+    FluxDict         *methods;    /* method name → FluxClosure (or enum member Value) */
+    struct FluxClass *superclass; /* NULL for base classes; set by OP_INHERIT */
+    bool              is_struct;  /* true if declared as `struct` */
+    bool              is_enum;    /* true if declared as `enum`   */
 } FluxClass;
 
 /* -------------------------------------------------------------------------

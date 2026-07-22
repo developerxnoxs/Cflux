@@ -663,8 +663,15 @@ static Value native_set_attr(FluxVM *vm, int argc, Value *argv) {
 static Value native_is_instance(FluxVM *vm, int argc, Value *argv) {
     (void)vm; (void)argc;
     if (!IS_INSTANCE(argv[0]) || !IS_CLASS(argv[1])) return value_bool(false);
-    /* Direct class match (Flux flattens inheritance at class-definition time) */
-    return value_bool(AS_INSTANCE(argv[0])->klass == AS_CLASS(argv[1]));
+    /* Walk the inheritance chain: check the instance's class and every
+     * ancestor until we hit NULL (base class) or find a match. */
+    FluxClass *target = AS_CLASS(argv[1]);
+    FluxClass *klass  = AS_INSTANCE(argv[0])->klass;
+    while (klass != NULL) {
+        if (klass == target) return value_bool(true);
+        klass = klass->superclass;
+    }
+    return value_bool(false);
 }
 
 static Value native_is_callable(FluxVM *vm, int argc, Value *argv) {

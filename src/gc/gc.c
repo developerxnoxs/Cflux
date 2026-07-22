@@ -174,6 +174,7 @@ static void blacken_object(FluxVM *vm, FluxObject *obj) {
             FluxClass *k = (FluxClass *)obj;
             gc_mark_object(vm, (FluxObject *)k->name);
             gc_mark_object(vm, (FluxObject *)k->methods);
+            gc_mark_object(vm, (FluxObject *)k->superclass);
             break;
         }
 

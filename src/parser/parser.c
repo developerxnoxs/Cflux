@@ -1172,12 +1172,94 @@ static AstNode *parse_enum_def(Parser *p) {
  *       body
  *
  * Special patterns:
- *   _          → wildcard (catch-all); may also have [if guard]
- *   identifier → when a simple identifier not followed by '(' or '.' appears
- *                alone as the entire pattern, the COMPILER decides at compile
- *                time whether it is a capture variable (unresolved name) or a
- *                value equality check (resolved global/local).
+ *   _             → wildcard (catch-all); may also have [if guard]
+ *   a | b | c     → OR pattern — matches if subject equals any alternative
+ *   low..high     → range pattern — matches if low <= subject <= high
+ *   is TypeName   → type pattern — matches if isinstance(subject, TypeName)
+ *   name as pat   → binding pattern — binds subject to name, then tests pat
+ *   identifier    → when a simple identifier not followed by '(' or '.' appears
+ *                   alone as the entire pattern, the COMPILER decides at compile
+ *                   time whether it is a capture variable (unresolved name) or a
+ *                   value equality check (resolved global/local).
  */
+
+/* Forward declaration needed for mutual recursion (bind sub-pattern). */
+static AstNode *parse_pattern(Parser *p);
+
+/*
+ * parse_pattern_base -- parse a single pattern alternative (no top-level |).
+ *
+ * Calls parse_bitxor so that the | token is NOT consumed by expression
+ * parsing and remains available for OR-pattern collection above.
+ */
+static AstNode *parse_pattern_base(Parser *p) {
+    int line = p->current.line, col = p->current.column;
+
+    /* Type pattern: is TypeName */
+    if (match(p, TOK_IS)) {
+        if (!check(p, TOK_IDENT)) {
+            parser_error(p, "Expected type name after 'is' in pattern");
+            return ast_null(p->arena, line, col);
+        }
+        Token name_tok = p->current;
+        advance(p);
+        int   len  = name_tok.length;
+        char *buf  = FLUX_ALLOC(char, len + 1);
+        memcpy(buf, name_tok.start, (size_t)len);
+        buf[len] = '\0';
+        AstNode *n = ast_node_alloc(p->arena, AST_PATTERN_TYPE, line, col);
+        n->as.pattern_type.type_name = buf;
+        return n;
+    }
+
+    /*
+     * All other patterns start with a sub-expression.
+     * We call parse_bitxor (not parse_bitor / parse_expr) so that the '|'
+     * token is NOT consumed here and remains available for OR collection.
+     */
+    AstNode *base = parse_bitxor(p);
+
+    /* Range pattern: base..high */
+    if (match(p, TOK_ELLIPSIS)) {
+        AstNode *high = parse_bitxor(p);
+        AstNode *n = ast_node_alloc(p->arena, AST_PATTERN_RANGE, line, col);
+        n->as.pattern_range.low  = base;
+        n->as.pattern_range.high = high;
+        return n;
+    }
+
+    /* Binding pattern: ident as sub_pattern */
+    if (check(p, TOK_AS) && base->kind == AST_IDENT) {
+        advance(p); /* consume 'as' */
+        AstNode *sub = parse_pattern(p); /* recursive: allow OR in sub-pattern */
+        AstNode *n = ast_node_alloc(p->arena, AST_PATTERN_BIND, line, col);
+        n->as.pattern_bind.name    = base->as.ident.name; /* already arena-owned */
+        n->as.pattern_bind.pattern = sub;
+        return n;
+    }
+
+    return base;
+}
+
+/*
+ * parse_pattern -- parse a full match arm pattern, possibly with | alternatives.
+ */
+static AstNode *parse_pattern(Parser *p) {
+    int line = p->current.line, col = p->current.column;
+    AstNode *first = parse_pattern_base(p);
+
+    if (!check(p, TOK_PIPE)) return first;
+
+    /* OR pattern: collect alternatives */
+    AstNode *n = ast_node_alloc(p->arena, AST_PATTERN_OR, line, col);
+    ast_list_init(&n->as.pattern_or.alternatives);
+    ast_list_push(&n->as.pattern_or.alternatives, first);
+    while (match(p, TOK_PIPE)) {
+        ast_list_push(&n->as.pattern_or.alternatives, parse_pattern_base(p));
+    }
+    return n;
+}
+
 static AstNode *parse_match(Parser *p) {
     int line = p->previous.line, col = p->previous.column;
     AstNode *subject = parse_expr(p);
@@ -1214,7 +1296,7 @@ static AstNode *parse_match(Parser *p) {
             is_wildcard = true;
             advance(p); /* consume _ */
         } else {
-            pattern = parse_expr(p);
+            pattern = parse_pattern(p);
         }
 
         /* Optional guard: [if guard_expr] */

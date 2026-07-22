@@ -85,6 +85,12 @@ typedef enum {
 
     /* Module root */
     AST_MODULE,
+
+    /* Match pattern nodes — only appear as arms in AST_MATCH */
+    AST_PATTERN_OR,      /* pat | pat | ...  */
+    AST_PATTERN_RANGE,   /* low..high (inclusive on both ends) */
+    AST_PATTERN_TYPE,    /* is TypeName      */
+    AST_PATTERN_BIND,    /* name as pattern  */
 } AstKind;
 
 /* -------------------------------------------------------------------------
@@ -282,6 +288,18 @@ struct AstNode {
             AstNode *manager; /* the context-manager expression */
             AstNode *body;
         } with_stmt;
+
+        /* AST_PATTERN_OR: alternatives separated by | */
+        struct { AstList alternatives; } pattern_or;
+
+        /* AST_PATTERN_RANGE: low..high (both ends inclusive) */
+        struct { AstNode *low; AstNode *high; } pattern_range;
+
+        /* AST_PATTERN_TYPE: is TypeName */
+        struct { char *type_name; } pattern_type;
+
+        /* AST_PATTERN_BIND: name as sub_pattern */
+        struct { char *name; AstNode *pattern; } pattern_bind;
 
         /* AST_TRY */
         struct {

@@ -1,63 +1,62 @@
 # Flux Programming Language
 
-Flux adalah bahasa pemrograman modern yang diimplementasikan dalam C. Menggunakan VM berbasis bytecode, garbage collector mark-and-sweep, sistem tipe dinamis, coroutine async/await berbasis libuv, dan standard library yang di-load secara lazy.
+Flux adalah bahasa pemrograman modern yang diimplementasikan dalam C — bytecode VM, garbage collector mark-and-sweep, tipe dinamis, coroutine async/await berbasis libuv, dan standard library yang di-load secara lazy.
 
-## How to run
+## Build & Run
 
 ```bash
-# Build semua (executable + stdlib .so + extensions)
-make all
-
-# Jalankan file Flux
-./build_make/flux run <file.flx>
-
-# Jalankan semua test (file .flx di folder tests/)
-for f in tests/*.flx; do ./build_make/flux run "$f"; done
+make all                        # build semua artifact
+./build_make/flux hello.flx     # jalankan program Flux
+./build_make/flux run hello.flx # alternatif
+make clean                      # hapus build artifacts
 ```
 
-## Build output
+## Artifacts
 
 | Output | Keterangan |
 |--------|-----------|
 | `build_make/flux` | Executable CLI |
-| `build_make/libflux.a` | Static library untuk embedding |
-| `stdlib/*/lib*.so` | Modul standard library (lazy-loaded) |
+| `build_make/libflux.a` | Static library |
+| `stdlib/*/lib*.so` | Modul standard library |
 | `extension/*/lib*.so` | Ekstensi native (HTTP, WebSocket, MySQL, PostgreSQL) |
-
-## CLI commands
-
-```
-flux run <file.flx>     Jalankan file Flux
-flux build <file.flx>   Compile-only check
-flux test <file.flx>    Jalankan sebagai test suite
-flux fmt <file.flx>     Format file sumber
-flux lint <file.flx>    Lint (syntax + semantic warnings)
-flux doc <file.flx>     Generate dokumentasi Markdown
-```
 
 ## Stack
 
-- **Language**: C (C17 / gnu17)
-- **Build**: GNU Make + CMake (alternatif)
+- **Bahasa implementasi**: C17 (gcc)
+- **Build system**: GNU Make + CMake
 - **Async runtime**: libuv
-- **HTTP extension**: libcurl + openssl
-- **WebSocket extension**: wslay
-- **Database extensions**: libpq (PostgreSQL), libmysqlclient (MySQL)
-- **Nix dependencies**: dikonfigurasi di `replit.nix`
+- **Native extensions**: libcurl, wslay, libpq, libmysqlclient
+- **Semua dependensi** sudah tersedia via `replit.nix`
 
-## Project structure
+## Struktur Proyek
 
-- `src/` — Implementasi VM, compiler, parser, lexer, GC, stdlib
-- `stdlib/` — Modul standard library (.so): math, fs, os, io, json, time, sys, shell, socket, native
-- `extension/` — Ekstensi native (.so): http, ws, mysql, postgresql
-- `tests/` — Test suite dalam Flux (.flx)
-- `include/` — Header files publik
-- `docs/` — Dokumentasi tambahan
+```
+src/
+  compiler/compiler.c   # bytecode compiler (termasuk match patterns)
+  parser/parser.c       # parser recursive-descent
+  lexer/lexer.c         # lexer
+  vm/vm.c               # virtual machine
+  gc/gc.c               # garbage collector
+  ast/ast.c             # AST nodes
+  stdlib/               # standard library (statically linked core)
+stdlib/                 # lazy-loaded .so modules (math, fs, os, io, json, ...)
+extension/              # native extensions (http, ws, mysql, postgresql)
+tests/                  # test suite (.flx files)
+```
 
-## Bugs fixed
+## Match Pattern System
 
-- **`fn` as identifier** (`src/parser/parser.c`): Parser secara keliru melarang `fn` sebagai nama variabel/parameter karena dianggap keyword alias. Dihapus dari daftar alias agar `fn` bisa dipakai sebagai identifier biasa.
+Semua pola yang didukung:
 
-## User preferences
+- **Equality**: `42:` atau `"ok":`
+- **Wildcard**: `_:`
+- **Guard**: `pattern if kondisi:`
+- **Struct destructuring**: `TypeName(field1, field2):`
+- **OR pattern**: `a | b | c:` — cocok jika salah satu sesuai
+- **Range pattern**: `low..high:` — inklusif di kedua ujung
+- **Type pattern**: `is TypeName:` — isinstance check
+- **Binding pattern**: `name as pattern:` — ikat subjek ke variabel lalu uji pattern
 
-- Run and test in Indonesian context; README and docs are in Indonesian.
+## User Preferences
+
+- Dokumentasi README dalam Bahasa Indonesia (ikuti konvensi proyek)

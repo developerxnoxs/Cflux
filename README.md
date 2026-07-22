@@ -656,8 +656,77 @@ match status:
         print("gagal")
 ```
 
-> **Batasan saat ini:** Pola OR (`1 | 2 | 3`), pola range, pola type
-> (`is String`), pola nested, dan pola binding bertingkat belum didukung.
+### OR Pattern
+
+Cocokkan beberapa nilai alternatif dengan `|`:
+
+```flux
+match status:
+    "ok" | "success" | "done":
+        print("berhasil")
+    "err" | "error" | "fail":
+        print("gagal")
+    _:
+        print("tidak diketahui")
+```
+
+### Range Pattern
+
+Cocokkan nilai dalam rentang inklusif dengan `..`:
+
+```flux
+match skor:
+    90..100:
+        print("A")
+    80..89:
+        print("B")
+    70..79:
+        print("C")
+    _:
+        print("Di bawah C")
+```
+
+### Type Pattern
+
+Cocokkan tipe nilai dengan `is TypeName`:
+
+```flux
+match obj:
+    is Anjing:
+        print("ini Anjing")
+    is Kucing:
+        print("ini Kucing")
+    _:
+        print("tipe lain")
+```
+
+### Binding Pattern
+
+Ikat subjek ke variabel sekaligus menguji pola dengan `name as pattern`:
+
+```flux
+match nilai:
+    n as 1..10:
+        print(f"kecil: {n}")
+    n as 11..100:
+        print(f"sedang: {n}")
+    n as 0:
+        print(f"nol: {n}")
+    _:
+        print("di luar jangkauan")
+```
+
+Binding juga berfungsi dengan OR sub-pattern:
+
+```flux
+match kode:
+    c as "a" | "e" | "i" | "o" | "u":
+        print(f"vokal: {c}")
+    _:
+        print("konsonan atau lainnya")
+```
+
+> **Batasan saat ini:** Pola nested struct-in-struct (destructuring bersarang) belum didukung.
 
 ---
 

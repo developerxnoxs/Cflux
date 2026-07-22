@@ -461,6 +461,26 @@ void ast_print(AstNode *node, int indent) {
             printf("Nonlocal\n");
             break;
 
+        /* ----- match pattern nodes ----- */
+        case AST_PATTERN_OR: {
+            printf("PatternOR(%d alts)\n", node->as.pattern_or.alternatives.count);
+            for (int i = 0; i < node->as.pattern_or.alternatives.count; i++)
+                ast_print(node->as.pattern_or.alternatives.data[i], indent + 1);
+            break;
+        }
+        case AST_PATTERN_RANGE:
+            printf("PatternRange\n");
+            ast_print(node->as.pattern_range.low,  indent + 1);
+            ast_print(node->as.pattern_range.high, indent + 1);
+            break;
+        case AST_PATTERN_TYPE:
+            printf("PatternType(is %s)\n", node->as.pattern_type.type_name);
+            break;
+        case AST_PATTERN_BIND:
+            printf("PatternBind(%s as ...)\n", node->as.pattern_bind.name);
+            ast_print(node->as.pattern_bind.pattern, indent + 1);
+            break;
+
         default:
             printf("Node(%d)\n", node->kind);
             break;

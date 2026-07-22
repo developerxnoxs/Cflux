@@ -2373,6 +2373,267 @@ static void compile_node(Compiler *c, AstNode *node) {
                         emit_byte(c, OP_POP, line); /* pop false isinstance */
                     }
 
+                } else if (pat->kind == AST_PATTERN_OR) {
+                    /* ---- OR pattern: a | b | c ----------------------- *
+                     * For each non-last alternative:                      *
+                     *   test → if true, jump to body; else pop+fall-thru  *
+                     * For the last alternative:                           *
+                     *   test → if false, arm_fail; else pop+fall-thru     *
+                     * ----------------------------------------------------- */
+                    int n_alts = pat->as.pattern_or.alternatives.count;
+                    int *to_body = (n_alts > 1) ? FLUX_ALLOC(int, n_alts - 1) : NULL;
+                    int  arm_fail = -1;
+
+                    for (int ai = 0; ai < n_alts; ai++) {
+                        AstNode *alt = pat->as.pattern_or.alternatives.data[ai];
+                        bool is_last = (ai == n_alts - 1);
+
+                        emit_byte(c, OP_LOAD_LOCAL, line);
+                        emit_byte(c, (uint8_t)subject_slot, line);
+                        compile_expr(c, alt);
+                        emit_byte(c, OP_EQ, line);
+
+                        if (!is_last) {
+                            /* if true → jump to body; if false → next alt */
+                            int alt_fail = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                            emit_byte(c, OP_POP, line); /* pop true */
+                            to_body[ai] = emit_jump(c, OP_JUMP, line);
+                            patch_jump(c, alt_fail);
+                            emit_byte(c, OP_POP, line); /* pop false */
+                        } else {
+                            /* last alt: if false → arm fail */
+                            arm_fail = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                            emit_byte(c, OP_POP, line); /* pop true (success) */
+                        }
+                    }
+
+                    /* Patch all intermediate to_body jumps to here */
+                    for (int ai = 0; ai < n_alts - 1; ai++)
+                        patch_jump(c, to_body[ai]);
+                    if (to_body) FLUX_FREE(to_body);
+
+                    if (guard) {
+                        compile_expr(c, guard);
+                        int guard_fail = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                        emit_byte(c, OP_POP, line);
+                        scope_begin(c);
+                        compile_node(c, body);
+                        scope_end(c, line);
+                        end_jumps[end_count++] = emit_jump(c, OP_JUMP, line);
+                        patch_jump(c, guard_fail);
+                        emit_byte(c, OP_POP, line);
+                        int skip = emit_jump(c, OP_JUMP, line);
+                        patch_jump(c, arm_fail);
+                        emit_byte(c, OP_POP, line);
+                        patch_jump(c, skip);
+                    } else {
+                        scope_begin(c);
+                        compile_node(c, body);
+                        scope_end(c, line);
+                        end_jumps[end_count++] = emit_jump(c, OP_JUMP, line);
+                        patch_jump(c, arm_fail);
+                        emit_byte(c, OP_POP, line);
+                    }
+
+                } else if (pat->kind == AST_PATTERN_RANGE) {
+                    /* ---- Range pattern: low..high (inclusive) --------- *
+                     * Check subject >= low AND subject <= high.            *
+                     * Both comparisons leave a bool on stack; if either    *
+                     * fails, we pop + redirect to arm_fail.                *
+                     * ----------------------------------------------------- */
+                    emit_byte(c, OP_LOAD_LOCAL, line);
+                    emit_byte(c, (uint8_t)subject_slot, line);
+                    compile_expr(c, pat->as.pattern_range.low);
+                    emit_byte(c, OP_GTE, line);
+                    int range_fail1 = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                    emit_byte(c, OP_POP, line); /* pop true (subject >= low) */
+
+                    emit_byte(c, OP_LOAD_LOCAL, line);
+                    emit_byte(c, (uint8_t)subject_slot, line);
+                    compile_expr(c, pat->as.pattern_range.high);
+                    emit_byte(c, OP_LTE, line);
+                    int range_fail2 = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                    emit_byte(c, OP_POP, line); /* pop true (subject <= high) */
+
+                    if (guard) {
+                        compile_expr(c, guard);
+                        int guard_fail = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                        emit_byte(c, OP_POP, line);
+                        scope_begin(c);
+                        compile_node(c, body);
+                        scope_end(c, line);
+                        end_jumps[end_count++] = emit_jump(c, OP_JUMP, line);
+                        patch_jump(c, guard_fail);
+                        emit_byte(c, OP_POP, line); /* pop false guard */
+                        int skip = emit_jump(c, OP_JUMP, line);
+                        /* Both range fails lead here */
+                        patch_jump(c, range_fail1);
+                        emit_byte(c, OP_POP, line);
+                        int skip2 = emit_jump(c, OP_JUMP, line);
+                        patch_jump(c, range_fail2);
+                        emit_byte(c, OP_POP, line);
+                        patch_jump(c, skip2);
+                        patch_jump(c, skip);
+                    } else {
+                        scope_begin(c);
+                        compile_node(c, body);
+                        scope_end(c, line);
+                        end_jumps[end_count++] = emit_jump(c, OP_JUMP, line);
+                        patch_jump(c, range_fail1);
+                        emit_byte(c, OP_POP, line);
+                        int skip = emit_jump(c, OP_JUMP, line);
+                        patch_jump(c, range_fail2);
+                        emit_byte(c, OP_POP, line);
+                        patch_jump(c, skip);
+                    }
+
+                } else if (pat->kind == AST_PATTERN_TYPE) {
+                    /* ---- Type pattern: is TypeName -------------------- *
+                     * Emits isinstance(subject, TypeName) check.          *
+                     * ----------------------------------------------------- */
+                    emit_byte(c, OP_LOAD_LOCAL, line);
+                    emit_byte(c, (uint8_t)subject_slot, line);
+                    emit_load_var(c, pat->as.pattern_type.type_name, line);
+                    emit_byte(c, OP_ISINSTANCE, line);
+
+                    int type_fail = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                    emit_byte(c, OP_POP, line); /* pop true isinstance result */
+
+                    if (guard) {
+                        compile_expr(c, guard);
+                        int guard_fail = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                        emit_byte(c, OP_POP, line);
+                        scope_begin(c);
+                        compile_node(c, body);
+                        scope_end(c, line);
+                        end_jumps[end_count++] = emit_jump(c, OP_JUMP, line);
+                        patch_jump(c, guard_fail);
+                        emit_byte(c, OP_POP, line);
+                        int skip = emit_jump(c, OP_JUMP, line);
+                        patch_jump(c, type_fail);
+                        emit_byte(c, OP_POP, line);
+                        patch_jump(c, skip);
+                    } else {
+                        scope_begin(c);
+                        compile_node(c, body);
+                        scope_end(c, line);
+                        end_jumps[end_count++] = emit_jump(c, OP_JUMP, line);
+                        patch_jump(c, type_fail);
+                        emit_byte(c, OP_POP, line);
+                    }
+
+                } else if (pat->kind == AST_PATTERN_BIND) {
+                    /* ---- Binding pattern: name as sub_pattern ---------- *
+                     * Open a scope, push subject value and bind it to      *
+                     * 'name'. Then test the sub-pattern; if that or any    *
+                     * guard fails, all fail-jumps are patched to a single  *
+                     * cleanup block: pop false-result + pop binding.       *
+                     * On success, scope_end cleans up binding + body vars. *
+                     * ----------------------------------------------------- */
+                    const char *bind_name = pat->as.pattern_bind.name;
+                    AstNode    *sub       = pat->as.pattern_bind.pattern;
+
+                    /* Open scope so scope_end cleans up binding + body locals */
+                    scope_begin(c);
+
+                    /* Push subject and register as local 'name' */
+                    emit_byte(c, OP_LOAD_LOCAL, line);
+                    emit_byte(c, (uint8_t)subject_slot, line);
+                    add_local(c, bind_name, line);
+
+                    /* Test sub-pattern against the original subject slot.
+                     * Collect up to 2 fail jumps (range needs two; OR uses
+                     * intermediate body-jumps + one final fail jump).      */
+                    int sub_fail1 = -1, sub_fail2 = -1;
+
+                    if (sub->kind == AST_PATTERN_RANGE) {
+                        emit_byte(c, OP_LOAD_LOCAL, line);
+                        emit_byte(c, (uint8_t)subject_slot, line);
+                        compile_expr(c, sub->as.pattern_range.low);
+                        emit_byte(c, OP_GTE, line);
+                        sub_fail1 = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                        emit_byte(c, OP_POP, line);
+                        emit_byte(c, OP_LOAD_LOCAL, line);
+                        emit_byte(c, (uint8_t)subject_slot, line);
+                        compile_expr(c, sub->as.pattern_range.high);
+                        emit_byte(c, OP_LTE, line);
+                        sub_fail2 = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                        emit_byte(c, OP_POP, line);
+
+                    } else if (sub->kind == AST_PATTERN_TYPE) {
+                        emit_byte(c, OP_LOAD_LOCAL, line);
+                        emit_byte(c, (uint8_t)subject_slot, line);
+                        emit_load_var(c, sub->as.pattern_type.type_name, line);
+                        emit_byte(c, OP_ISINSTANCE, line);
+                        sub_fail1 = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                        emit_byte(c, OP_POP, line);
+
+                    } else if (sub->kind == AST_PATTERN_OR) {
+                        /* OR sub-pattern: emit alternatives with
+                         * intermediate body-jumps (on match) and a single
+                         * fail jump from the last alternative.            */
+                        int n_alts = sub->as.pattern_or.alternatives.count;
+                        int *or_body = (n_alts > 1) ? FLUX_ALLOC(int, n_alts - 1) : NULL;
+
+                        for (int ai = 0; ai < n_alts; ai++) {
+                            AstNode *alt = sub->as.pattern_or.alternatives.data[ai];
+                            bool is_last = (ai == n_alts - 1);
+                            emit_byte(c, OP_LOAD_LOCAL, line);
+                            emit_byte(c, (uint8_t)subject_slot, line);
+                            compile_expr(c, alt);
+                            emit_byte(c, OP_EQ, line);
+                            if (!is_last) {
+                                int af = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                                emit_byte(c, OP_POP, line);
+                                or_body[ai] = emit_jump(c, OP_JUMP, line);
+                                patch_jump(c, af);
+                                emit_byte(c, OP_POP, line);
+                            } else {
+                                sub_fail1 = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                                emit_byte(c, OP_POP, line);
+                            }
+                        }
+                        for (int ai = 0; ai < n_alts - 1; ai++)
+                            patch_jump(c, or_body[ai]);
+                        if (or_body) FLUX_FREE(or_body);
+
+                    } else {
+                        /* Default: equality */
+                        emit_byte(c, OP_LOAD_LOCAL, line);
+                        emit_byte(c, (uint8_t)subject_slot, line);
+                        compile_expr(c, sub);
+                        emit_byte(c, OP_EQ, line);
+                        sub_fail1 = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                        emit_byte(c, OP_POP, line);
+                    }
+
+                    /* sub-pattern succeeded — test guard if present */
+                    int guard_fail = -1;
+                    if (guard) {
+                        compile_expr(c, guard);
+                        guard_fail = emit_jump(c, OP_JUMP_IF_FALSE, line);
+                        emit_byte(c, OP_POP, line);
+                    }
+
+                    /* Success path: compile body then close scope.
+                     * scope_end pops 'name' + any let-locals in body.    */
+                    compile_node(c, body);
+                    scope_end(c, line);
+                    end_jumps[end_count++] = emit_jump(c, OP_JUMP, line);
+
+                    /* --- Unified cleanup for ALL fail paths ---
+                     * At every fail-jump point the stack is:
+                     *   [..., binding_value, false_from_test]
+                     * Patch all fail jumps to the SAME location, then
+                     * emit exactly two OP_POPs.  No JUMP needed between
+                     * cleanups because they all share identical code.   */
+                    if (guard_fail >= 0) patch_jump(c, guard_fail);
+                    if (sub_fail1  >= 0) patch_jump(c, sub_fail1);
+                    if (sub_fail2  >= 0) patch_jump(c, sub_fail2);
+                    emit_byte(c, OP_POP, line); /* pop false result  */
+                    emit_byte(c, OP_POP, line); /* pop binding 'name' */
+                    /* fall through to next arm */
+
                 } else {
                     /* ---- Standard equality check --------------------- */
                     emit_byte(c, OP_LOAD_LOCAL, line);

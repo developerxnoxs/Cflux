@@ -82,10 +82,14 @@ typedef struct ClassCompiler {
 
 typedef struct {
     AstNode *finally_body;      /* NULL = no finally clause                       */
+    int      with_mgr_slot;     /* >= 0 for with-statement contexts: local slot of
+                                 * the context manager; emit_try_unwind calls
+                                 * __exit__() inline when this is set              */
     bool     in_catch;          /* true while compiling catch body (handler gone)  */
     int      outer_locals_to_pop; /* number of locals declared in the try's outer
-                                   * scope (catch var, exc slot) that break/continue
-                                   * must pop explicitly to keep the stack balanced  */
+                                   * scope (catch var, exc slot, with-mgr, with-var)
+                                   * that break/continue must pop to keep the stack
+                                   * balanced                                       */
 } TryContext;
 
 /* -------------------------------------------------------------------------

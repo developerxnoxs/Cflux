@@ -123,15 +123,15 @@ triple = Multiplier(3)
 print(double(7))   # 14
 print(triple(5))   # 15
 
-# ── on_enter / on_exit (with statement) ──────────────────────────────
-print("--- on_enter / on_exit ---")
+# ── __enter__ / __exit__ (with statement) ────────────────────────────
+print("--- __enter__ / __exit__ ---")
 class Timer:
     func __init__(name):
         self.name = name
-    func on_enter():
+    func __enter__():
         print("Entering: " + self.name)
         return self
-    func on_exit():
+    func __exit__():
         print("Exiting: " + self.name)
 
 with Timer("block1"):

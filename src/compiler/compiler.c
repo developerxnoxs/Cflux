@@ -421,6 +421,17 @@ static void emit_try_unwind(Compiler *c, int stop_depth, int line,
             compile_node(c, c->try_stack[i].finally_body);
             /* Restore so sibling statements see the correct depth. */
             c->try_depth = original_depth;
+        } else if (c->try_stack[i].with_mgr_slot >= 0) {
+            /* with-statement: call __exit__() as the cleanup action.
+             * Emit inline — no recursion risk since there is no body to
+             * compile, just three fixed bytecode instructions. */
+            int mgr = c->try_stack[i].with_mgr_slot;
+            emit_byte(c, OP_LOAD_LOCAL, line);
+            emit_byte(c, (uint8_t)mgr,  line);
+            emit_byte(c, OP_INVOKE, line);
+            emit_uint16(c, identifier_constant(c, "__exit__", 8, line), line);
+            emit_byte(c, 0, line); /* argc = 0 */
+            emit_byte(c, OP_POP,  line);
         }
         if (pop_outer_locals) {
             /* Pop the try's outer-scope locals (catch_var / exc_slot) to
@@ -1809,6 +1820,7 @@ static void compile_node(Compiler *c, AstNode *node) {
             }
             int ctx_idx = c->try_depth++;
             c->try_stack[ctx_idx].finally_body        = finally_body;
+            c->try_stack[ctx_idx].with_mgr_slot       = -1; /* not a with-context */
             c->try_stack[ctx_idx].in_catch             = false;
             /* Number of outer-scope locals that break/continue must pop to
              * keep the VM stack balanced when looping back without executing
@@ -2375,28 +2387,46 @@ static void compile_node(Compiler *c, AstNode *node) {
         /* ----------------------------------------------------------------
          * with manager [as var]: body
          *
-         * Compiled as:
-         *   eval manager → __with_mgr (local, keeps manager alive)
-         *   manager.on_enter() → result (stored as 'var' if 'as' clause present)
-         *   [body]
-         *   manager.on_exit()  → result discarded
-         *   scope_end (pops __with_mgr and 'var' if any)
+         * Compiled as a try/finally so __exit__() is GUARANTEED to run
+         * even when the body exits via return, break, continue, or raise.
          *
-         * Note: on_exit() is not guaranteed to run if the body contains a
-         * return or break that exits the enclosing function/loop.
+         * Stack layout (inside outer scope):
+         *   __with_mgr  — holds the context manager object
+         *   [var]       — holds the __enter__() return value (if 'as var')
+         *   __with_exc__— hidden slot: saves exception for re-raise after __exit__
+         *
+         * Bytecode structure:
+         *   eval manager → __with_mgr
+         *   INVOKE __enter__ 0 → [var] or POP
+         *   PUSH_NULL → __with_exc__
+         *   PUSH_EXCEPTION_HANDLER [→ H:]
+         *   [body]                         ← early exits unwind via emit_try_unwind
+         *   POP_EXCEPTION_HANDLER
+         *   INVOKE __exit__ 0; POP         ← normal-path cleanup
+         *   JUMP → past
+         * H:
+         *   STORE_LOCAL __with_exc__; POP  ← save exception, clean TOS
+         *   INVOKE __exit__ 0; POP         ← exception-path cleanup
+         *   LOAD_LOCAL __with_exc__; RAISE ← re-raise original exception
+         * past:
+         *   scope_end                      ← pops __with_mgr, [var], __with_exc__
          * -------------------------------------------------------------- */
         case AST_WITH: {
             scope_begin(c);
+
+            /* Capture local count before any with-infrastructure locals so
+             * emit_try_unwind knows how many to pop on break/continue. */
+            int local_count_before = c->frame->local_count;
 
             /* 1. Evaluate the context manager and store it as a local */
             compile_expr(c, node->as.with_stmt.manager);
             int mgr_slot = add_local(c, "__with_mgr", line);
 
-            /* 2. Call manager.on_enter() → push result */
+            /* 2. Call manager.__enter__() → push result */
             emit_byte(c, OP_LOAD_LOCAL, line);
             emit_byte(c, (uint8_t)mgr_slot, line);
             emit_byte(c, OP_INVOKE, line);
-            emit_uint16(c, identifier_constant(c, "on_enter", 8, line), line);
+            emit_uint16(c, identifier_constant(c, "__enter__", 9, line), line);
             emit_byte(c, 0, line); /* argc = 0 */
 
             /* 3. Store enter result: 'as var' → new local; else discard */
@@ -2406,18 +2436,65 @@ static void compile_node(Compiler *c, AstNode *node) {
                 emit_byte(c, OP_POP, line);
             }
 
-            /* 4. Body */
+            /* 4. Pre-declare hidden exception slot and install handler */
+            emit_byte(c, OP_PUSH_NULL, line);
+            int exc_slot = add_local(c, "__with_exc__", line);
+
+            int handler_offset = emit_exception_handler(c, exc_slot, line);
+
+            /* 5. Push try context so return/break/continue trigger __exit__ */
+            if (c->try_depth >= FLUX_TRY_DEPTH_MAX) {
+                compile_error_at(c, line, col,
+                    "try nesting too deep (max %d)", FLUX_TRY_DEPTH_MAX);
+                break;
+            }
+            int ctx_idx = c->try_depth++;
+            c->try_stack[ctx_idx].finally_body        = NULL;
+            c->try_stack[ctx_idx].with_mgr_slot       = mgr_slot;
+            c->try_stack[ctx_idx].in_catch            = false;
+            /* All with-infrastructure locals (mgr + [var] + exc) must be
+             * popped on break/continue to keep the VM stack balanced. */
+            c->try_stack[ctx_idx].outer_locals_to_pop =
+                c->frame->local_count - local_count_before;
+
+            /* 6. Body */
             compile_node(c, node->as.with_stmt.body);
 
-            /* 5. Call manager.on_exit() → discard result */
+            /* 7. Normal exit: pop handler, call __exit__, jump past exception path */
+            c->try_depth = ctx_idx; /* pop try context */
+            emit_byte(c, OP_POP_EXCEPTION_HANDLER, line);
+
             emit_byte(c, OP_LOAD_LOCAL, line);
             emit_byte(c, (uint8_t)mgr_slot, line);
             emit_byte(c, OP_INVOKE, line);
-            emit_uint16(c, identifier_constant(c, "on_exit", 7, line), line);
+            emit_uint16(c, identifier_constant(c, "__exit__", 8, line), line);
             emit_byte(c, 0, line); /* argc = 0 */
             emit_byte(c, OP_POP, line);
 
-            scope_end(c, line); /* pops __with_mgr (and 'var' if any) */
+            int jump_past = emit_jump(c, OP_JUMP, line);
+
+            /* 8. Exception handler entry: save exception, call __exit__, re-raise */
+            patch_exception_handler(c, handler_offset);
+            /* TOS = exception value; store into exc_slot, pop TOS */
+            emit_byte(c, OP_STORE_LOCAL, line);
+            emit_byte(c, (uint8_t)exc_slot, line);
+            emit_byte(c, OP_POP, line);
+
+            emit_byte(c, OP_LOAD_LOCAL, line);
+            emit_byte(c, (uint8_t)mgr_slot, line);
+            emit_byte(c, OP_INVOKE, line);
+            emit_uint16(c, identifier_constant(c, "__exit__", 8, line), line);
+            emit_byte(c, 0, line); /* argc = 0 */
+            emit_byte(c, OP_POP, line);
+
+            /* Re-raise the saved exception */
+            emit_byte(c, OP_LOAD_LOCAL, line);
+            emit_byte(c, (uint8_t)exc_slot, line);
+            emit_byte(c, OP_RAISE, line);
+
+            patch_jump(c, jump_past);
+
+            scope_end(c, line); /* pops __with_mgr, [var], __with_exc__ */
             break;
         }
 

@@ -1,0 +1,101 @@
+# tests/test_thread.flx — uji modul stdlib thread pool
+
+import thread
+
+# 1. cpu_count
+cpus = thread.cpu_count()
+print(f"CPU logis: {cpus}")
+assert cpus >= 1
+
+# 2. Buat pool dengan 3 worker
+pool = thread.pool(3)
+print(f"Pool id: {pool}")
+assert pool >= 0
+
+# 3. Submit beberapa perintah secara paralel lalu await hasilnya
+async func main():
+    f1 = thread.submit(pool, "echo hello_from_thread_1")
+    f2 = thread.submit(pool, "echo hello_from_thread_2")
+    f3 = thread.submit(pool, "echo hello_from_thread_3")
+    f4 = thread.submit(pool, "ls /tmp | head -3")
+    f5 = thread.submit(pool, "exit 42")
+
+    r1 = await f1
+    r2 = await f2
+    r3 = await f3
+    r4 = await f4
+    r5 = await f5
+
+    print(f"stdout f1    : {r1['stdout'].strip()}")
+    print(f"stdout f2    : {r2['stdout'].strip()}")
+    print(f"stdout f3    : {r3['stdout'].strip()}")
+    print(f"exit_code f5 : {r5['exit_code']}")
+
+    assert r1["stdout"].strip() == "hello_from_thread_1"
+    assert r2["stdout"].strip() == "hello_from_thread_2"
+    assert r3["stdout"].strip() == "hello_from_thread_3"
+    assert r5["exit_code"] == 42
+
+    print("Assert paralel OK")
+
+    # 4. Mutex
+    m = thread.mutex()
+    print(f"Mutex id: {m}")
+    thread.lock(m)
+    ok = thread.trylock(m)
+    print(f"trylock saat terkunci: {ok}")
+    assert ok == false
+    thread.unlock(m)
+    ok2 = thread.trylock(m)
+    print(f"trylock setelah unlock: {ok2}")
+    assert ok2 == true
+    thread.unlock(m)
+    thread.mutex_free(m)
+    print("Mutex OK")
+
+    # 5. Shutdown pool
+    thread.shutdown(pool)
+    print("Pool di-shutdown OK")
+
+    # 6. Shutdown sebelum await — future yang sudah selesai dikerjakan
+    #    harus tetap resolve ke dict, bukan error string.
+    pool2 = thread.pool(2)
+    fa = thread.submit(pool2, "echo hasil_a")
+    fb = thread.submit(pool2, "echo hasil_b")
+
+    # Beri waktu singkat agar worker sempat menyelesaikan task
+    _ = await thread.submit(pool2, "sleep 0.05")   # barrier kecil
+
+    thread.shutdown(pool2)   # shutdown setelah worker kemungkinan besar selesai
+
+    ra = await fa
+    rb = await fb
+
+    # Hasil harus selalu berupa dict dengan kunci stdout/stderr/exit_code
+    assert ra["exit_code"] != null
+    assert rb["exit_code"] != null
+    # Task yang sudah selesai harus punya stdout yang benar
+    # (bisa saja sudah selesai sebelum shutdown, atau di-cancel — keduanya valid dict)
+    print(f"ra exit_code: {ra['exit_code']}")
+    print(f"rb exit_code: {rb['exit_code']}")
+    print("Shutdown regression OK")
+
+    # 7. Task yang di-cancel (belum sempat dieksekusi) harus juga dapat dict
+    pool3  = thread.pool(1)
+    # Submit banyak task sekaligus; shutdown langsung agar yang belum sempat
+    # dieksekusi mendapat dict error terstruktur
+    fc = thread.submit(pool3, "sleep 10 && echo tidak_akan_selesai")
+    fd = thread.submit(pool3, "sleep 10 && echo tidak_akan_selesai_2")
+    thread.shutdown(pool3)
+
+    rc = await fc
+    rd = await fd
+    assert rc["exit_code"] != null
+    assert rd["exit_code"] != null
+    print(f"rc exit_code (cancelled): {rc['exit_code']}")
+    print(f"rd stderr   (cancelled): {rd['stderr']}")
+    print("Cancel dict OK")
+
+    print("=== Semua test thread LULUS ===")
+
+main()

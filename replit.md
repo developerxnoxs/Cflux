@@ -28,6 +28,64 @@ make clean                      # hapus build artifacts
 - **Native extensions**: libcurl, wslay, libpq, libmysqlclient
 - **Semua dependensi** sudah tersedia via `replit.nix`
 
+## Modul Standard Library
+
+| Modul | Keterangan |
+|-------|-----------|
+| `math` | Fungsi matematika (sin, cos, sqrt, …) |
+| `io` | Input/output dasar |
+| `fs` | Filesystem (read, write, stat, …) |
+| `os` | OS utilities, path |
+| `sys` | sys.exit, stdin, stdout |
+| `json` | JSON encode/decode |
+| `time` | Waktu & tanggal |
+| `async` | Async I/O: sleep, read_file, write_file |
+| `aio` | Async gather/scatter |
+| `shell` | Jalankan perintah shell |
+| `socket` | TCP/UDP socket |
+| **`thread`** | **Thread pool executor (POSIX pthreads + libuv)** |
+
+### Modul `thread` — Thread Pool Executor
+
+Mirip `ThreadPoolExecutor` di Python. Mendelegasikan perintah shell ke sekumpulan worker thread yang berjalan secara paralel.
+
+```flux
+import thread
+
+pool = thread.pool(4)                        # 4 worker (0 = jumlah CPU)
+
+async func main():
+    f1 = thread.submit(pool, "curl https://api.example.com/data1")
+    f2 = thread.submit(pool, "curl https://api.example.com/data2")
+    f3 = thread.submit(pool, "sleep 1 && echo done")
+
+    r1 = await f1                            # { stdout, stderr, exit_code }
+    r2 = await f2
+    r3 = await f3
+
+    print(r1["stdout"])
+    print(r3["exit_code"])
+
+    thread.shutdown(pool)
+
+main()
+```
+
+**API lengkap:**
+
+```flux
+pool   = thread.pool(n)             # buat pool (n worker; 0 = cpu_count)
+fut    = thread.submit(pool, cmd)   # jalankan cmd di worker; return Future
+         thread.shutdown(pool)       # tunggu semua task, lalu hentikan worker
+n      = thread.cpu_count()         # jumlah CPU logis
+
+m      = thread.mutex()             # buat mutex baru; return int handle
+         thread.lock(m)             # lock (blocking)
+         thread.unlock(m)           # unlock
+ok     = thread.trylock(m)          # coba lock; return bool
+         thread.mutex_free(m)       # hancurkan mutex
+```
+
 ## Struktur Proyek
 
 ```

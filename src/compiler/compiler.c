@@ -1588,15 +1588,14 @@ static void predeclare_node_locals(Compiler *c, AstNode *node, int line) {
             predeclare_node_locals(c, node->as.while_stmt.body, line);
             break;
         case AST_FOR:
-            /* Pre-declare the iteration variable itself so it is visible
-             * after the loop and so nested loop variables don't get
-             * pushed multiple times when the outer body re-executes.
+            /* Pre-declare every iteration variable so it is visible after the
+             * loop ends (single var or tuple-unpacking: for k, v in ...).
              * NOTE: we intentionally do NOT check compiler_has_global here;
              * the for-loop iteration variable always creates a local (shadowing
              * any global of the same name) to keep the stack balanced across
              * outer loop iterations when the inner for is nested. */
-            {
-                const char *vname = node->as.for_stmt.var;
+            for (int vi = 0; vi < node->as.for_stmt.var_count; vi++) {
+                const char *vname = node->as.for_stmt.vars[vi];
                 int existing = resolve_local(c->frame, vname);
                 if (existing != -1) {
                     /* Name already bound as a local — reject if it's const. */
@@ -1604,7 +1603,7 @@ static void predeclare_node_locals(Compiler *c, AstNode *node, int line) {
                         compile_error(c, node->line,
                             "cannot use const '%s' as for-loop variable", vname);
                     }
-                } else if (resolve_upvalue(c->frame, vname, line) == -1) {
+                } else if (resolve_upvalue(c->frame, vname, node->line) == -1) {
                     emit_byte(c, OP_PUSH_NULL, node->line);
                     add_local(c, vname, node->line);
                 }
@@ -2016,48 +2015,66 @@ static void compile_node(Compiler *c, AstNode *node) {
         case AST_FOR: {
             /*
              * for var in iterable: body
+             * for k, v in iterable: body   (tuple unpacking)
              *
-             * The iteration variable (var) is pre-declared at the OUTER
-             * scope depth (before scope_begin) so it remains visible after
-             * the loop ends. __iter and __idx are at depth+1 and get
-             * cleaned up by scope_end.
+             * All loop variables are pre-declared at the OUTER scope depth
+             * (before scope_begin) so they survive past the loop.
+             * __iter and __idx (and __elem for multi-var) are at depth+1
+             * and get cleaned up by scope_end.
              *
-             * Stack layout:
-             *   slot[var_slot]  = loop variable  (at outer depth, pre-declared)
-             *   slot[iter_slot] = iterable        (at inner depth, scope_begin)
-             *   slot[idx_slot]  = current index   (at inner depth)
+             * Single-variable stack layout:
+             *   slot[var_slots[0]] = loop variable   (outer depth, pre-declared)
+             *   slot[iter_slot]    = iterable         (inner depth, scope_begin)
+             *   slot[idx_slot]     = current index    (inner depth)
              *
-             * Bytecode structure:
-             *   push null      → stored in var_slot  (pre-declared once)
+             * Multi-variable stack layout:
+             *   slot[var_slots[0..N-1]] = loop variables (outer depth, pre-declared)
+             *   slot[iter_slot]         = iterable       (inner depth)
+             *   slot[idx_slot]          = current index  (inner depth)
+             *   slot[elem_slot]         = current element for unpacking (inner depth)
+             *
+             * Bytecode structure (single-var unchanged; multi-var adds __elem):
+             *   push null×N    → stored in var_slots[0..N-1]  (pre-declared once)
              *   eval iterable  → stored in iter_slot
              *   push 0         → stored in idx_slot
              * loop_start:
              *   load __idx
              *   call len(__iter)  → __idx >= len? jump exit
-             *   __iter[__idx] → STORE_LOCAL var_slot; POP
-             *   __idx += 1    → STORE_LOCAL idx_slot; POP
+             *   __iter[__idx] → STORE var_slots[0]; POP          (single-var)
+             *   __iter[__idx] → store __elem; then              (multi-var)
+             *     __elem[0] → STORE var_slots[0]; POP
+             *     __elem[1] → STORE var_slots[1]; POP
+             *     ...
+             *   __idx += 1    → STORE idx_slot; POP
              *   [body]
              *   LOOP → loop_start
              * exit / break_target:
-             *   scope_end pops __iter and __idx; var survives at outer depth
+             *   scope_end pops __iter/__idx/__elem; vars survive at outer depth
              */
+
+            int var_count = node->as.for_stmt.var_count;
 
             /* Pre-declare variables first-assigned in the body at the
              * current (outer) depth so they survive past the loop. */
             predeclare_node_locals(c, node->as.for_stmt.body, line);
 
-            /* Pre-declare the iteration variable itself at outer depth
-             * so it is accessible after the loop ends. */
-            int var_slot = resolve_local(c->frame, node->as.for_stmt.var);
-            if (var_slot == -1 &&
-                resolve_upvalue(c->frame, node->as.for_stmt.var, line) == -1) {
-                emit_byte(c, OP_PUSH_NULL, line);
-                var_slot = add_local(c, node->as.for_stmt.var, line);
-            } else if (var_slot >= 0 && c->frame->locals[var_slot].is_const) {
-                /* The name resolves to an existing const local — reject. */
-                compile_error(c, line,
-                    "cannot use const '%s' as for-loop variable",
-                    node->as.for_stmt.var);
+            /* Pre-declare all loop variables at outer depth so they are
+             * accessible after the loop ends. */
+            int *var_slots = FLUX_ALLOC(int, var_count);
+            for (int vi = 0; vi < var_count; vi++) {
+                const char *vname = node->as.for_stmt.vars[vi];
+                int existing = resolve_local(c->frame, vname);
+                if (existing == -1 &&
+                    resolve_upvalue(c->frame, vname, line) == -1) {
+                    emit_byte(c, OP_PUSH_NULL, line);
+                    var_slots[vi] = add_local(c, vname, line);
+                } else if (existing >= 0 && c->frame->locals[existing].is_const) {
+                    compile_error(c, line,
+                        "cannot use const '%s' as for-loop variable", vname);
+                    var_slots[vi] = existing;
+                } else {
+                    var_slots[vi] = existing; /* already declared */
+                }
             }
 
             scope_begin(c);
@@ -2075,9 +2092,9 @@ static void compile_node(Compiler *c, AstNode *node) {
             int idx_slot = add_local(c, "__idx", line);
 
             /* ---- Loop setup ---- */
-            int old_loop_start       = c->loop_start;
-            int old_loop_depth       = c->loop_depth;
-            int old_break_count      = c->break_count;
+            int old_loop_start        = c->loop_start;
+            int old_loop_depth        = c->loop_depth;
+            int old_break_count       = c->break_count;
             int old_try_depth_at_loop = c->try_depth_at_loop;
             c->try_depth_at_loop = c->try_depth;  /* break/continue only unwind try contexts inside this loop */
 
@@ -2108,15 +2125,37 @@ static void compile_node(Compiler *c, AstNode *node) {
             patch_jump(c, exit_jump);
             emit_byte(c, OP_POP, line);           /* pop false condition */
 
-            /* ---- Update var = __iter[__idx] (STORE, not push new local) */
-            emit_byte(c, OP_LOAD_LOCAL, line);
-            emit_byte(c, (uint8_t)iter_slot, line);
-            emit_byte(c, OP_LOAD_LOCAL, line);
-            emit_byte(c, (uint8_t)idx_slot,  line);
-            emit_byte(c, OP_GET_INDEX, line);
-            emit_byte(c, OP_STORE_LOCAL, line);
-            emit_byte(c, (uint8_t)var_slot,  line);
-            emit_byte(c, OP_POP, line);
+            if (var_count == 1) {
+                /* ---- Single variable: var = __iter[__idx] ---- */
+                emit_byte(c, OP_LOAD_LOCAL, line);
+                emit_byte(c, (uint8_t)iter_slot, line);
+                emit_byte(c, OP_LOAD_LOCAL, line);
+                emit_byte(c, (uint8_t)idx_slot,  line);
+                emit_byte(c, OP_GET_INDEX, line);
+                emit_byte(c, OP_STORE_LOCAL, line);
+                emit_byte(c, (uint8_t)var_slots[0], line);
+                emit_byte(c, OP_POP, line);
+            } else {
+                /* ---- Tuple unpacking: vars[i] = __iter[__idx][i] ----
+                 * Re-fetch __iter[__idx] once per variable.  This avoids
+                 * introducing a temporary local that would shift the stack
+                 * layout across loop iterations.  For the small number of
+                 * variables typical in tuple unpacking the overhead is
+                 * negligible. */
+                for (int vi = 0; vi < var_count; vi++) {
+                    emit_byte(c, OP_LOAD_LOCAL, line);
+                    emit_byte(c, (uint8_t)iter_slot, line);
+                    emit_byte(c, OP_LOAD_LOCAL, line);
+                    emit_byte(c, (uint8_t)idx_slot,  line);
+                    emit_byte(c, OP_GET_INDEX, line);   /* __iter[__idx]   */
+                    emit_byte(c, OP_PUSH_INT, line);
+                    chunk_write_int64(current_chunk(c), (int64_t)vi, line);
+                    emit_byte(c, OP_GET_INDEX, line);   /* element[vi]     */
+                    emit_byte(c, OP_STORE_LOCAL, line);
+                    emit_byte(c, (uint8_t)var_slots[vi], line);
+                    emit_byte(c, OP_POP, line);
+                }
+            }
 
             /* ---- __idx += 1 ---- */
             emit_byte(c, OP_LOAD_LOCAL, line);
@@ -2148,6 +2187,7 @@ static void compile_node(Compiler *c, AstNode *node) {
             c->break_count       = old_break_count;
             c->try_depth_at_loop = old_try_depth_at_loop;
 
+            free(var_slots);
             scope_end(c, line);
             break;
         }

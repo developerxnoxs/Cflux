@@ -1368,21 +1368,35 @@ static AstNode *parse_while(Parser *p) {
 
 static AstNode *parse_for(Parser *p) {
     int line = p->previous.line, col = p->previous.column;
-    consume(p, TOK_IDENT, "Expected loop variable");
-    int   vlen = p->previous.length;
-    char *vbuf = FLUX_ALLOC(char, vlen + 1);
-    memcpy(vbuf, p->previous.start, (size_t)vlen);
-    vbuf[vlen] = '\0';
 
-    consume(p, TOK_IN,    "Expected 'in' after loop variable");
+    /* Collect one or more loop variables: for x in ..., for k, v in ... */
+    int    var_cap   = 4;
+    int    var_count = 0;
+    char **vars      = FLUX_ALLOC(char *, var_cap);
+
+    do {
+        consume(p, TOK_IDENT, "Expected loop variable name");
+        int   vlen = p->previous.length;
+        char *vbuf = FLUX_ALLOC(char, vlen + 1);
+        memcpy(vbuf, p->previous.start, (size_t)vlen);
+        vbuf[vlen] = '\0';
+        if (var_count >= var_cap) {
+            var_cap *= 2;
+            vars = (char **)realloc(vars, sizeof(char *) * (size_t)var_cap);
+        }
+        vars[var_count++] = vbuf;
+    } while (match(p, TOK_COMMA));
+
+    consume(p, TOK_IN,    "Expected 'in' after loop variable(s)");
     AstNode *iterable = parse_expr(p);
     consume(p, TOK_COLON, "Expected ':' after for iterable");
     AstNode *body = parse_block(p);
 
     AstNode *n = ast_node_alloc(p->arena, AST_FOR, line, col);
-    n->as.for_stmt.var      = vbuf;
-    n->as.for_stmt.iterable = iterable;
-    n->as.for_stmt.body     = body;
+    n->as.for_stmt.vars      = vars;
+    n->as.for_stmt.var_count = var_count;
+    n->as.for_stmt.iterable  = iterable;
+    n->as.for_stmt.body      = body;
     return n;
 }
 

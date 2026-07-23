@@ -232,7 +232,12 @@ struct AstNode {
         struct { AstNode *condition; AstNode *body; } while_stmt;
 
         /* AST_FOR */
-        struct { char *var; AstNode *iterable; AstNode *body; } for_stmt;
+        struct {
+            char    **vars;       /* array of loop variable names            */
+            int       var_count;  /* 1 = simple, >1 = tuple unpacking        */
+            AstNode  *iterable;
+            AstNode  *body;
+        } for_stmt;
 
         /* AST_RETURN / AST_YIELD / AST_AWAIT / AST_SPAWN */
         struct { AstNode *value; /* NULL if bare return */ } ret;

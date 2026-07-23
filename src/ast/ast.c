@@ -259,7 +259,12 @@ void ast_print(AstNode *node, int indent) {
             ast_print(node->as.while_stmt.body,      indent + 1);
             break;
         case AST_FOR:
-            printf("For(%s in ...)\n", node->as.for_stmt.var);
+            printf("For(");
+            for (int vi = 0; vi < node->as.for_stmt.var_count; vi++) {
+                if (vi > 0) printf(", ");
+                printf("%s", node->as.for_stmt.vars[vi]);
+            }
+            printf(" in ...)\n");
             ast_print(node->as.for_stmt.iterable, indent + 1);
             ast_print(node->as.for_stmt.body,     indent + 1);
             break;

@@ -81,12 +81,12 @@ async func main():
     print("Shutdown regression OK")
 
     # 7. Task yang di-cancel (belum sempat dieksekusi) harus juga dapat dict
-    pool3  = thread.pool(1)
-    # Submit banyak task sekaligus; shutdown langsung agar yang belum sempat
-    # dieksekusi mendapat dict error terstruktur
-    fc = thread.submit(pool3, "sleep 10 && echo tidak_akan_selesai")
-    fd = thread.submit(pool3, "sleep 10 && echo tidak_akan_selesai_2")
-    thread.shutdown(pool3)
+    pool3 = thread.pool(1)
+    # 1 worker: task pertama membuat worker sibuk sebentar sehingga task
+    # berikutnya pasti masih berada di antrian saat shutdown dipanggil.
+    fc = thread.submit(pool3, "sleep 0.3 && echo task_pertama")
+    fd = thread.submit(pool3, "echo task_kedua_mungkin_dicancel")
+    thread.shutdown(pool3)   # menunggu worker selesai (<0.3 s), lalu drain antrian
 
     rc = await fc
     rd = await fd

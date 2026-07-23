@@ -111,6 +111,7 @@ typedef struct {
     FluxString *name;           /* function name (may be NULL for anon)  */
     FluxString *source_file;    /* source filename (for error reporting) */
     bool        is_async;       /* true if declared with `async`         */
+    bool        is_generator;   /* true if body contains yield stmts     */
 } FluxFunction;
 
 /* -------------------------------------------------------------------------

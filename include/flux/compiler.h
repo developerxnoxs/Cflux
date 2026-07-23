@@ -52,6 +52,7 @@ typedef struct CompilerFrame {
     struct CompilerFrame *enclosing;
     FluxFunction         *function;
     FuncKind              kind;
+    bool                  has_yield; /* true if this frame contains a yield stmt */
 
     Local      locals[FLUX_MAX_LOCALS];
     int        local_count;

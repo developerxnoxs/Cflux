@@ -120,6 +120,10 @@ static void mark_roots(FluxVM *vm) {
      * allocation inside the error-reporting path (e.g. object_string_copy
      * for the unhandled-exception message) cannot collect it. */
     gc_mark_value(vm, vm->current_exception);
+
+    /* Generator yield collector: non-NULL while a generator body is running.
+     * Must be a root so the accumulator list isn't swept during body execution. */
+    gc_mark_object(vm, (FluxObject *)vm->gen_yield_collector);
 }
 
 /* -------------------------------------------------------------------------

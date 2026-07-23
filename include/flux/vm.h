@@ -119,6 +119,10 @@ struct FluxVM {
     FluxClass *class_bool;
     FluxClass *class_enum_member; /* hidden class for enum member instances */
 
+    /* Generator yield collector: non-NULL while running a generator function
+     * body.  OP_YIELD appends its value here instead of suspending. */
+    FluxList *gen_yield_collector;
+
     /* Coroutine scheduler */
     FluxCoroutine **ready_queue;
     int             ready_count;

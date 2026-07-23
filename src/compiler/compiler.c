@@ -331,6 +331,7 @@ static void frame_init(Compiler *c, CompilerFrame *frame, FuncKind kind,
     frame->local_count    = 0;
     frame->scope_depth    = 0;
     frame->nonlocal_count = 0;
+    frame->has_yield      = false;
     frame->function       = object_function_new(c->vm);
     frame->function->is_async = (kind == FUNC_ASYNC);
 
@@ -361,6 +362,7 @@ static FluxFunction *frame_end(Compiler *c, int line) {
     emit_byte(c, OP_RETURN,    line);
 
     FluxFunction *fn = c->frame->function;
+    fn->is_generator = c->frame->has_yield;   /* propagate generator flag */
     c->frame = c->frame->enclosing;
 
 #ifdef FLUX_DEBUG_BYTECODE
@@ -1722,6 +1724,7 @@ static void compile_node(Compiler *c, AstNode *node) {
                 compile_expr(c, node->as.ret.value);
             else
                 emit_byte(c, OP_PUSH_NULL, line);
+            c->frame->has_yield = true;   /* mark enclosing function as a generator */
             emit_byte(c, OP_YIELD, line);
             break;
 

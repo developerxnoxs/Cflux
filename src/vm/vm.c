@@ -795,6 +795,40 @@ VMResult vm_call_value(FluxVM *vm, Value callee, int argc) {
                  * `await async_func(args)` works without requiring an explicit spawn. */
                 if (cl->function->is_async)
                     return spawn_async_closure(vm, cl, argc);
+                /* Generator function: run body in collection mode, yielded values
+                 * accumulate into a list which is returned as the call result.
+                 * This makes `for x in gen():` work via the normal for-loop
+                 * index-iteration path (no new iterator protocol needed). */
+                if (cl->function->is_generator) {
+                    if (argc != cl->function->arity) {
+                        vm_runtime_error(vm, "Expected %d arguments but got %d",
+                                         cl->function->arity, argc);
+                        return VM_RUNTIME_ERROR;
+                    }
+                    /* Save the outer collector to support generators calling
+                     * other generators (rare, but must be correct). */
+                    FluxList *old_coll = vm->gen_yield_collector;
+                    /* Allocate collector list; GC-protected once assigned to
+                     * gen_yield_collector (mark_roots marks it). */
+                    FluxList *coll = object_list_new(vm);
+                    vm->gen_yield_collector = coll;
+                    int fc = vm->frame_count;
+                    if (!call_closure(vm, cl, argc)) {
+                        vm->gen_yield_collector = old_coll;
+                        return VM_RUNTIME_ERROR;
+                    }
+                    /* Run the generator body to completion.  preserve_result=true
+                     * so OP_RETURN leaves the (null) return value at TOS, in the
+                     * same stack slot where the callee/args were — we then replace
+                     * it with the collected list so the caller sees the list. */
+                    VMResult r = vm_run(vm, fc, true);
+                    vm->gen_yield_collector = old_coll;
+                    if (r != VM_OK) return r;
+                    /* TOS is the generator's implicit null return; overwrite with
+                     * the collected list so the caller gets an iterable. */
+                    vm_poke(vm, 0, value_object((FluxObject *)coll));
+                    return VM_OK;
+                }
                 return call_closure(vm, cl, argc) ? VM_OK : VM_RUNTIME_ERROR;
             }
 
@@ -2193,9 +2227,32 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                 break;
             }
 
-            /* yield value — suspend the current coroutine and hand value to awaiter */
+            /* yield value — suspend the current coroutine and hand value to awaiter,
+             * OR (when inside a generator function) collect into a list. */
             case OP_YIELD: {
                 Value result = vm_pop(vm);
+
+                /* Generator collection mode: accumulate yielded values into the
+                 * collector list instead of suspending.
+                 *
+                 * Guard: only activate when the CURRENT frame is a generator
+                 * function (fn->is_generator).  This prevents an async
+                 * coroutine's cooperative yield — which also executes OP_YIELD —
+                 * from being incorrectly absorbed into an outer generator's
+                 * collector when the two happen to run in the same vm_run loop.
+                 *
+                 * Re-push result while calling gc_value_array_write so a list
+                 * realloc during growth cannot collect the value before it lands
+                 * in the list. */
+                if (vm->gen_yield_collector != NULL &&
+                    frame->closure->function->is_generator) {
+                    vm_push(vm, result);  /* GC-protect during potential list growth */
+                    gc_value_array_write(vm, &vm->gen_yield_collector->elements,
+                                         vm_peek(vm, 0));
+                    vm_pop(vm);  /* un-protect; value is now held by the list */
+                    break;
+                }
+
                 FluxCoroutine *cur_co = vm->current_coroutine;
 
                 if (!cur_co) {

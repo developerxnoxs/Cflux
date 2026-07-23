@@ -74,6 +74,9 @@ typedef struct ClassCompiler {
     struct ClassCompiler *enclosing;
     FluxString           *name;
     bool                  has_superclass;
+    const char           *superclass_name; /* NULL if no superclass; name of the
+                                            * superclass (points into AST arena,
+                                            * valid for the lifetime of compilation) */
 } ClassCompiler;
 
 /* -------------------------------------------------------------------------

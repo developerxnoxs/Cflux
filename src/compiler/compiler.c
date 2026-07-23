@@ -692,13 +692,31 @@ static void compile_expr(Compiler *c, AstNode *node) {
 
             /* Method call via attribute: obj.method(args) → INVOKE */
             if (callee->kind == AST_ATTR) {
-                compile_expr(c, callee->as.attr.object);
-                for (int i = 0; i < argc; i++)
-                    compile_expr(c, node->as.call.args.data[i]);
-                emit_byte(c, OP_INVOKE, line);
-                const char *attr = callee->as.attr.attr;
-                emit_uint16(c, identifier_constant(c, attr, (int)strlen(attr), line), line);
-                emit_byte(c, (uint8_t)argc, line);
+                /* super.method(args) — resolve in superclass, bind to self */
+                if (callee->as.attr.object->kind == AST_IDENT &&
+                    strcmp(callee->as.attr.object->as.ident.name, "super") == 0 &&
+                    c->class_ctx != NULL && c->class_ctx->has_superclass) {
+                    /* Stack: push self (slot 0), then superclass → OP_GET_SUPER
+                     * produces a bound method; then push args and OP_CALL. */
+                    emit_byte(c, OP_LOAD_LOCAL, line);
+                    emit_byte(c, 0, line);   /* slot 0 = self */
+                    emit_load_var(c, c->class_ctx->superclass_name, line);
+                    const char *sattr = callee->as.attr.attr;
+                    emit_byte(c, OP_GET_SUPER, line);
+                    emit_uint16(c, identifier_constant(c, sattr, (int)strlen(sattr), line), line);
+                    for (int i = 0; i < argc; i++)
+                        compile_expr(c, node->as.call.args.data[i]);
+                    emit_byte(c, OP_CALL, line);
+                    emit_byte(c, (uint8_t)argc, line);
+                } else {
+                    compile_expr(c, callee->as.attr.object);
+                    for (int i = 0; i < argc; i++)
+                        compile_expr(c, node->as.call.args.data[i]);
+                    emit_byte(c, OP_INVOKE, line);
+                    const char *attr = callee->as.attr.attr;
+                    emit_uint16(c, identifier_constant(c, attr, (int)strlen(attr), line), line);
+                    emit_byte(c, (uint8_t)argc, line);
+                }
             } else {
                 compile_expr(c, callee);
                 for (int i = 0; i < argc; i++)
@@ -729,8 +747,23 @@ static void compile_expr(Compiler *c, AstNode *node) {
             break;
 
         case AST_ATTR: {
-            compile_expr(c, node->as.attr.object);
+            AstNode *obj = node->as.attr.object;
             const char *attr = node->as.attr.attr;
+            /* super.attr inside a class method with a superclass:
+             * push self (slot 0) and the superclass, then OP_GET_SUPER.
+             * OP_GET_SUPER first looks in super->methods; if not found it
+             * falls back to self's instance fields (set by parent's init). */
+            if (obj->kind == AST_IDENT &&
+                strcmp(obj->as.ident.name, "super") == 0 &&
+                c->class_ctx != NULL && c->class_ctx->has_superclass) {
+                emit_byte(c, OP_LOAD_LOCAL, line);
+                emit_byte(c, 0, line);   /* slot 0 = self */
+                emit_load_var(c, c->class_ctx->superclass_name, line);
+                emit_byte(c, OP_GET_SUPER, line);
+                emit_uint16(c, identifier_constant(c, attr, (int)strlen(attr), line), line);
+                break;
+            }
+            compile_expr(c, obj);
             emit_byte(c, OP_GET_ATTR, line);
             emit_uint16(c, identifier_constant(c, attr, (int)strlen(attr), line), line);
             break;
@@ -2277,6 +2310,7 @@ static void compile_node(Compiler *c, AstNode *node) {
             cc.enclosing       = c->class_ctx;
             cc.name            = object_string_copy(c->vm, name, (int)strlen(name));
             cc.has_superclass  = false;
+            cc.superclass_name = NULL;
             c->class_ctx       = &cc;
 
             /* Inheritance */
@@ -2285,7 +2319,8 @@ static void compile_node(Compiler *c, AstNode *node) {
                 emit_load_var(c, super, line);
                 emit_load_var(c, name,  line);
                 emit_byte(c, OP_INHERIT, line);
-                cc.has_superclass = true;
+                cc.has_superclass  = true;
+                cc.superclass_name = super; /* retained for `super.x` in method bodies */
             }
 
             /* Load class back for method emission */

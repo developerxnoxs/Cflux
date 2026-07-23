@@ -2156,12 +2156,30 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
                 FluxString *name = READ_STRING(idx);
                 FluxClass  *super = AS_CLASS(vm_pop(vm));
                 Value receiver    = vm_peek(vm, 0);
+
+                /* 1. Look in superclass methods first (returns a bound method). */
                 Value method;
-                if (!dict_get(super->methods, name, &method))
-                    RUNTIME_ERROR("Undefined super method '%s'", name->chars);
-                FluxBoundMethod *bm = object_bound_method_new(vm, receiver, AS_CLOSURE(method));
-                vm_pop(vm);
-                vm_push(vm, value_object((FluxObject *)bm));
+                if (dict_get(super->methods, name, &method)) {
+                    FluxBoundMethod *bm = object_bound_method_new(vm, receiver, AS_CLOSURE(method));
+                    vm_pop(vm); /* pop self */
+                    vm_push(vm, value_object((FluxObject *)bm));
+                    break;
+                }
+
+                /* 2. Fall back to the receiver's instance fields.
+                 *    Fields set by the parent's init (e.g. self.x = 10) live on
+                 *    the instance, so super.x should find them here. */
+                if (IS_INSTANCE(receiver)) {
+                    Value field;
+                    if (dict_get(AS_INSTANCE(receiver)->fields, name, &field)) {
+                        vm_pop(vm); /* pop self */
+                        vm_push(vm, field);
+                        break;
+                    }
+                }
+
+                RUNTIME_ERROR("'%s' has no attribute '%s'",
+                              super->name->chars, name->chars);
                 break;
             }
 

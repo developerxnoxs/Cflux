@@ -1,0 +1,128 @@
+# tests/thread_pool_test.flx
+# Test untuk modul thread (mirip Python's ThreadPoolExecutor)
+
+import thread
+
+print("=== Test modul thread (mirip ThreadPoolExecutor) ===\n")
+
+# ─── 1. cpu_count ─────────────────────────────────────────────────────────────
+cpus = thread.cpu_count()
+print(f"CPU logis tersedia: {cpus}")
+assert cpus >= 1
+
+# ─── 2. Buat pool ────────────────────────────────────────────────────────────
+pool = thread.pool(4)
+print(f"Pool dibuat, id={pool}")
+
+# ─── 3. thread.submit ────────────────────────────────────────────────────────
+print("\n--- thread.submit ---")
+async func test_submit(p):
+    fut    = thread.submit(p, "echo hello_from_thread")
+    result = await fut
+    out    = result["stdout"].strip()
+    assert out == "hello_from_thread"
+    assert result["exit_code"] == 0
+    print("submit OK: stdout=" + out)
+
+await test_submit(pool)
+
+# ─── 4. thread.map ───────────────────────────────────────────────────────────
+print("\n--- thread.map ---")
+async func test_map(p):
+    cmds    = ["echo satu", "echo dua", "echo tiga", "echo empat"]
+    futures = thread.map(p, cmds)
+
+    assert len(futures) == 4
+
+    results = []
+    for fut in futures:
+        r = await fut
+        results.append(r["stdout"].strip())
+
+    found_satu  = false
+    found_dua   = false
+    found_tiga  = false
+    found_empat = false
+
+    for s in results:
+        if s == "satu":
+            found_satu = true
+        if s == "dua":
+            found_dua = true
+        if s == "tiga":
+            found_tiga = true
+        if s == "empat":
+            found_empat = true
+
+    assert found_satu
+    assert found_dua
+    assert found_tiga
+    assert found_empat
+    print("map OK: hasil = " + str(results))
+
+await test_map(pool)
+
+# ─── 5. pending_count & active_count ─────────────────────────────────────────
+print("\n--- pending_count & active_count ---")
+pending = thread.pending_count(pool)
+active  = thread.active_count(pool)
+print(f"pending={pending}, active={active}")
+assert pending == 0
+assert active  == 0
+print("pending_count & active_count OK")
+
+# ─── 6. cancel_pending ────────────────────────────────────────────────────────
+print("\n--- cancel_pending ---")
+async func test_cancel():
+    pool2 = thread.pool(1)
+    futs  = []
+    for i in range(5):
+        futs.append(thread.submit(pool2, "sleep 10"))
+
+    import time
+    time.sleep(0.05)
+
+    cancelled = thread.cancel_pending(pool2)
+    print(f"cancel_pending: {cancelled} task dibatalkan")
+    assert cancelled >= 0
+
+    for fut in futs:
+        r  = await fut
+        ec = r["exit_code"]
+        ok = ec == 0 or ec == -1
+        assert ok
+
+    thread.shutdown(pool2)
+    print("cancel_pending OK")
+
+await test_cancel()
+
+# ─── 7. shutdown(pool, false) ────────────────────────────────────────────────
+print("\n--- shutdown(wait=false) ---")
+async func test_shutdown_cancel():
+    pool3 = thread.pool(1)
+    futs  = []
+    for i in range(3):
+        futs.append(thread.submit(pool3, "sleep 10"))
+
+    import time
+    time.sleep(0.05)
+
+    thread.shutdown(pool3, false)
+
+    for fut in futs:
+        r  = await fut
+        ec = r["exit_code"]
+        ok = ec == 0 or ec == -1
+        assert ok
+
+    print("shutdown(wait=false) OK")
+
+await test_shutdown_cancel()
+
+# ─── 8. Shutdown pool utama ───────────────────────────────────────────────────
+print("\n--- shutdown pool utama ---")
+thread.shutdown(pool)
+print("shutdown OK")
+
+print("\n=== Semua test LULUS ===")

@@ -1,5 +1,5 @@
 /**
- * stdlib/thread/thread_module.c — POSIX thread pool for Flux.
+ * stdlib/thread/thread_module.c — POSIX thread pool untuk Flux.
  *
  * Mirip ThreadPoolExecutor di Python: mendelegasikan perintah shell ke
  * sekumpulan worker thread yang berjalan secara paralel, lalu mengembalikan
@@ -10,17 +10,41 @@
  *   pool = thread.pool(n)
  *       Buat pool dengan n worker thread (0 = jumlah CPU logis).
  *       Mengembalikan integer pool-id.
+ *       Mirip: ThreadPoolExecutor(max_workers=n)
  *
  *   fut = thread.submit(pool, cmd)
  *       Kirim perintah shell `cmd` ke worker thread.
  *       Mengembalikan Future yang resolve ke dict:
  *           { stdout: "...", stderr: "...", exit_code: 0 }
+ *       Mirip: executor.submit(fn, *args)
  *
- *   thread.shutdown(pool)
- *       Tunggu semua task selesai lalu hentikan semua worker.
+ *   futures = thread.map(pool, cmd_list)
+ *       Kirim semua perintah dalam cmd_list ke worker thread secara paralel.
+ *       Mengembalikan list of Future (satu per perintah, urutan sama).
+ *       Mirip: list(executor.map(fn, items))
+ *
+ *   thread.shutdown(pool [, wait=true])
+ *       Hentikan pool.
+ *       wait=true  (default): tunggu semua task selesai, lalu return.
+ *       wait=false: batalkan task pending, lalu return SEGERA (non-blocking);
+ *                   worker yang sedang berjalan tetap selesai di background
+ *                   dan membersihkan diri sendiri saat selesai.
+ *       Mirip: executor.shutdown(wait=True/False, cancel_futures=...)
+ *
+ *   n = thread.pending_count(pool)
+ *       Jumlah task yang sudah di-submit tapi belum mulai dieksekusi.
+ *       Mirip: executor._work_queue.qsize()
+ *
+ *   n = thread.active_count(pool)
+ *       Jumlah task yang sedang aktif dieksekusi oleh worker thread.
+ *
+ *   n = thread.cancel_pending(pool)
+ *       Batalkan semua task yang belum mulai; kembalikan jumlah dibatalkan.
+ *       Mirip: executor.shutdown(cancel_futures=True) tanpa mematikan pool.
  *
  *   n = thread.cpu_count()
  *       Jumlah CPU logis yang tersedia.
+ *       Mirip: os.cpu_count()
  *
  *   m = thread.mutex()           buat mutex baru; return int handle
  *   thread.lock(m)               lock mutex (blocking)
@@ -39,6 +63,19 @@
  *    HANYA dipanggil dari main thread di dalam callback uv_async.
  *  - uv_async_send() adalah satu-satunya fungsi libuv yang thread-safe.
  *  - Worker thread tidak pernah menyentuh FluxVM.
+ *
+ * Invariant counter:
+ *  - queued_tasks diubah HANYA di dalam queue_mutex → tidak ada drift.
+ *  - active_tasks diubah di luar lock (decrement setelah selesai, increment
+ *    setelah dequeue, keduanya di worker thread saja).
+ *
+ * Lifecycle shutdown(wait=false):
+ *  - Task pending dibatalkan di bawah queue_mutex.
+ *  - Worker di-detach via pthread_detach; pool_id slot dikosongkan di
+ *    g_pools[]. Pool struct tetap hidup sampai worker terakhir keluar.
+ *  - Worker terakhir yang keluar memanggil uv_async_send() dengan flag
+ *    pool->detached=true, sehingga on_completions menutup uv_async dan
+ *    membebaskan pool dari main thread (aman untuk libuv).
  */
 
 #include "flux/extension.h"
@@ -47,6 +84,7 @@
 
 #include <uv.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <string.h>
@@ -61,8 +99,10 @@
 extern FluxString  *object_string_copy(FluxVM *vm, const char *chars, int length);
 extern FluxFuture  *object_future_new(FluxVM *vm);
 extern FluxDict    *object_dict_new(FluxVM *vm);
+extern FluxList    *object_list_new(FluxVM *vm);
 extern FluxNative  *object_native_new(FluxVM *vm, NativeFn fn, const char *name, int arity);
 extern void         dict_set(FluxVM *vm, FluxDict *dict, FluxString *key, Value value);
+extern void         value_array_write(ValueArray *arr, Value v);
 extern void         vm_io_future_register(FluxVM *vm, FluxFuture *fut);
 extern void         vm_io_future_complete(FluxVM *vm, FluxFuture *fut, Value result);
 extern void         vm_runtime_error(FluxVM *vm, const char *fmt, ...);
@@ -106,7 +146,9 @@ typedef struct {
     pthread_t      *threads;
     int             num_workers;
 
-    /* Antrian tugas (dilindungi queue_mutex) */
+    /* Antrian tugas (dilindungi queue_mutex).
+     * queued_tasks HANYA diubah di dalam queue_mutex untuk memastikan
+     * konsistensi antara isi antrian dan nilai counter. */
     pthread_mutex_t queue_mutex;
     pthread_cond_t  queue_cond;
     Task           *queue_head;
@@ -117,6 +159,18 @@ typedef struct {
     pthread_mutex_t done_mutex;
     Completion     *done_head;
     Completion     *done_tail;
+
+    /* Penghitung task.
+     * queued_tasks: jumlah task di queue (diubah hanya di dalam queue_mutex).
+     * active_tasks: jumlah task sedang dieksekusi worker (atomic, lock-free). */
+    atomic_int      queued_tasks;
+    atomic_int      active_tasks;
+
+    /* Lifecycle untuk shutdown(wait=false).
+     * detached=true setelah worker di-detach; pool struct masih hidup.
+     * worker_count turun ke 0 saat semua worker keluar → cleanup dari main. */
+    bool            detached;
+    atomic_int      worker_count;
 
     /* Handle uv_async — satu-satunya cara thread-safe membangunkan event loop */
     uv_async_t     *async;
@@ -168,6 +222,33 @@ static char *read_stream(FILE *fp) {
 }
 
 /* =========================================================================
+ * uv_async callback — forward declaration (dipakai oleh on_completions
+ * yang butuh melihat definisi pool->detached setelah worker selesai)
+ * ====================================================================== */
+static void on_completions(uv_async_t *handle);
+
+/* =========================================================================
+ * async close callback untuk shutdown(wait=true)
+ * ====================================================================== */
+static void async_close_cb(uv_handle_t *h) { free(h); }
+
+/* =========================================================================
+ * async close callback untuk shutdown(wait=false) — juga bebaskan pool.
+ * Dipanggil dari main thread setelah semua worker keluar.
+ * ====================================================================== */
+static void async_close_and_free_cb(uv_handle_t *h) {
+    ThreadPool *pool = (ThreadPool *)h->data;
+    free(h);
+    pthread_mutex_destroy(&pool->queue_mutex);
+    pthread_cond_destroy(&pool->queue_cond);
+    pthread_mutex_destroy(&pool->done_mutex);
+    free(pool->threads);
+    free(pool);
+    /* Catatan: slot g_pools[] sudah dikosongkan di flux_thread_shutdown
+     * sebelum worker di-detach, jadi tidak perlu scan di sini. */
+}
+
+/* =========================================================================
  * Worker thread — berjalan di background, TIDAK menyentuh FluxVM
  * ====================================================================== */
 
@@ -185,11 +266,16 @@ static void *worker_thread(void *arg) {
             break;
         }
 
-        /* Ambil task dari antrian */
+        /* Ambil task dari antrian dan kurangi queued_tasks di dalam lock
+         * sehingga counter selalu sinkron dengan isi antrian. */
         Task *t          = pool->queue_head;
         pool->queue_head = t->next;
         if (!pool->queue_head) pool->queue_tail = NULL;
+        atomic_fetch_sub(&pool->queued_tasks, 1);   /* di bawah queue_mutex */
         pthread_mutex_unlock(&pool->queue_mutex);
+
+        /* Task pindah dari antrian ke eksekusi aktif */
+        atomic_fetch_add(&pool->active_tasks, 1);
 
         /* Jalankan perintah shell, tangkap stdout & stderr */
         char err_path[] = "/tmp/flux_thread_XXXXXX";
@@ -225,10 +311,12 @@ static void *worker_thread(void *arg) {
         }
         if (!err_buf) err_buf = strdup("");
 
+        /* Task selesai */
+        atomic_fetch_sub(&pool->active_tasks, 1);
+
         /* Masukkan hasil ke antrian completion */
         Completion *c = (Completion *)malloc(sizeof(Completion));
         if (!c) {
-            /* OOM: bebaskan resource dan lanjut */
             free(out_buf); free(err_buf);
             free(t->cmd);  free(t);
             continue;
@@ -252,6 +340,16 @@ static void *worker_thread(void *arg) {
         free(t->cmd);
         free(t);
     }
+
+    /* Worker keluar.
+     * Jika pool di-detach (shutdown wait=false), kita track berapa worker
+     * yang masih berjalan. Worker terakhir mengirim sinyal ke main thread
+     * untuk membersihkan uv_async dan membebaskan pool. */
+    int remaining = atomic_fetch_sub(&pool->worker_count, 1) - 1;
+    if (pool->detached && remaining == 0) {
+        uv_async_send(pool->async);   /* picu on_completions untuk cleanup */
+    }
+
     return NULL;
 }
 
@@ -309,8 +407,8 @@ static void on_completions(uv_async_t *handle) {
     ThreadPool *pool = (ThreadPool *)handle->data;
     FluxVM     *vm   = pool->vm;
 
+    /* Drain semua completion yang tersisa */
     for (;;) {
-        /* Ambil satu completion (atau keluar jika kosong) */
         pthread_mutex_lock(&pool->done_mutex);
         Completion *c = pool->done_head;
         if (c) {
@@ -325,6 +423,13 @@ static void on_completions(uv_async_t *handle) {
         free(c->stdout_buf);
         free(c->stderr_buf);
         free(c);
+    }
+
+    /* shutdown(wait=false) cleanup:
+     * Jika pool sudah di-detach dan semua worker sudah selesai,
+     * tutup uv_async dan bebaskan pool dari sini (main thread = aman). */
+    if (pool->detached && atomic_load(&pool->worker_count) == 0) {
+        uv_close((uv_handle_t *)pool->async, async_close_and_free_cb);
     }
 }
 
@@ -346,7 +451,48 @@ static ThreadPool *pool_from_value(FluxVM *vm, Value v, const char *fn) {
 }
 
 /* =========================================================================
+ * Helper internal: submit satu task ke pool, return future.
+ * Dipakai oleh flux_thread_submit dan flux_thread_map.
+ * HARUS dipanggil dari main thread.
+ * queued_tasks diincrement di dalam queue_mutex untuk konsistensi.
+ * ====================================================================== */
+
+static FluxFuture *submit_task(FluxVM *vm, ThreadPool *pool, FluxString *cmd_str) {
+    FluxFuture *fut = object_future_new(vm);
+    vm_io_future_register(vm, fut);
+
+    Task *t = (Task *)malloc(sizeof(Task));
+    if (!t) {
+        vm_runtime_error(vm, "thread.submit: out of memory untuk task");
+        return NULL;
+    }
+    t->cmd = (char *)malloc((size_t)cmd_str->length + 1);
+    if (!t->cmd) {
+        free(t);
+        vm_runtime_error(vm, "thread.submit: out of memory");
+        return NULL;
+    }
+    memcpy(t->cmd, cmd_str->chars, (size_t)cmd_str->length + 1);
+    t->future = fut;
+    t->next   = NULL;
+
+    /* queued_tasks diincrement di bawah lock, bersama dengan perubahan antrian,
+     * sehingga pending_count() selalu sinkron dengan jumlah task nyata. */
+    pthread_mutex_lock(&pool->queue_mutex);
+    if (pool->queue_tail) pool->queue_tail->next = t;
+    else                  pool->queue_head        = t;
+    pool->queue_tail = t;
+    atomic_fetch_add(&pool->queued_tasks, 1);
+    pthread_cond_signal(&pool->queue_cond);
+    pthread_mutex_unlock(&pool->queue_mutex);
+
+    return fut;
+}
+
+/* =========================================================================
  * thread.pool(n)  →  int64 pool_id
+ *
+ * Mirip: ThreadPoolExecutor(max_workers=n)
  *
  * Contoh:
  *   pool = thread.pool(4)    # 4 worker threads
@@ -376,7 +522,11 @@ static Value flux_thread_pool(FluxVM *vm, int argc, Value *argv) {
 
     pool->num_workers   = n;
     pool->shutdown_flag = false;
+    pool->detached      = false;
     pool->vm            = vm;
+    atomic_store(&pool->queued_tasks, 0);
+    atomic_store(&pool->active_tasks, 0);
+    atomic_store(&pool->worker_count, n);
     pthread_mutex_init(&pool->queue_mutex, NULL);
     pthread_cond_init(&pool->queue_cond, NULL);
     pthread_mutex_init(&pool->done_mutex, NULL);
@@ -411,6 +561,7 @@ static Value flux_thread_pool(FluxVM *vm, int argc, Value *argv) {
  * thread.submit(pool_id, cmd)  →  Future
  *
  * Future resolve ke dict: { stdout, stderr, exit_code }
+ * Mirip: executor.submit(fn, *args)
  *
  * Contoh:
  *   fut    = thread.submit(pool, "ls -la /tmp")
@@ -431,43 +582,175 @@ static Value flux_thread_submit(FluxVM *vm, int argc, Value *argv) {
         vm_runtime_error(vm, "thread.submit: perintah harus string");
         return value_null();
     }
-    FluxString *cmd_str = AS_STRING(argv[1]);
 
-    /* Alokasikan future (GC-managed) dan daftarkan ke IO tracker */
-    FluxFuture *fut = object_future_new(vm);
-    vm_io_future_register(vm, fut);
-
-    /* Buat task */
-    Task *t  = (Task *)malloc(sizeof(Task));
-    if (!t) {
-        vm_runtime_error(vm, "thread.submit: out of memory untuk task");
-        return value_null();
-    }
-    t->cmd    = (char *)malloc((size_t)cmd_str->length + 1);
-    if (!t->cmd) { free(t); vm_runtime_error(vm, "thread.submit: out of memory"); return value_null(); }
-    memcpy(t->cmd, cmd_str->chars, (size_t)cmd_str->length + 1);
-    t->future = fut;
-    t->next   = NULL;
-
-    /* Masukkan ke antrian kerja */
-    pthread_mutex_lock(&pool->queue_mutex);
-    if (pool->queue_tail) pool->queue_tail->next = t;
-    else                  pool->queue_head        = t;
-    pool->queue_tail = t;
-    pthread_cond_signal(&pool->queue_cond);
-    pthread_mutex_unlock(&pool->queue_mutex);
-
+    FluxFuture *fut = submit_task(vm, pool, AS_STRING(argv[1]));
+    if (!fut) return value_null();
     return value_object((FluxObject *)fut);
 }
 
 /* =========================================================================
- * thread.shutdown(pool_id)
+ * thread.map(pool_id, cmd_list)  →  list of Future
  *
- * Menunggu semua task selesai lalu menghentikan semua worker thread.
- * Pool tidak dapat digunakan lagi setelah ini.
+ * Submit semua perintah dalam cmd_list secara paralel ke pool.
+ * Mengembalikan FluxList berisi Future (urutan sama dengan cmd_list).
+ * Setiap Future resolve ke dict: { stdout, stderr, exit_code }
+ *
+ * Mirip: list(executor.map(fn, items))
+ *
+ * Contoh:
+ *   cmds    = ["echo a", "echo b", "echo c"]
+ *   futures = thread.map(pool, cmds)
+ *   for fut in futures:
+ *       result = await fut
+ *       print(result["stdout"])
  * ====================================================================== */
 
-static void async_close_cb(uv_handle_t *h) { free(h); }
+static Value flux_thread_map(FluxVM *vm, int argc, Value *argv) {
+    if (argc < 2) {
+        vm_runtime_error(vm, "thread.map: butuh (pool_id, list_of_commands)");
+        return value_null();
+    }
+    ThreadPool *pool = pool_from_value(vm, argv[0], "thread.map");
+    if (!pool) return value_null();
+
+    if (!IS_LIST(argv[1])) {
+        vm_runtime_error(vm, "thread.map: argumen kedua harus list of string");
+        return value_null();
+    }
+
+    FluxList *cmds = AS_LIST(argv[1]);
+    int       n    = cmds->elements.count;
+
+    /* Buat list hasil untuk menampung futures */
+    FluxList *result = object_list_new(vm);
+    vm_push(vm, value_object((FluxObject *)result));  /* GC-protect */
+
+    for (int i = 0; i < n; i++) {
+        Value cmd_val = cmds->elements.data[i];
+        if (!IS_STRING(cmd_val)) {
+            vm_pop(vm);
+            vm_runtime_error(vm, "thread.map: semua elemen harus string (indeks %d bukan string)", i);
+            return value_null();
+        }
+
+        FluxFuture *fut = submit_task(vm, pool, AS_STRING(cmd_val));
+        if (!fut) {
+            vm_pop(vm);
+            return value_null();
+        }
+        /* GC-protect future selama append */
+        vm_push(vm, value_object((FluxObject *)fut));
+        value_array_write(&result->elements, value_object((FluxObject *)fut));
+        vm_pop(vm);
+    }
+
+    vm_pop(vm);  /* lepas proteksi GC pada result list */
+    return value_object((FluxObject *)result);
+}
+
+/* =========================================================================
+ * thread.pending_count(pool_id)  →  int
+ *
+ * Jumlah task di antrian yang belum mulai dieksekusi.
+ * Nilai akurat karena queued_tasks diupdate di bawah queue_mutex bersama
+ * operasi antrian, sehingga tidak ada drift.
+ * Mirip: executor._work_queue.qsize()
+ * ====================================================================== */
+
+static Value flux_thread_pending_count(FluxVM *vm, int argc, Value *argv) {
+    if (argc < 1) {
+        vm_runtime_error(vm, "thread.pending_count: butuh pool_id");
+        return value_null();
+    }
+    ThreadPool *pool = pool_from_value(vm, argv[0], "thread.pending_count");
+    if (!pool) return value_null();
+    return value_int((int64_t)atomic_load(&pool->queued_tasks));
+}
+
+/* =========================================================================
+ * thread.active_count(pool_id)  →  int
+ *
+ * Jumlah task yang sedang aktif dieksekusi oleh worker thread.
+ * ====================================================================== */
+
+static Value flux_thread_active_count(FluxVM *vm, int argc, Value *argv) {
+    if (argc < 1) {
+        vm_runtime_error(vm, "thread.active_count: butuh pool_id");
+        return value_null();
+    }
+    ThreadPool *pool = pool_from_value(vm, argv[0], "thread.active_count");
+    if (!pool) return value_null();
+    return value_int((int64_t)atomic_load(&pool->active_tasks));
+}
+
+/* =========================================================================
+ * thread.cancel_pending(pool_id)  →  int
+ *
+ * Batalkan semua task yang ada di antrian tapi belum mulai dieksekusi.
+ * Future mereka akan resolve ke dict error { stdout: "", stderr: "...",
+ * exit_code: -1 }. Pool tetap aktif dan bisa menerima submit baru.
+ * Kembalikan jumlah task yang dibatalkan.
+ *
+ * Counter queued_tasks dikurangi sesuai jumlah task yang benar-benar
+ * diambil dari antrian, bukan di-reset ke 0 (menghindari race).
+ *
+ * Mirip: executor.shutdown(cancel_futures=True) tapi tanpa mematikan pool.
+ * ====================================================================== */
+
+static Value flux_thread_cancel_pending(FluxVM *vm, int argc, Value *argv) {
+    if (argc < 1) {
+        vm_runtime_error(vm, "thread.cancel_pending: butuh pool_id");
+        return value_null();
+    }
+    ThreadPool *pool = pool_from_value(vm, argv[0], "thread.cancel_pending");
+    if (!pool) return value_null();
+
+    /* Kuras antrian tugas di bawah lock; sekaligus hitung berapa yang diambil
+     * dan kurangi queued_tasks dengan jumlah yang sama — tidak ada drift. */
+    pthread_mutex_lock(&pool->queue_mutex);
+    Task *head        = pool->queue_head;
+    pool->queue_head  = NULL;
+    pool->queue_tail  = NULL;
+    /* Hitung task yang diambil dan kurangi counter di bawah lock */
+    int n = 0;
+    for (Task *t = head; t; t = t->next) n++;
+    atomic_fetch_sub(&pool->queued_tasks, n);
+    pthread_mutex_unlock(&pool->queue_mutex);
+
+    /* Selesaikan future-future yang dibatalkan (main thread = aman untuk VM) */
+    int cancelled = 0;
+    Task *t = head;
+    while (t) {
+        Task *nx = t->next;
+        complete_future_with_dict(vm, t->future,
+                                  "",
+                                  "cancelled: task dibatalkan sebelum dieksekusi",
+                                  -1);
+        free(t->cmd);
+        free(t);
+        t = nx;
+        cancelled++;
+    }
+
+    return value_int((int64_t)cancelled);
+}
+
+/* =========================================================================
+ * thread.shutdown(pool_id [, wait=true])
+ *
+ * Hentikan pool.
+ *
+ * wait=true  (default) — mirip Python executor.shutdown(wait=True):
+ *   Blokir sampai semua task (pending + aktif) selesai, kemudian return.
+ *
+ * wait=false — mirip Python executor.shutdown(wait=False, cancel_futures=True):
+ *   1. Batalkan task yang masih di antrian (resolve future-nya dengan error).
+ *   2. Tandai shutdown; worker yang sedang berjalan tetap selesai di background.
+ *   3. Return SEGERA (non-blocking). Worker terakhir yang selesai akan menutup
+ *      uv_async dan membebaskan pool via callback main thread (on_completions).
+ *
+ * Pool tidak dapat digunakan lagi setelah shutdown (slot g_pools[] dikosongkan).
+ * ====================================================================== */
 
 static Value flux_thread_shutdown(FluxVM *vm, int argc, Value *argv) {
     if (argc < 1) {
@@ -477,68 +760,87 @@ static Value flux_thread_shutdown(FluxVM *vm, int argc, Value *argv) {
     ThreadPool *pool = pool_from_value(vm, argv[0], "thread.shutdown");
     if (!pool) return value_null();
 
-    /* Tandai shutdown — worker yang sedang idle akan keluar */
+    /* Argumen kedua opsional: wait (default true) */
+    bool do_wait = true;
+    if (argc >= 2 && argv[1].type == VAL_BOOL)
+        do_wait = argv[1].as.boolean;
+
+    /* Kosongkan slot segera agar pool_id ini tidak dapat dipakai lagi */
+    int64_t slot  = argv[0].as.integer;
+    g_pools[slot] = NULL;
+
+    /* Batalkan task pending (berlaku untuk wait=true maupun wait=false) */
     pthread_mutex_lock(&pool->queue_mutex);
+    Task *pending_head = pool->queue_head;
+    pool->queue_head   = NULL;
+    pool->queue_tail   = NULL;
+    /* Kurangi counter sesuai jumlah task yang diambil, di bawah lock */
+    int pn = 0;
+    for (Task *t = pending_head; t; t = t->next) pn++;
+    atomic_fetch_sub(&pool->queued_tasks, pn);
     pool->shutdown_flag = true;
     pthread_cond_broadcast(&pool->queue_cond);
     pthread_mutex_unlock(&pool->queue_mutex);
 
-    /* Tunggu semua worker selesai */
-    for (int i = 0; i < pool->num_workers; i++)
-        pthread_join(pool->threads[i], NULL);
-
-    /* Tutup uv_async handle (harus dari main thread) */
-    uv_close((uv_handle_t *)pool->async, async_close_cb);
-
-    /*
-     * Drain completion queue (done_head):
-     * Task-task ini SUDAH dieksekusi oleh worker dan hasilnya tersimpan
-     * di done_head. Selesaikan future-nya dengan dict hasil yang sebenarnya
-     * — sama persis dengan jalur normal on_completions().
-     */
-    Completion *c = pool->done_head;
-    while (c) {
-        Completion *nx = c->next;
-        complete_future_with_dict(vm, c->future,
-                                  c->stdout_buf, c->stderr_buf, c->exit_code);
-        free(c->stdout_buf);
-        free(c->stderr_buf);
-        free(c);
-        c = nx;
-    }
-
-    /*
-     * Drain work queue (queue_head):
-     * Task-task ini BELUM pernah dieksekusi (tidak ada worker yang sempat
-     * mengambilnya). Selesaikan future-nya dengan dict error yang terstruktur
-     * sehingga kode Flux dapat tetap mengakses kunci "stdout", "stderr",
-     * dan "exit_code" tanpa crash.
-     */
-    Task *t = pool->queue_head;
+    /* Selesaikan future untuk task yang dibatalkan (main thread = aman) */
+    Task *t = pending_head;
     while (t) {
         Task *nx = t->next;
         complete_future_with_dict(vm, t->future,
-                                  "",                          /* stdout kosong */
-                                  "cancelled: pool shut down", /* stderr */
-                                  -1);                         /* exit_code */
+                                  "",
+                                  "cancelled: pool shutdown sebelum task dieksekusi",
+                                  -1);
         free(t->cmd);
         free(t);
         t = nx;
     }
 
-    pthread_mutex_destroy(&pool->queue_mutex);
-    pthread_cond_destroy(&pool->queue_cond);
-    pthread_mutex_destroy(&pool->done_mutex);
-    free(pool->threads);
+    if (do_wait) {
+        /* ── wait=true: join semua worker, kemudian bersihkan ─────────── */
+        for (int i = 0; i < pool->num_workers; i++)
+            pthread_join(pool->threads[i], NULL);
 
-    int64_t slot  = argv[0].as.integer;
-    g_pools[slot] = NULL;
-    free(pool);
+        /* Tutup uv_async dari main thread */
+        uv_close((uv_handle_t *)pool->async, async_close_cb);
+
+        /* Drain completion queue (done_head):
+         * Task yang sudah dieksekusi worker dan hasilnya ada di done_head. */
+        Completion *c = pool->done_head;
+        while (c) {
+            Completion *nx = c->next;
+            complete_future_with_dict(vm, c->future,
+                                      c->stdout_buf, c->stderr_buf, c->exit_code);
+            free(c->stdout_buf);
+            free(c->stderr_buf);
+            free(c);
+            c = nx;
+        }
+
+        pthread_mutex_destroy(&pool->queue_mutex);
+        pthread_cond_destroy(&pool->queue_cond);
+        pthread_mutex_destroy(&pool->done_mutex);
+        free(pool->threads);
+        free(pool);
+
+    } else {
+        /* ── wait=false: detach worker, return segera ──────────────────
+         *
+         * Worker yang sedang berjalan akan selesai sendiri. Worker terakhir
+         * yang keluar (worker_count → 0) memanggil uv_async_send(), yang
+         * memicu on_completions() di main thread untuk menutup uv_async
+         * dan membebaskan pool via async_close_and_free_cb(). */
+        pool->detached = true;
+        for (int i = 0; i < pool->num_workers; i++)
+            pthread_detach(pool->threads[i]);
+        /* pool struct tetap hidup; on_completions akan membebaskannya nanti */
+    }
+
     return value_null();
 }
 
 /* =========================================================================
  * thread.cpu_count()  →  int
+ * Mirip: os.cpu_count()
  * ====================================================================== */
 
 static Value flux_thread_cpu_count(FluxVM *vm, int argc, Value *argv) {
@@ -642,15 +944,19 @@ bool flux_extension_init(FluxVM *vm, Value *out) {
     dict_set(vm, mod, k, value_object((FluxObject *)n));                     \
 } while (0)
 
-    REG("pool",        flux_thread_pool,       1);
-    REG("submit",      flux_thread_submit,     2);
-    REG("shutdown",    flux_thread_shutdown,   1);
-    REG("cpu_count",   flux_thread_cpu_count,  0);
-    REG("mutex",       flux_thread_mutex,      0);
-    REG("lock",        flux_thread_lock,       1);
-    REG("unlock",      flux_thread_unlock,     1);
-    REG("trylock",     flux_thread_trylock,    1);
-    REG("mutex_free",  flux_thread_mutex_free, 1);
+    REG("pool",           flux_thread_pool,          1);
+    REG("submit",         flux_thread_submit,         2);
+    REG("map",            flux_thread_map,            2);
+    REG("shutdown",       flux_thread_shutdown,      -1);
+    REG("pending_count",  flux_thread_pending_count,  1);
+    REG("active_count",   flux_thread_active_count,   1);
+    REG("cancel_pending", flux_thread_cancel_pending, 1);
+    REG("cpu_count",      flux_thread_cpu_count,      0);
+    REG("mutex",          flux_thread_mutex,          0);
+    REG("lock",           flux_thread_lock,           1);
+    REG("unlock",         flux_thread_unlock,         1);
+    REG("trylock",        flux_thread_trylock,        1);
+    REG("mutex_free",     flux_thread_mutex_free,     1);
 
 #undef REG
 

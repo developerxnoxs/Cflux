@@ -76,7 +76,12 @@ main()
 ```flux
 pool   = thread.pool(n)             # buat pool (n worker; 0 = cpu_count)
 fut    = thread.submit(pool, cmd)   # jalankan cmd di worker; return Future
+futs   = thread.map(pool, cmds)     # submit list of cmds; return list of Future
          thread.shutdown(pool)       # tunggu semua task, lalu hentikan worker
+         thread.shutdown(pool,false) # batalkan pending, langsung hentikan worker
+n      = thread.pending_count(pool) # task di antrian (belum mulai)
+n      = thread.active_count(pool)  # task sedang dieksekusi
+n      = thread.cancel_pending(pool)# batalkan task pending; return jumlah dibatalkan
 n      = thread.cpu_count()         # jumlah CPU logis
 
 m      = thread.mutex()             # buat mutex baru; return int handle
@@ -85,6 +90,8 @@ m      = thread.mutex()             # buat mutex baru; return int handle
 ok     = thread.trylock(m)          # coba lock; return bool
          thread.mutex_free(m)       # hancurkan mutex
 ```
+
+**Setiap Future resolve ke dict:** `{ stdout: "...", stderr: "...", exit_code: 0 }`
 
 ## Struktur Proyek
 

@@ -81,13 +81,20 @@ typedef enum {
     TOK_QUESTION,   /* ?   */
 
     /* Assignment */
-    TOK_ASSIGN,         /* =  */
-    TOK_WALRUS,         /* := */
-    TOK_PLUS_ASSIGN,    /* += */
-    TOK_MINUS_ASSIGN,   /* -= */
-    TOK_STAR_ASSIGN,    /* *= */
-    TOK_SLASH_ASSIGN,   /* /= */
-    TOK_PERCENT_ASSIGN, /* %= */
+    TOK_ASSIGN,              /* =   */
+    TOK_WALRUS,              /* :=  */
+    TOK_PLUS_ASSIGN,         /* +=  */
+    TOK_MINUS_ASSIGN,        /* -=  */
+    TOK_STAR_ASSIGN,         /* *=  */
+    TOK_SLASH_ASSIGN,        /* /=  */
+    TOK_PERCENT_ASSIGN,      /* %=  */
+    TOK_STAR_STAR_ASSIGN,    /* **= */
+    TOK_SLASH_SLASH_ASSIGN,  /* //= */
+    TOK_AMPERSAND_ASSIGN,    /* &=  */
+    TOK_PIPE_ASSIGN,         /* |=  */
+    TOK_CARET_ASSIGN,        /* ^=  */
+    TOK_LSHIFT_ASSIGN,       /* <<= */
+    TOK_RSHIFT_ASSIGN,       /* >>= */
 
     /* Comparison */
     TOK_EQ,         /* == */

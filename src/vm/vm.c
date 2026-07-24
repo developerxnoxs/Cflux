@@ -1621,42 +1621,88 @@ static VMResult vm_run(FluxVM *vm, int base_frame_count, bool preserve_result) {
             }
 
             case OP_SLICE: {
+                Value step_val  = vm_pop(vm);
                 Value end_val   = vm_pop(vm);
                 Value start_val = vm_pop(vm);
                 Value obj_val   = vm_pop(vm);
 
+                int step = value_is_null(step_val) ? 1 : (int)value_as_int(step_val);
+                if (step == 0) RUNTIME_ERROR("Slice step cannot be zero");
+
                 if (IS_STRING(obj_val)) {
-                    FluxString *str   = AS_STRING(obj_val);
-                    int         start = value_is_null(start_val) ? 0          : (int)value_as_int(start_val);
-                    int         end   = value_is_null(end_val)   ? str->length : (int)value_as_int(end_val);
-                    if (start < 0) start += str->length;
-                    if (end   < 0) end   += str->length;
-                    if (start < 0) start  = 0;
-                    if (end > str->length) end = str->length;
-                    if (start >= end) {
-                        vm_push(vm, value_object((FluxObject *)object_string_copy(vm, "", 0)));
+                    FluxString *str = AS_STRING(obj_val);
+                    int len = str->length;
+                    int start, end;
+                    if (step > 0) {
+                        start = value_is_null(start_val) ? 0   : (int)value_as_int(start_val);
+                        end   = value_is_null(end_val)   ? len : (int)value_as_int(end_val);
+                        if (start < 0) start += len;
+                        if (end   < 0) end   += len;
+                        if (start < 0) start  = 0;
+                        if (end > len) end    = len;
                     } else {
-                        vm_push(vm, obj_val); /* GC-protect source string */
-                        FluxString *res = object_string_copy(vm,
-                                              AS_STRING(obj_val)->chars + start, end - start);
-                        vm_pop(vm);
-                        vm_push(vm, value_object((FluxObject *)res));
+                        start = value_is_null(start_val) ? len - 1    : (int)value_as_int(start_val);
+                        end   = value_is_null(end_val)   ? -(len + 1) : (int)value_as_int(end_val);
+                        if (start < 0) start += len;
+                        if (!value_is_null(end_val) && end < 0) end += len;
+                        if (start >= len) start = len - 1;
                     }
+                    /* Count output characters */
+                    int count = 0;
+                    if (step > 0) {
+                        for (int i = start; i < end; i += step) count++;
+                    } else {
+                        for (int i = start; i > end; i += step) count++;
+                    }
+                    /* Build result into a temporary buffer */
+                    char *buf = (char *)malloc((size_t)(count + 1));
+                    if (!buf) RUNTIME_ERROR("Out of memory for string slice");
+                    int bi = 0;
+                    const char *src_chars = AS_STRING(obj_val)->chars;
+                    if (step > 0) {
+                        for (int i = start; i < end; i += step)
+                            buf[bi++] = src_chars[i];
+                    } else {
+                        for (int i = start; i > end; i += step)
+                            if (i >= 0 && i < len) buf[bi++] = src_chars[i];
+                    }
+                    buf[bi] = '\0';
+                    vm_push(vm, obj_val); /* GC-protect */
+                    FluxString *res = object_string_copy(vm, buf, count);
+                    vm_pop(vm);
+                    free(buf);
+                    vm_push(vm, value_object((FluxObject *)res));
                 } else if (IS_LIST(obj_val)) {
-                    FluxList *src   = AS_LIST(obj_val);
-                    int       start = value_is_null(start_val) ? 0                   : (int)value_as_int(start_val);
-                    int       end   = value_is_null(end_val)   ? src->elements.count  : (int)value_as_int(end_val);
-                    if (start < 0) start += src->elements.count;
-                    if (end   < 0) end   += src->elements.count;
-                    if (start < 0) start  = 0;
-                    if (end > src->elements.count) end = src->elements.count;
-                    if (start > end) start = end;
-                    vm_push(vm, obj_val); /* GC-protect source list */
+                    FluxList *src = AS_LIST(obj_val);
+                    int len = src->elements.count;
+                    int start, end;
+                    if (step > 0) {
+                        start = value_is_null(start_val) ? 0   : (int)value_as_int(start_val);
+                        end   = value_is_null(end_val)   ? len : (int)value_as_int(end_val);
+                        if (start < 0) start += len;
+                        if (end   < 0) end   += len;
+                        if (start < 0) start  = 0;
+                        if (end > len) end    = len;
+                    } else {
+                        start = value_is_null(start_val) ? len - 1    : (int)value_as_int(start_val);
+                        end   = value_is_null(end_val)   ? -(len + 1) : (int)value_as_int(end_val);
+                        if (start < 0) start += len;
+                        if (!value_is_null(end_val) && end < 0) end += len;
+                        if (start >= len) start = len - 1;
+                    }
+                    vm_push(vm, obj_val); /* GC-protect source */
                     FluxList *result = object_list_new(vm);
                     vm_push(vm, value_object((FluxObject *)result)); /* GC-protect result */
                     src = AS_LIST(obj_val); /* re-fetch after potential GC */
-                    for (int i = start; i < end; i++)
-                        value_array_write(&result->elements, src->elements.data[i]);
+                    if (step > 0) {
+                        for (int i = start; i < end; i += step)
+                            if (i >= 0 && i < src->elements.count)
+                                value_array_write(&result->elements, src->elements.data[i]);
+                    } else {
+                        for (int i = start; i > end; i += step)
+                            if (i >= 0 && i < src->elements.count)
+                                value_array_write(&result->elements, src->elements.data[i]);
+                    }
                     vm_pop(vm); /* pop result GC-protect */
                     vm_pop(vm); /* pop obj GC-protect   */
                     vm_push(vm, value_object((FluxObject *)result));

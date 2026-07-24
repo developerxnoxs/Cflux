@@ -104,6 +104,31 @@ extension/              # native extensions (http, ws, mysql, postgresql)
 tests/                  # test suite (.flx files)
 ```
 
+## Operator yang Didukung
+
+### Augmented Assignment (semua target)
+
+Semua operator augmented bekerja pada variabel, atribut objek (`obj.field`), dan index (`list[i]`, `dict[k]`):
+
+| Operator | Operasi |
+|----------|---------|
+| `+=` `-=` `*=` `/=` `%=` | Aritmatika dasar |
+| `**=` | Pangkat |
+| `//=` | Pembagian bulat |
+| `&=` `\|=` `^=` | Bitwise AND / OR / XOR |
+| `<<=` `>>=` | Shift kiri / kanan |
+
+### Slice dengan Step
+
+```flux
+a[start:end:step]   # bentuk umum
+a[::2]              # setiap elemen ke-2
+a[::-1]             # reverse
+a[2:8:2]            # range dengan step
+```
+
+Didukung untuk `string` dan `list`. Step negatif untuk iterasi mundur.
+
 ## Match Pattern System
 
 Semua pola yang didukung:

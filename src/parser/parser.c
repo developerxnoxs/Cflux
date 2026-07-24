@@ -664,23 +664,36 @@ static AstNode *parse_postfix(Parser *p) {
             consume(p, TOK_RPAREN, "Expected ')' after arguments");
             node = call;
         } else if (match(p, TOK_LBRACKET)) {
-            /* Index a[i]  or slice a[start:end] */
+            /* Index a[i]  or slice a[start:end]  or a[start:end:step] */
             if (match(p, TOK_COLON)) {
-                /* a[:end] — start omitted */
+                /* a[:...]  — start omitted */
                 AstNode *sl = ast_node_alloc(p->arena, AST_SLICE, line, col);
                 sl->as.slice_expr.object = node;
                 sl->as.slice_expr.start  = NULL;
-                sl->as.slice_expr.end    = check(p, TOK_RBRACKET) ? NULL : parse_expr(p);
+                /* end: present unless we see ] or a second : */
+                sl->as.slice_expr.end  = (check(p, TOK_RBRACKET) || check(p, TOK_COLON))
+                                         ? NULL : parse_expr(p);
+                /* step: optional third segment a[:end:step] */
+                if (match(p, TOK_COLON))
+                    sl->as.slice_expr.step = check(p, TOK_RBRACKET) ? NULL : parse_expr(p);
+                else
+                    sl->as.slice_expr.step = NULL;
                 consume(p, TOK_RBRACKET, "Expected ']' after slice");
                 node = sl;
             } else {
                 AstNode *first = parse_expr(p);
                 if (match(p, TOK_COLON)) {
-                    /* a[start:end] or a[start:] */
+                    /* a[start:end]  or  a[start:end:step]  or  a[start:] */
                     AstNode *sl = ast_node_alloc(p->arena, AST_SLICE, line, col);
                     sl->as.slice_expr.object = node;
                     sl->as.slice_expr.start  = first;
-                    sl->as.slice_expr.end    = check(p, TOK_RBRACKET) ? NULL : parse_expr(p);
+                    sl->as.slice_expr.end  = (check(p, TOK_RBRACKET) || check(p, TOK_COLON))
+                                             ? NULL : parse_expr(p);
+                    /* step */
+                    if (match(p, TOK_COLON))
+                        sl->as.slice_expr.step = check(p, TOK_RBRACKET) ? NULL : parse_expr(p);
+                    else
+                        sl->as.slice_expr.step = NULL;
                     consume(p, TOK_RBRACKET, "Expected ']' after slice");
                     node = sl;
                 } else {
@@ -929,7 +942,11 @@ static AstNode *parse_expr(Parser *p) {
     /* Augmented assignment */
     TokenKind aug_ops[] = {
         TOK_PLUS_ASSIGN, TOK_MINUS_ASSIGN,
-        TOK_STAR_ASSIGN, TOK_SLASH_ASSIGN, TOK_PERCENT_ASSIGN, (TokenKind)0
+        TOK_STAR_ASSIGN, TOK_SLASH_ASSIGN, TOK_PERCENT_ASSIGN,
+        TOK_STAR_STAR_ASSIGN, TOK_SLASH_SLASH_ASSIGN,
+        TOK_AMPERSAND_ASSIGN, TOK_PIPE_ASSIGN, TOK_CARET_ASSIGN,
+        TOK_LSHIFT_ASSIGN, TOK_RSHIFT_ASSIGN,
+        (TokenKind)0
     };
     for (int i = 0; aug_ops[i]; i++) {
         if (match(p, aug_ops[i])) {

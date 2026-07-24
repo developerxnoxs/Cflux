@@ -363,28 +363,45 @@ static Token scan_raw_token(Lexer *lex) {
             if (match(lex, '=')) return make_token(lex, TOK_MINUS_ASSIGN);
             return make_token(lex, TOK_MINUS);
         case '*':
-            if (match(lex, '*')) return make_token(lex, TOK_STAR_STAR);
+            if (match(lex, '*')) {
+                if (match(lex, '=')) return make_token(lex, TOK_STAR_STAR_ASSIGN);
+                return make_token(lex, TOK_STAR_STAR);
+            }
             if (match(lex, '=')) return make_token(lex, TOK_STAR_ASSIGN);
             return make_token(lex, TOK_STAR);
         case '/':
-            if (match(lex, '/')) return make_token(lex, TOK_SLASH_SLASH);
+            if (match(lex, '/')) {
+                if (match(lex, '=')) return make_token(lex, TOK_SLASH_SLASH_ASSIGN);
+                return make_token(lex, TOK_SLASH_SLASH);
+            }
             if (match(lex, '=')) return make_token(lex, TOK_SLASH_ASSIGN);
             return make_token(lex, TOK_SLASH);
         case '%':
             if (match(lex, '=')) return make_token(lex, TOK_PERCENT_ASSIGN);
             return make_token(lex, TOK_PERCENT);
-        case '&': return make_token(lex, TOK_AMPERSAND);
+        case '&':
+            if (match(lex, '=')) return make_token(lex, TOK_AMPERSAND_ASSIGN);
+            return make_token(lex, TOK_AMPERSAND);
         case '|':
             if (match(lex, '>')) return make_token(lex, TOK_PIPE_ARROW);
+            if (match(lex, '=')) return make_token(lex, TOK_PIPE_ASSIGN);
             return make_token(lex, TOK_PIPE);
-        case '^': return make_token(lex, TOK_CARET);
+        case '^':
+            if (match(lex, '=')) return make_token(lex, TOK_CARET_ASSIGN);
+            return make_token(lex, TOK_CARET);
         case '~': return make_token(lex, TOK_TILDE);
         case '<':
-            if (match(lex, '<')) return make_token(lex, TOK_LSHIFT);
+            if (match(lex, '<')) {
+                if (match(lex, '=')) return make_token(lex, TOK_LSHIFT_ASSIGN);
+                return make_token(lex, TOK_LSHIFT);
+            }
             if (match(lex, '=')) return make_token(lex, TOK_LTE);
             return make_token(lex, TOK_LT);
         case '>':
-            if (match(lex, '>')) return make_token(lex, TOK_RSHIFT);
+            if (match(lex, '>')) {
+                if (match(lex, '=')) return make_token(lex, TOK_RSHIFT_ASSIGN);
+                return make_token(lex, TOK_RSHIFT);
+            }
             if (match(lex, '=')) return make_token(lex, TOK_GTE);
             return make_token(lex, TOK_GT);
         case '=':
@@ -593,8 +610,20 @@ const char *token_kind_name(TokenKind kind) {
         case TOK_FAT_ARROW:  return "=>";
         case TOK_AT_ARROW:   return "@>";
         case TOK_QUESTION:   return "?";
-        case TOK_ASSIGN:     return "=";
-        case TOK_WALRUS:     return ":=";
+        case TOK_ASSIGN:             return "=";
+        case TOK_WALRUS:             return ":=";
+        case TOK_PLUS_ASSIGN:        return "+=";
+        case TOK_MINUS_ASSIGN:       return "-=";
+        case TOK_STAR_ASSIGN:        return "*=";
+        case TOK_SLASH_ASSIGN:       return "/=";
+        case TOK_PERCENT_ASSIGN:     return "%=";
+        case TOK_STAR_STAR_ASSIGN:   return "**=";
+        case TOK_SLASH_SLASH_ASSIGN: return "//=";
+        case TOK_AMPERSAND_ASSIGN:   return "&=";
+        case TOK_PIPE_ASSIGN:        return "|=";
+        case TOK_CARET_ASSIGN:       return "^=";
+        case TOK_LSHIFT_ASSIGN:      return "<<=";
+        case TOK_RSHIFT_ASSIGN:      return ">>=";
         case TOK_EQ:         return "==";
         case TOK_NEQ:        return "!=";
         case TOK_LT:         return "<";

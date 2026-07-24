@@ -178,8 +178,8 @@ struct AstNode {
         /* AST_INDEX */
         struct { AstNode *object; AstNode *index; } index_expr;
 
-        /* AST_SLICE: a[start:end] — start or end may be NULL (omitted) */
-        struct { AstNode *object; AstNode *start; AstNode *end; } slice_expr;
+        /* AST_SLICE: a[start:end:step] — start, end, or step may be NULL (omitted) */
+        struct { AstNode *object; AstNode *start; AstNode *end; AstNode *step; } slice_expr;
 
         /* AST_ATTR */
         struct { AstNode *object; char *attr; } attr;

@@ -743,6 +743,10 @@ static void compile_expr(Compiler *c, AstNode *node) {
                 compile_expr(c, node->as.slice_expr.end);
             else
                 emit_byte(c, OP_PUSH_NULL, line);
+            if (node->as.slice_expr.step)
+                compile_expr(c, node->as.slice_expr.step);
+            else
+                emit_byte(c, OP_PUSH_NULL, line);
             emit_byte(c, OP_SLICE, line);
             break;
 
@@ -963,11 +967,18 @@ static void compile_expr(Compiler *c, AstNode *node) {
 
 #define EMIT_AUG_OP() \
     switch (node->as.aug_assign.op) { \
-        case TOK_PLUS_ASSIGN:    emit_byte(c, OP_ADD, line); break; \
-        case TOK_MINUS_ASSIGN:   emit_byte(c, OP_SUB, line); break; \
-        case TOK_STAR_ASSIGN:    emit_byte(c, OP_MUL, line); break; \
-        case TOK_SLASH_ASSIGN:   emit_byte(c, OP_DIV, line); break; \
-        case TOK_PERCENT_ASSIGN: emit_byte(c, OP_MOD, line); break; \
+        case TOK_PLUS_ASSIGN:         emit_byte(c, OP_ADD,       line); break; \
+        case TOK_MINUS_ASSIGN:        emit_byte(c, OP_SUB,       line); break; \
+        case TOK_STAR_ASSIGN:         emit_byte(c, OP_MUL,       line); break; \
+        case TOK_SLASH_ASSIGN:        emit_byte(c, OP_DIV,       line); break; \
+        case TOK_PERCENT_ASSIGN:      emit_byte(c, OP_MOD,       line); break; \
+        case TOK_STAR_STAR_ASSIGN:    emit_byte(c, OP_POW,       line); break; \
+        case TOK_SLASH_SLASH_ASSIGN:  emit_byte(c, OP_FLOOR_DIV, line); break; \
+        case TOK_AMPERSAND_ASSIGN:    emit_byte(c, OP_BIT_AND,   line); break; \
+        case TOK_PIPE_ASSIGN:         emit_byte(c, OP_BIT_OR,    line); break; \
+        case TOK_CARET_ASSIGN:        emit_byte(c, OP_BIT_XOR,   line); break; \
+        case TOK_LSHIFT_ASSIGN:       emit_byte(c, OP_SHL,       line); break; \
+        case TOK_RSHIFT_ASSIGN:       emit_byte(c, OP_SHR,       line); break; \
         default: break; \
     }
 
@@ -1020,6 +1031,32 @@ static void compile_expr(Compiler *c, AstNode *node) {
                 EMIT_AUG_OP();
                 emit_byte(c, OP_SET_ATTR, line);
                 emit_uint16(c, identifier_constant(c, attr, (int)strlen(attr), line), line);
+                emit_byte(c, OP_PUSH_NULL, line);   /* expr result */
+
+            } else if (target->kind == AST_INDEX) {
+                /* container[key] op= value
+                 *
+                 * Stack:
+                 *   [c, k]              ← compile container + key (for SET later)
+                 *   [c, k, c, k]        ← re-compile container + key (for GET)
+                 *   [c, k, old_val]     ← GET_INDEX (pops top 2, pushes old value)
+                 *   [c, k, old_val, rhs]← compile RHS
+                 *   [c, k, new_val]     ← OP_xxx
+                 *   []                  ← SET_INDEX (pops top 3: new_val, key, container)
+                 *   [null]              ← PUSH_NULL as expression result
+                 *   (EXPR_STMT pops null)
+                 *
+                 * Note: container and key expressions are evaluated twice.
+                 * For the common case (list[i], dict[k]) this is side-effect-free.
+                 */
+                compile_expr(c, target->as.index_expr.object); /* container for SET */
+                compile_expr(c, target->as.index_expr.index);  /* key for SET       */
+                compile_expr(c, target->as.index_expr.object); /* container for GET */
+                compile_expr(c, target->as.index_expr.index);  /* key for GET       */
+                emit_byte(c, OP_GET_INDEX, line);               /* old_val           */
+                compile_expr(c, node->as.aug_assign.value);
+                EMIT_AUG_OP();
+                emit_byte(c, OP_SET_INDEX, line);
                 emit_byte(c, OP_PUSH_NULL, line);   /* expr result */
 
             } else {

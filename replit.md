@@ -18,14 +18,14 @@ make clean                      # hapus build artifacts
 | `build_make/flux` | Executable CLI |
 | `build_make/libflux.a` | Static library |
 | `stdlib/*/lib*.so` | Modul standard library |
-| `extension/*/lib*.so` | Ekstensi native (HTTP, WebSocket, MySQL, PostgreSQL) |
+| `extension/*/lib*.so` | Ekstensi native (HTTP, WebSocket, MySQL, PostgreSQL, concurrent) |
 
 ## Stack
 
 - **Bahasa implementasi**: C17 (gcc)
 - **Build system**: GNU Make + CMake
 - **Async runtime**: libuv
-- **Native extensions**: libcurl, wslay, libpq, libmysqlclient
+- **Native extensions**: libcurl, wslay, libpq, libmysqlclient, pthreads
 - **Semua dependensi** sudah tersedia via `replit.nix`
 
 ## Modul Standard Library
@@ -92,6 +92,46 @@ ok     = thread.trylock(m)          # coba lock; return bool
 ```
 
 **Setiap Future resolve ke dict:** `{ stdout: "...", stderr: "...", exit_code: 0 }`
+
+## Ekstensi `concurrent` — ThreadPoolExecutor
+
+Implementasi `ThreadPoolExecutor` yang mirip dengan `concurrent.futures` di Python. Setiap worker thread memiliki instance VM Flux tersendiri (thread-safe).
+
+```flux
+import concurrent
+
+func download(url):
+    return "hasil dari " + url
+
+pool = concurrent.ThreadPoolExecutor(4)
+
+future1 = pool.submit(download, "https://example.com")
+future2 = pool.submit(download, "https://example.org")
+
+print(future1.result())        # blokir hingga selesai
+print(future2.result())
+
+pool.shutdown()                # tunggu semua task selesai, bebaskan resource
+```
+
+**API:**
+
+| Panggilan | Keterangan |
+|-----------|-----------|
+| `concurrent.ThreadPoolExecutor(n)` | Buat pool dengan `n` worker thread |
+| `pool.submit(fn, ...args)` | Jalankan `fn(*args)` di worker; return Future |
+| `future.result()` | Blokir hingga selesai, kembalikan nilai atau lempar exception |
+| `future.done()` | `true` jika task sudah selesai (non-blocking) |
+| `future.exception()` | Pesan error string, atau `null` jika tidak ada error |
+| `pool.shutdown()` | Tunggu semua task, bebaskan semua resource |
+
+**Arsitektur internal:**
+- `extension/concurrent/concurrent.h` — tipe internal (ConcPool, ConcFuture, TransportValue)
+- `extension/concurrent/thread_pool.c` — pool, worker thread, task queue
+- `extension/concurrent/transport.c` — serialisasi nilai lintas VM (TransportValue)
+- `extension/concurrent/concurrent_ext.c` — module init + Flux API
+
+Setiap worker thread memiliki VM-nya sendiri. Globals dari main VM dibagi secara read-only sehingga fungsi rekursif dan panggilan antar fungsi bekerja dengan benar.
 
 ## Struktur Proyek
 

@@ -31,6 +31,31 @@ pool = thread.pool(0)   # otomatis = cpu_count()
 
 Mengirim perintah shell `cmd` ke salah satu worker thread. Mengembalikan **Future** yang resolve ke dict saat perintah selesai.
 
+## Menjalankan fungsi Flux
+
+Untuk perilaku seperti Python `concurrent.futures.ThreadPoolExecutor`, gunakan
+constructor `ThreadPoolExecutor`. API ini menjalankan callable Flux di worker
+thread, bukan shell command:
+
+```flux
+import thread
+
+func tambah(a, b):
+    return a + b
+
+executor = thread.ThreadPoolExecutor(4)
+future = executor.submit(tambah, 20, 22)
+print(future.result())       # 42
+print(future.done())         # true
+print(future.exception())    # null
+executor.shutdown()
+```
+
+`import concurrent` menyediakan constructor yang sama. Hasil callable
+ditransfer antar-VM secara deep-copy; tipe yang didukung adalah null, boolean,
+integer, float, string, list, dan dictionary. Future yang gagal menyimpan pesan
+error pada `exception()` dan `result()` melemparkan error tersebut.
+
 | Parameter  | Keterangan |
 |------------|-----------|
 | `pool_id`  | Integer dari `thread.pool()` |
@@ -192,6 +217,9 @@ main()
 
 ## Batasan
 
-- Worker thread mengeksekusi **perintah shell** via `popen()`. Untuk menjalankan kode Flux secara paralel, gunakan `spawn` + `async func` (cooperative multitasking via libuv event loop).
+- API `thread.pool()` menjalankan **perintah shell** via `popen()`.
+- Untuk menjalankan kode Flux di worker, gunakan `thread.ThreadPoolExecutor()`
+  atau `concurrent.ThreadPoolExecutor()`. Worker memiliki VM privat dan hasil
+  dipindahkan kembali ke VM utama dengan deep-copy.
 - Semua operasi VM Flux tetap berjalan di **satu thread** (main thread). Thread pool mempercepat I/O-bound tasks seperti HTTP request, kompresi file, atau proses eksternal.
 - Maksimum **16 pool** dan **256 mutex** aktif secara bersamaan.

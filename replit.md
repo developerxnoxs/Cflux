@@ -45,9 +45,42 @@ make clean                      # hapus build artifacts
 | `socket` | TCP/UDP socket |
 | **`thread`** | **Thread pool executor (POSIX pthreads + libuv)** |
 
-### Modul `thread` — Thread Pool Executor
+### Modul `thread` — dua jenis thread pool
 
-Mirip `ThreadPoolExecutor` di Python. Mendelegasikan perintah shell ke sekumpulan worker thread yang berjalan secara paralel.
+Modul `thread` menyediakan dua API:
+
+1. `thread.pool()` adalah API lama untuk menjalankan **perintah shell**.
+2. `thread.ThreadPoolExecutor()` adalah API Python-style untuk menjalankan
+   **fungsi Flux** beserta argumennya di worker thread.
+
+#### ThreadPoolExecutor untuk fungsi Flux
+
+```flux
+import thread
+
+func kuadrat(x):
+    return x * x
+
+executor = thread.ThreadPoolExecutor(4)
+f1 = executor.submit(kuadrat, 7)
+f2 = executor.submit(kuadrat, 9)
+
+print(f1.result())       # 49
+print(f2.result())       # 81
+print(f1.done())         # true
+print(f1.exception())    # null jika berhasil
+
+executor.shutdown()
+```
+
+`submit(fn, ...args)` mengembalikan Future dengan metode `result()`, `done()`,
+dan `exception()`. Nilai hasil yang dapat dikirim antar-worker meliputi null,
+boolean, integer, float, string, list, dan dictionary. Error dari worker
+dikembalikan melalui `exception()` dan akan dilempar ulang oleh `result()`.
+
+API ini juga tersedia melalui `import concurrent`.
+
+#### Pool shell lama
 
 ```flux
 import thread

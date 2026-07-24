@@ -263,19 +263,28 @@ static Value conc_ThreadPoolExecutor(FluxVM *vm, int argc, Value *argv) {
 }
 
 /* =========================================================================
- * Module init — the one symbol the VM's extension loader looks up.
+ * Module registration
  * ====================================================================== */
-bool flux_extension_init(FluxVM *vm, Value *out_module) {
-    FluxDict *mod = object_dict_new(vm);
-    vm_push(vm, value_object((FluxObject *)mod)); /* GC-protect */
-
+void flux_concurrent_register(FluxVM *vm, FluxDict *mod) {
     /* concurrent.ThreadPoolExecutor */
     FluxNative *tpe = object_native_new(vm, conc_ThreadPoolExecutor,
                                         "ThreadPoolExecutor", 1);
     FluxString *tpe_key = object_string_copy(vm, "ThreadPoolExecutor", 18);
     dict_set(vm, mod, tpe_key, value_object((FluxObject *)tpe));
+}
+
+/* =========================================================================
+ * Module init — the one symbol the VM's extension loader looks up.
+ * ====================================================================== */
+#ifndef CONCURRENT_NO_EXTENSION_INIT
+bool flux_extension_init(FluxVM *vm, Value *out_module) {
+    FluxDict *mod = object_dict_new(vm);
+    vm_push(vm, value_object((FluxObject *)mod)); /* GC-protect */
+
+    flux_concurrent_register(vm, mod);
 
     vm_pop(vm);
     *out_module = value_object((FluxObject *)mod);
     return true;
 }
+#endif

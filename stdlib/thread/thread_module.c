@@ -81,6 +81,7 @@
 #include "flux/extension.h"
 #include "flux/vm.h"        /* includes vm_push / vm_pop as static inline */
 #include "flux/object.h"
+#include "../../extension/concurrent/concurrent.h"
 
 #include <uv.h>
 #include <pthread.h>
@@ -959,6 +960,18 @@ bool flux_extension_init(FluxVM *vm, Value *out) {
     REG("mutex_free",     flux_thread_mutex_free,     1);
 
 #undef REG
+
+    /*
+     * Python-style callable workers live alongside the original shell pool:
+     *
+     *   executor = thread.ThreadPoolExecutor(4)
+     *   future = executor.submit(fn, arg)
+     *   value = future.result()
+     *
+     * Reuse the concurrent implementation here.  The legacy integer pool
+     * remains unchanged for scripts that submit shell commands.
+     */
+    flux_concurrent_register(vm, mod);
 
     vm_pop(vm);
     *out = value_object((FluxObject *)mod);

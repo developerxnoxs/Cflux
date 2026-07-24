@@ -177,4 +177,10 @@ static inline ConcFuture *conc_future_from_argv(Value *argv) {
     return (ConcFuture *)conc_decode_ptr_from_native(argv[-1], "future");
 }
 
+/* Register the Flux-callable ThreadPoolExecutor constructor into an existing
+ * module dictionary.  stdlib/thread reuses the implementation so both
+ * `import concurrent` and `import thread` expose the same callable-worker
+ * API without duplicating the thread-pool code. */
+void flux_concurrent_register(FluxVM *vm, FluxDict *module);
+
 #endif /* CONCURRENT_H */

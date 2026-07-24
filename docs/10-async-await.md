@@ -150,6 +150,28 @@ async func main():
 
 ---
 
+## Memilih `async`, `thread`, atau `concurrent`
+
+Ketiganya sama-sama dapat membuat beberapa pekerjaan berjalan secara
+concurrent, tetapi mekanismenya berbeda:
+
+| Model | Worker | Menunggu hasil | Contoh |
+|---|---|---|---|
+| `async/await` | Event loop, biasanya satu thread | `await` | HTTP atau file async |
+| `thread.pool()` | Thread OS | `await future` | `curl`, `grep`, program eksternal |
+| `ThreadPoolExecutor` | Thread OS + VM Flux privat | `future.result()` | Fungsi Flux di worker |
+
+Gunakan `async/await` sebagai pilihan pertama untuk I/O yang sudah mendukung
+API async. Gunakan `thread.pool()` untuk shell command. Gunakan
+`ThreadPoolExecutor` dari `thread` atau `concurrent` jika fungsi Flux harus
+dijalankan di worker thread.
+
+Perhatikan bahwa `future.result()` dari `ThreadPoolExecutor` bersifat blocking,
+sedangkan `await` pada coroutine atau Future shell memberi kesempatan kepada
+event loop untuk menjalankan pekerjaan lain.
+
+---
+
 ## Catatan Penting
 
 - `await` hanya dapat digunakan di dalam fungsi `async`.

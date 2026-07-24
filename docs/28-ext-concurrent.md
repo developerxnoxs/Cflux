@@ -1,6 +1,8 @@
 # Ekstensi `concurrent`
 
-Ekstensi `concurrent` menyediakan `ThreadPoolExecutor` — antarmuka tingkat tinggi untuk menjalankan fungsi Flux di thread terpisah secara paralel.
+Ekstensi `concurrent` menyediakan `ThreadPoolExecutor` untuk menjalankan
+**fungsi Flux di worker thread OS**. Ini berbeda dari `async/await`: coroutine
+berjalan di event loop, sedangkan executor menggunakan thread pool.
 
 ## Import
 
@@ -8,85 +10,156 @@ Ekstensi `concurrent` menyediakan `ThreadPoolExecutor` — antarmuka tingkat tin
 import concurrent
 ```
 
----
+## Kapan menggunakan `concurrent`?
 
-## `concurrent.ThreadPoolExecutor(size)` → executor
+| Jika pekerjaan Anda adalah... | Gunakan |
+|---|---|
+| HTTP/file/timer yang mendukung I/O async | `async` + `aio` |
+| Perintah eksternal seperti `curl` atau `grep` | `thread.pool()` |
+| Fungsi Flux yang harus dijalankan di worker OS | `concurrent.ThreadPoolExecutor` |
 
-Membuat thread pool dengan `size` worker thread.
+`concurrent` adalah nama khusus untuk API callable-worker. API yang sama juga
+tersedia sebagai `thread.ThreadPoolExecutor`.
+
+## Membuat executor
 
 ```flux
-exe = concurrent.ThreadPoolExecutor(4)
+executor = concurrent.ThreadPoolExecutor(4)
 ```
 
----
+Angka `4` berarti ada empat worker. Setiap task yang dikirim akan menunggu
+giliran jika semua worker sedang sibuk.
 
-## Penggunaan
+## Menjalankan fungsi dengan argumen
 
-Thread pool executor memungkinkan fungsi Flux yang berat komputasi dijalankan di thread OS terpisah, sehingga tidak memblokir event loop.
+```flux
+import concurrent
+
+func tambah(a, b):
+    return a + b
+
+executor = concurrent.ThreadPoolExecutor(2)
+future = executor.submit(tambah, 20, 22)
+
+print(future.result())        # 42
+print(future.done())          # true
+print(future.exception())     # null
+
+executor.shutdown()
+```
+
+`submit()` menerima fungsi Flux sebagai argumen pertama, lalu argumen fungsi
+setelahnya:
+
+```flux
+future = executor.submit(nama_fungsi, argumen1, argumen2)
+```
+
+Ini **bukan** string command shell. Untuk shell gunakan API berbeda:
+
+```flux
+import thread
+
+pool = thread.pool(2)
+future = thread.submit(pool, "echo halo")
+
+async func main():
+    hasil = await future
+    print(hasil["stdout"])
+    thread.shutdown(pool)
+
+main()
+```
+
+## Future callable
+
+Future dari `ThreadPoolExecutor` memiliki tiga metode:
+
+| Metode | Perilaku |
+|---|---|
+| `future.result()` | Blocking; menunggu dan mengembalikan nilai fungsi |
+| `future.done()` | Mengecek apakah task sudah selesai |
+| `future.exception()` | Mengembalikan pesan error atau `null` |
+
+Gunakan `result()`, bukan `await future`:
+
+```flux
+hasil = future.result()
+```
+
+`future.result()` akan melemparkan error jika fungsi worker gagal.
+
+## Hasil dan batasan data
+
+Nilai return worker dikirim kembali sebagai deep copy. Tipe yang didukung:
+
+- `null`
+- boolean
+- integer
+- float
+- string
+- list
+- dictionary
+
+Contoh:
 
 ```flux
 import concurrent
 
-exe = concurrent.ThreadPoolExecutor(4)
+func buat_data(nama, angka):
+    return {
+        "nama": nama,
+        "angka": angka,
+        "kuadrat": angka * angka,
+    }
 
-async func main():
-    # Kirim pekerjaan ke thread pool
-    fut1 = exe.submit(hitung_berat, 1000000)
-    fut2 = exe.submit(hitung_berat, 2000000)
-
-    hasil1 = await fut1
-    hasil2 = await fut2
-
-    print(hasil1, hasil2)
+executor = concurrent.ThreadPoolExecutor(2)
+future = executor.submit(buat_data, "contoh", 6)
+data = future.result()
+print(data["kuadrat"])  # 36
+executor.shutdown()
 ```
 
----
-
-## Contoh: Pemrosesan Paralel
+## Error worker
 
 ```flux
 import concurrent
-import aio
 
-func proses_chunk(data):
-    # Komputasi CPU-intensif
-    total = 0
-    for x in data:
-        total += x * x
-    return total
+func validasi(nilai):
+    if nilai < 0:
+        raise "nilai tidak boleh negatif"
+    return nilai
 
-async func main():
-    exe = concurrent.ThreadPoolExecutor(4)
+executor = concurrent.ThreadPoolExecutor(1)
+future = executor.submit(validasi, -1)
 
-    data = range(1000000)
-    ukuran_chunk = len(data) // 4
+print(future.exception())  # pesan error worker
+# future.result()         # melemparkan error yang sama
 
-    chunks = [
-        data[i * ukuran_chunk : (i+1) * ukuran_chunk]
-        for i in range(4)
-    ]
-
-    futures = [exe.submit(proses_chunk, chunk) for chunk in chunks]
-    hasil   = await aio.gather(futures)
-
-    total = sum(hasil)
-    print(f"Total: {total}")
+executor.shutdown()
 ```
 
----
+## `concurrent` vs `thread`
 
-## Perbandingan dengan `thread`
-
-| Aspek | `thread` | `concurrent` |
+| Aspek | `thread.pool()` | `ThreadPoolExecutor` |
 |---|---|---|
-| Apa yang dijalankan | Perintah shell | Fungsi Flux |
-| Return value | `{"stdout", "stderr", "exit_code"}` | Nilai return fungsi |
-| Interfacenya | Low-level | High-level |
+| Import | `import thread` | `import thread` atau `import concurrent` |
+| Input task | String shell command | Fungsi Flux + argumen |
+| Hasil | `stdout`, `stderr`, `exit_code` | Nilai return fungsi |
+| Menunggu hasil | `await future` | `future.result()` |
+| Cocok untuk | Program eksternal | Fungsi Flux di worker |
 
----
+Nama `thread` menaungi dua API karena kompatibilitas dan kemudahan:
+`thread.pool()` adalah pool shell lama, sedangkan
+`thread.ThreadPoolExecutor()` adalah API callable-worker yang sama dengan
+`concurrent.ThreadPoolExecutor()`.
 
-## Catatan
+## Catatan performa
 
-- `ThreadPoolExecutor` cocok untuk pekerjaan CPU-bound yang tidak bisa menggunakan `async/await`.
-- Untuk I/O-bound work, lebih efisien menggunakan `async/await` langsung tanpa thread.
-- Pastikan fungsi yang dikirim ke pool thread aman (tidak mengakses shared state tanpa sinkronisasi).
+- Thread pool berguna ketika pekerjaan memang perlu berjalan di worker OS atau
+  melakukan operasi blocking.
+- Untuk I/O yang sudah mendukung async, `async/await` biasanya lebih sederhana
+  dan tidak memblokir event loop.
+- `future.result()` blocking; jangan memanggilnya berulang kali pada event loop
+  jika pekerjaan tersebut sebenarnya bisa dilakukan dengan `await`.
+- Selalu panggil `executor.shutdown()` setelah selesai.

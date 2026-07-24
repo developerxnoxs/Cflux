@@ -74,7 +74,7 @@ Modul-modul ini disertakan bersama Flux dan tersedia setelah di-import:
 | `socket` | TCP/UDP networking |
 | `async` | I/O non-blocking (libuv) |
 | `aio` | Concurrency: gather, create_task |
-| `thread` | Thread pool dan mutex |
+| `thread` | Shell pool, callable worker, dan mutex — lihat [panduan thread](23-stdlib-thread.md) |
 
 ---
 
@@ -88,7 +88,7 @@ Modul ekstensi native (ditulis dalam C, dikompilasi sebagai shared library `.so`
 | `mysql` | Koneksi MySQL |
 | `postgresql` | Koneksi PostgreSQL |
 | `ws` | WebSocket |
-| `concurrent` | ThreadPoolExecutor |
+| `concurrent` | `ThreadPoolExecutor` untuk menjalankan fungsi Flux di worker — lihat [panduan concurrent](28-ext-concurrent.md) |
 
 ```flux
 import http

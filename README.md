@@ -35,14 +35,14 @@ Flux adalah bahasa pemrograman modern yang diimplementasikan dalam C. Flux mengg
 20. [Modul `fs`](docs/20-stdlib-fs.md) — operasi file system
 21. [Modul `socket`](docs/21-stdlib-socket.md) — TCP/UDP networking
 22. [Modul `async` & `aio`](docs/22-stdlib-async-aio.md) — I/O non-blocking, gather, create_task
-23. [Modul `thread`](docs/23-stdlib-thread.md) — thread pool, mutex
+23. [Modul `thread`](docs/23-stdlib-thread.md) — shell pool, callable worker, mutex
 
 ### Ekstensi Native
 24. [Ekstensi `http`](docs/24-ext-http.md) — HTTP client/server
 25. [Ekstensi `mysql`](docs/25-ext-mysql.md) — koneksi MySQL
 26. [Ekstensi `postgresql`](docs/26-ext-postgresql.md) — koneksi PostgreSQL
 27. [Ekstensi `ws`](docs/27-ext-ws.md) — WebSocket client/server
-28. [Ekstensi `concurrent`](docs/28-ext-concurrent.md) — ThreadPoolExecutor
+28. [Ekstensi `concurrent`](docs/28-ext-concurrent.md) — callable ThreadPoolExecutor
 
 ### Integrasi & Embedding
 29. [FFI — Memanggil Library C Native](docs/29-ffi.md)

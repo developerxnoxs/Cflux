@@ -1,163 +1,248 @@
-# Modul `thread`
+# Thread, concurrency, dan `concurrent`
 
-Modul `thread` menyediakan thread pool berbasis POSIX pthreads untuk menjalankan perintah shell secara paralel di background. Hasilnya dikembalikan sebagai `Future` yang bisa di-`await`.
+Di Flux ada tiga konsep yang berbeda:
 
-## Import
+| Konsep | Maksudnya | API Flux |
+|---|---|---|
+| **Concurrency** | Beberapa pekerjaan sama-sama mendapat kesempatan berjalan | `async`, `await`, `aio.gather` |
+| **Parallelism** | Beberapa pekerjaan benar-benar berjalan bersamaan di worker OS yang berbeda | `ThreadPoolExecutor` |
+| **Thread** | Worker OS yang menjalankan pekerjaan di luar event loop utama | `thread.pool()` atau `ThreadPoolExecutor` |
+
+Jadi, **concurrency tidak selalu berarti parallelism**. Coroutine biasanya
+berbagi satu event loop dan bergantian ketika menunggu I/O. Thread pool
+menggunakan worker OS terpisah.
+
+## Pilih API yang tepat
+
+| Kebutuhan | Gunakan | Yang dijalankan | Cara mengambil hasil |
+|---|---|---|---|
+| HTTP, file, timer, dan I/O non-blocking | `async` + `aio` | Coroutine Flux | `await` |
+| Menjalankan program seperti `curl`, `grep`, atau `ffmpeg` | `thread.pool()` | Perintah shell | `await future` |
+| Menjalankan fungsi Flux di worker OS | `ThreadPoolExecutor` | Fungsi Flux + argumen | `future.result()` |
+
+### Aturan cepat
+
+- Pilih **`async`** jika operasi yang dipakai sudah mendukung async/non-blocking.
+- Pilih **`thread.pool()`** jika pekerjaan memang berupa perintah shell.
+- Pilih **`ThreadPoolExecutor`** jika ingin mengirim fungsi Flux ke worker
+  thread, seperti `concurrent.futures.ThreadPoolExecutor` di Python.
+
+## 1. `thread.pool()` — untuk perintah shell
 
 ```flux
 import thread
+
+pool = thread.pool(4)
+future = thread.submit(pool, "echo halo dari worker")
+
+async func main():
+    hasil = await future
+    print(hasil["stdout"])
+    print(hasil["exit_code"])
+    thread.shutdown(pool)
+
+main()
 ```
 
----
+### Alur kerjanya
 
-## Thread Pool
-
-### `thread.pool(n)` → `int`
-
-Membuat pool baru dengan `n` worker thread. Mengembalikan **pool-id** (integer).
-
-| Parameter | Keterangan |
-|---|---|
-| `n` | Jumlah worker thread. `0` = otomatis (sama dengan jumlah CPU logis) |
-
-```flux
-pool = thread.pool(4)    # 4 worker
-pool = thread.pool(0)    # otomatis = cpu_count()
+```text
+Flux event loop
+      │
+      │ thread.submit(pool, "perintah shell")
+      ▼
+Thread pool: [worker] [worker] [worker] [worker]
+      │
+      ▼
+Future → {"stdout", "stderr", "exit_code"}
 ```
 
-### `thread.submit(pool_id, cmd)` → `Future`
+`thread.submit()` menerima **string perintah shell**, bukan fungsi Flux.
+Hasilnya selalu dictionary:
 
-Mengirim perintah shell `cmd` ke salah satu worker thread. Mengembalikan **Future** yang resolve ke dict saat perintah selesai.
-
-**Hasil Future** (dict):
-```
+```text
 {
-    "stdout":    "...",   # output standar dari perintah
-    "stderr":    "...",   # output error dari perintah
-    "exit_code": 0        # kode keluar (0 = sukses)
+    "stdout":    "...",
+    "stderr":    "...",
+    "exit_code": 0
 }
 ```
 
-```flux
-fut    = thread.submit(pool, "curl -s https://api.example.com")
-result = await fut
-print(result["stdout"])
-print(result["exit_code"])
-```
-
-### `thread.shutdown(pool_id)`
-
-Menunggu semua task yang sedang berjalan selesai, lalu menghentikan semua worker thread.
-
-```flux
-thread.shutdown(pool)
-```
-
-### `thread.cpu_count()` → `int`
-
-Mengembalikan jumlah CPU logis yang tersedia di sistem.
-
-```flux
-n = thread.cpu_count()
-print(f"CPU tersedia: {n}")
-```
-
----
-
-## Mutex API
-
-Berguna untuk sinkronisasi akses ke resource bersama.
+API shell:
 
 | Fungsi | Keterangan |
 |---|---|
-| `thread.mutex()` | Buat mutex baru; return int handle |
-| `thread.lock(m)` | Lock mutex (blocking) |
-| `thread.unlock(m)` | Unlock mutex |
-| `thread.trylock(m)` → `bool` | Coba lock tanpa menunggu; `true` jika berhasil |
-| `thread.mutex_free(m)` | Hancurkan dan bebaskan mutex |
+| `thread.pool(n)` | Membuat pool; `0` berarti jumlah CPU logis |
+| `thread.submit(pool, command)` | Mengirim perintah shell ke worker |
+| `thread.map(pool, commands)` | Mengirim beberapa perintah shell |
+| `thread.shutdown(pool)` | Menunggu task selesai lalu menghentikan pool |
+| `thread.shutdown(pool, false)` | Membatalkan task yang masih menunggu |
+| `thread.pending_count(pool)` | Jumlah task yang belum mulai |
+| `thread.active_count(pool)` | Jumlah task yang sedang berjalan |
+| `thread.cancel_pending(pool)` | Membatalkan task yang belum mulai |
+| `thread.cpu_count()` | Jumlah CPU logis |
+
+Contoh beberapa perintah shell:
 
 ```flux
+import thread
+
+async func main():
+    pool = thread.pool(3)
+    commands = [
+        "echo satu",
+        "echo dua",
+        "echo tiga",
+    ]
+
+    futures = thread.map(pool, commands)
+    for future in futures:
+        hasil = await future
+        print(hasil["stdout"].strip())
+
+    thread.shutdown(pool)
+
+main()
+```
+
+## 2. `ThreadPoolExecutor` — untuk fungsi Flux
+
+`ThreadPoolExecutor` menjalankan callable Flux di worker thread. Fungsi dan
+argumennya dikirim ke worker, lalu nilai return dipindahkan kembali ke VM utama.
+
+API ini tersedia dari dua nama modul:
+
+```flux
+import thread
+executor = thread.ThreadPoolExecutor(4)
+```
+
+atau:
+
+```flux
+import concurrent
+executor = concurrent.ThreadPoolExecutor(4)
+```
+
+Keduanya menyediakan API yang sama. Contoh:
+
+```flux
+import thread
+
+func kuadrat(x):
+    return x * x
+
+executor = thread.ThreadPoolExecutor(2)
+future1 = executor.submit(kuadrat, 7)
+future2 = executor.submit(kuadrat, 9)
+
+print(future1.result())    # 49
+print(future2.result())    # 81
+print(future1.done())      # true
+print(future1.exception()) # null
+
+executor.shutdown()
+```
+
+Perhatikan perbedaan penting:
+
+```flux
+# Benar untuk ThreadPoolExecutor:
+hasil = future.result()
+
+# Bukan pola untuk Future callable:
+# hasil = await future
+```
+
+Future dari `ThreadPoolExecutor` adalah handle native dengan metode:
+
+| Metode | Keterangan |
+|---|---|
+| `executor.submit(fn, ...args)` | Menjalankan fungsi Flux dengan argumen |
+| `future.result()` | Menunggu secara blocking dan mengembalikan nilai |
+| `future.done()` | `true` jika task sudah selesai |
+| `future.exception()` | Pesan error atau `null` |
+| `executor.shutdown()` | Menunggu semua worker lalu menghentikan pool |
+
+Nilai yang bisa dikirim kembali dari worker meliputi `null`, boolean, integer,
+float, string, list, dan dictionary. Hasilnya dikirim sebagai deep copy, bukan
+sebagai object yang dibagi langsung antara dua VM.
+
+### Error pada worker
+
+```flux
+import concurrent
+
+func gagal():
+    raise "pekerjaan gagal"
+
+executor = concurrent.ThreadPoolExecutor(1)
+future = executor.submit(gagal)
+
+print(future.done())
+print(future.exception())  # pesan error setelah task selesai
+
+# result() akan melemparkan kembali error dari worker:
+# future.result()
+
+executor.shutdown()
+```
+
+## `ThreadPoolExecutor` di dalam fungsi `async`
+
+`future.result()` bersifat **blocking**. Artinya, jika dipanggil di event loop,
+event loop utama ikut menunggu sampai worker selesai. Gunakan API ini saat
+memang membutuhkan worker thread; jangan menganggap `result()` sebagai
+pengganti `await`.
+
+Untuk I/O yang sudah memiliki API async, pola ini biasanya lebih tepat:
+
+```flux
+import async
+import aio
+
+async func baca_file(path):
+    return await async.read_file(path)
+
+async func main():
+    hasil = await aio.gather([
+        baca_file("a.txt"),
+        baca_file("b.txt"),
+    ])
+    print(hasil)
+
+main()
+```
+
+## Mutex
+
+Mutex hanya diperlukan jika beberapa bagian kode harus melindungi resource
+bersama. API-nya:
+
+| Fungsi | Keterangan |
+|---|---|
+| `thread.mutex()` | Membuat mutex dan mengembalikan handle integer |
+| `thread.lock(m)` | Menunggu sampai mutex berhasil dikunci |
+| `thread.unlock(m)` | Membuka mutex |
+| `thread.trylock(m)` | Mencoba mengunci tanpa menunggu |
+| `thread.mutex_free(m)` | Menghancurkan mutex |
+
+```flux
+import thread
+
 m = thread.mutex()
 thread.lock(m)
-# --- critical section ---
+# bagian kritis
 thread.unlock(m)
 thread.mutex_free(m)
 ```
 
----
+## Batasan dan keamanan
 
-## Contoh: Parallel Shell Commands
-
-```flux
-import thread
-
-async func main():
-    pool = thread.pool(4)
-
-    perintah = [
-        "curl -s https://api.example.com/users",
-        "curl -s https://api.example.com/products",
-        "curl -s https://api.example.com/orders",
-    ]
-
-    futures = [thread.submit(pool, cmd) for cmd in perintah]
-    hasil   = [await fut for fut in futures]
-
-    for r in hasil:
-        if r["exit_code"] == 0:
-            print(r["stdout"])
-        else:
-            print(f"Gagal: {r['stderr']}")
-
-    thread.shutdown(pool)
-```
-
----
-
-## Contoh: Mutex untuk Shared State
-
-```flux
-import thread
-
-counter = 0
-m = thread.mutex()
-
-async func tambah(pool, n):
-    for _ in range(n):
-        fut = thread.submit(pool, "echo 1")
-        await fut
-        thread.lock(m)
-        counter += 1
-        thread.unlock(m)
-
-async func main():
-    pool = thread.pool(2)
-    import aio
-    await aio.gather([tambah(pool, 50), tambah(pool, 50)])
-    thread.mutex_free(m)
-    thread.shutdown(pool)
-    print(f"Counter: {counter}")    # 100
-```
-
----
-
-## Visualisasi Arsitektur
-
-```
-┌─────────────────────┐
-│   Flux Coroutine    │
-│  (event loop / aio) │
-└──────────┬──────────┘
-           │ thread.submit(pool, cmd) → Future
-           ▼
-┌─────────────────────┐
-│    Thread Pool      │
-│  [Worker] [Worker]  │
-│  [Worker] [Worker]  │
-└──────────┬──────────┘
-           │ resolve Future saat selesai
-           ▼
-┌─────────────────────┐
-│  {"stdout", "exit"} │
-└─────────────────────┘
-```
+- Worker memiliki VM Flux sendiri.
+- Jangan mengandalkan perubahan global yang dilakukan worker untuk langsung
+  terlihat di VM utama.
+- Nilai hasil worker dipindahkan melalui deep copy.
+- `thread.pool()` aman dipakai untuk command eksternal, tetapi input command
+  tetap harus divalidasi jika berasal dari pengguna.
+- Selalu panggil `shutdown()` ketika pool sudah tidak diperlukan.
